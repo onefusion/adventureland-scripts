@@ -233,7 +233,7 @@ AL.lead = (function () {
       return true;
     }
     // GitHub auto-update (lead only): a newer build on GitHub makes the LEAD reload (quiet moment); the followers then see its new build id in the hello and reload by themselves (check_build)
-    const UPD = env.update && env.update.enabled !== false && AL.update ? AL.update.create({ say: (m, c) => say(m, c), cfg: env.update, current: my_build, fetch: env.fetch, reload: (why) => request_reload(why) }) : null;
+    const UPD = env.update && env.update.enabled !== false && AL.update ? AL.update.create({ say: (m, c) => say(m, c), cfg: env.update, current: my_build, fetch: env.fetch, reload: (why) => { if (!L.reload && hooks.update_window) { try { if (hooks.update_window(env.update.window_ms || 300000)) lead_log("UPDATE: the party goes to town for up to " + Math.round((env.update.window_ms || 300000) / 60000) + " min while the new build loads", "#E0A040"); } catch (e) {} } request_reload(why); } }) : null;
     const heard = {}; // peer name -> the build / lib ids in its last hello (for al_cmd status)
     function check_build(from, d) {
       heard[from] = { build: String(d.build || ""), lib: String(d.lib || ""), at: now() };

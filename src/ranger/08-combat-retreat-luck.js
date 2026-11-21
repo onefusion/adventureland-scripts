@@ -145,6 +145,14 @@
     R.retreat_go = true;
     for (const n of CFG.PARTY_MEMBERS.concat(CFG.PARTY_SUPPORT)) if (n !== character.name) call(() => send_cm(n, { type: "retreat", ms: CFG.KIT_WAIT_MS, spot: true }));
   }
+  // Sean 2026-11-21: a new build is on GitHub. Instead of waiting for a gap in the farming that never comes, the leader takes the whole party to town (town() has no cooldown), where nothing is fighting, so the reload (his own and then the followers') goes through in seconds. The window ends by itself after ms (or when the reload replaces this script). Not during a boss event, the Grinch, a forced farm or another retreat.
+  function update_window(ms) {
+    if (!is_leader() || R.retreat || R.retreat_go || R.boss || grinch_fight() || R.force || character.rip) return false;
+    R.retreat = { until: now() + ms, why: "a new build is on GitHub - the party waits in town while it updates", farm: "", spot: false, update: true };
+    R.retreat_go = true;
+    for (const n of CFG.PARTY_MEMBERS.concat(CFG.PARTY_SUPPORT)) if (n !== character.name) call(() => send_cm(n, { type: "retreat", ms, spot: false }));
+    return true;
+  }
   async function retreat_step() {
     const r = R.retreat;
     R.retreat_go = false;

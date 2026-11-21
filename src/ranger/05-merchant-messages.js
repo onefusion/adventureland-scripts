@@ -39,7 +39,7 @@
   LEAD_ENV.merchant.is_online = () => !!(get_active_characters() || {})[CFG.MERCHANT_NAME] || is_online(CFG.MERCHANT_NAME);
   const LEAD = AL.lead.create(Object.assign(LEAD_ENV, { CFG, say, alive,
     busy: () => (R.boss ? "boss event" : grinch_fight() ? "Grinch fight" : R.force ? (R.force.trial ? "Try monster" : "forced farm") + " of " + R.force.type : R.goal ? "farm goal " + R.goal.type : R.ladder || R.courier || R.trip || R.retreat_go ? "a trip / job is running" : AL.lead.fight_near(party_names(), 500)),
-    hooks: { start_merchant: (n, slot) => call_paced("start", () => start_character(n, slot)), announce: () => { if (CFG.PARTY_MEMBERS.length) send_party_state(); }, reload: () => AL.reengage({ say, slot: CFG.SELF_CODE_SLOT, restart: AutoRangerV5 }) } })); // stage 4
+    hooks: { update_window: (ms) => update_window(ms), start_merchant: (n, slot) => call_paced("start", () => start_character(n, slot)), announce: () => { if (CFG.PARTY_MEMBERS.length) send_party_state(); }, reload: () => AL.reengage({ say, slot: CFG.SELF_CODE_SLOT, restart: AutoRangerV5 }) } })); // stage 4
   setInterval(() => { try { LEAD.tick(); } catch (e) {} }, 5000);
   character.on("cm", function (m) {
     if (!alive()) return;

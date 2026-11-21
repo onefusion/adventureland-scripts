@@ -1570,6 +1570,16 @@ T("R12b farm goal: a monster hits the Warrior while the leader searches - the le
   const moved = Math.hypot(r.x - x0, r.y - y0);
   return [[(hits.hawk || 0) > 0, "the leader shot the hawk that attacked the Warrior: " + (hits.hawk || 0)], [moved < 150, "the leader did not walk on to the next search area: moved " + Math.round(moved)], [logged(w, "SexyDexy", /Party fight: SexyWexy/), "the party fight is logged"]];
 });
+T("UP1 auto-update: the leader sees a newer build on GitHub, takes the party to town and reloads there (v6 only)", async (w) => {
+  if (!/AL\.update/.test(src("AL Lib v2.js"))) return skip_v4;
+  global.fetch = (url) => Promise.resolve(/version\.json/.test(url) ? { ok: true, status: 200, json: () => Promise.resolve({ build: "newbuild1" }) } : { ok: false, status: 404 });
+  try {
+    const r = ranger_char(w, { attack: 440, frequency: 2, x: 387, y: 1066 }, [["hpot1", 100], ["mpot1", 100]]);
+    r.sb.fetch = global.fetch;
+    await w.clock.run(120);
+    return [[logged(w, "SexyDexy", /\[update\] a new build newbuild1 is on GitHub \(running /), "the new build is noticed"], [logged(w, "SexyDexy", /UPDATE: the party goes to town/), "the update window starts"], [logged(w, "SexyDexy", /RETREAT: a new build is on GitHub - the party waits in town/), "retreat to town (everybody, town())"], [logged(w, "SexyDexy", /RELOAD requested \(new build newbuild1 on GitHub\)/), "the reload is requested"]];
+  } finally { delete global.fetch; }
+});
 T("P1 three Rangers: followers invited, walk to the leader, shoot what he shoots", async (w) => {
   w.G.monsters.phoenix = { name: "Phoenix", attack: 125, frequency: 1.2, hp: 160000, respawn: 32 };
   w.G.monsters.bee = { name: "Bee", attack: 1, frequency: 1, hp: 10 };
