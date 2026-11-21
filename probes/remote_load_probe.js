@@ -52,6 +52,38 @@
       return "AL.VERSION=" + (AL && AL.VERSION) + ", modules: " + Object.keys(AL || {}).slice(0, 8).join(",") + ", lib build global=" + globalThis.__AL_LIB_BUILD;
     });
   }
+  // round 2 (2026-11-21): the loader must work SYNCHRONOUSLY (require_code is synchronous), so test a blocking XMLHttpRequest, run-in-wrapper from it, and the game storage as a cache for the last good copy
+  await run("sync XHR raw_main", async () => {
+    const x = new XMLHttpRequest();
+    x.open("GET", bust(URLS.raw_main), false);
+    x.send();
+    if (x.status !== 200) throw new Error("HTTP " + x.status);
+    text.sync = x.responseText;
+    return x.responseText.length + " bytes";
+  });
+  if (text.sync) {
+    await run("run the sync-fetched lib in a wrapper", async () => {
+      const mod = { exports: {} };
+      new Function("exports", "module", text.sync)(mod.exports, mod);
+      return "AL.VERSION=" + (mod.exports && mod.exports.VERSION);
+    });
+    await run("cache the lib text with set()/get() (storage quota test)", async () => {
+      set("al_probe_cache", text.sync);
+      const back = get("al_probe_cache");
+      set("al_probe_cache", "");
+      if (back !== text.sync) throw new Error("read back " + (back ? back.length : back) + " bytes, wrote " + text.sync.length);
+      return "wrote and read back " + back.length + " bytes";
+    });
+    await run("big cache test: 600 KB in set()/get()", async () => {
+      const big = text.sync + text.sync + text.sync + text.sync + text.sync + text.sync;
+      set("al_probe_cache", big);
+      const back = get("al_probe_cache");
+      set("al_probe_cache", "");
+      if (back !== big) throw new Error("read back " + (back ? back.length : back) + " of " + big.length);
+      return "ok " + big.length + " bytes";
+    });
+  }
+  await run("code in a slot runs through load_code later? (typeof load_code)", async () => typeof load_code);
   // script-tag route (the page runs it as a classic script; raw.githubusercontent.com sends nosniff + text/plain, which browsers refuse to run: that is why jsDelivr is tried too)
   for (const k of ["raw_main", "jsd_main"]) {
     await run("script tag " + k, () =>
