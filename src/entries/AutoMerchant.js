@@ -49,6 +49,7 @@ try {
   // @include ../merchant/24-budgets-scheduler.js
   // @include ../merchant/25-sale-basher-market.js
   // @include ../merchant/26-sell-round-hold-bank-excess.js
+  // @include ../merchant/28-gear-goals.js
   // @include ../merchant/27-status-report.js
   async function main() {
     say(

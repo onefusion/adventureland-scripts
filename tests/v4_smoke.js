@@ -806,6 +806,29 @@ T("W1 gear sweep: finished rings in the bank go to the Rangers whose slots they 
   return [[lead === 2 && fol === 1, "leader gets two rings, the follower one (" + lead + "/" + fol + ")"], [msgs(L, "gear_ready").length > 0, "leader told gear is waiting"],
     [F.items.filter((i) => i && i.name === "ringsj").length === 1, "follower got his ring at his meeting"], [bank_count(w) === 0, "bank emptied of them"]];
 });
+T("GG1 gear goals report: set(gear_goals) prints one console block per character with worn gear, best pieces and sources (v6 only)", async (w) => {
+  if (!/gear_goals/.test(MERCH_SRC)) return skip_v4;
+  const REAL = process.env.REAL_GOALS ? (f) => JSON.parse(fs.readFileSync(path.join(DIR, "data", f + ".json"), "utf8")) : null; // REAL_GOALS=1 writes the report for the real game data to /tmp/goals.txt
+  if (REAL) { w.G.items = REAL("items"); w.G.craft = REAL("craft"); w.G.drops = REAL("drops"); w.G.npcs = REAL("npcs"); w.G.sets = REAL("sets"); w.G.monsters = REAL("monsters"); }
+  else {
+  w.G.items.dexamulet = { type: "amulet", dex: 4, compound: { dex: 3 }, name: "Amulet of Dexterity", g: 30000 };
+  w.G.items.plainamulet = { type: "amulet", armor: 1, name: "Plain Amulet", g: 100 };
+  w.G.craft = Object.assign({}, w.G.craft, { dexamulet: { cost: 1000, items: [[1, "plainamulet"]] } });
+  }
+  const m = merchant_char(w, { gold: 50000 }, SW_OVR);
+  const L = fake_ranger(w);
+  const send = () => gear_rep(L, REAL ? { amulet: { name: "dexamulet", level: 1 }, earring1: { name: "dexearring", level: 1 }, earring2: { name: "dexearring", level: 1 } } : { amulet: { name: "plainamulet", level: 0 } });
+  send(); w.clock.every(send, 60000);
+  const lines = []; const oc = console.log; console.log = (...a) => { lines.push(a.join(" ")); };
+  try {
+    await w.clock.run(60);
+    m.sb.set("gear_goals", "1");
+    await w.clock.run(30);
+  } finally { console.log = oc; }
+  const txt = lines.join("\n");
+  if (REAL) { fs.writeFileSync("/tmp/goals.txt", txt); return [[/===== END =====/.test(txt), "real-data report written to /tmp/goals.txt"]]; }
+  return [[/\[goals\] --- SexyDexy/.test(txt), "a section for the leader"], [/amulet \[amulet\] worn: plainamulet\+0=/.test(txt), "his worn amulet is listed with its score"], [/best: dexamulet\+\d+=[\d.]+ \[craft/.test(txt), "the best amulet is listed with its source: " + (txt.match(/best: dexamulet[^\n]*/) || [""])[0]], [/biggest gaps: .*amulet/.test(txt), "the gap is summarised"], [/===== END =====/.test(txt), "the block is closed"]];
+});
 T("W4 gear sweep: a finished quiver goes to the Ranger with an empty offhand slot", async (w) => {
   w.bank.items0.push({ name: "quiver", level: 5 });
   const m = merchant_char(w, { gold: 50000 }, SW_OVR);
