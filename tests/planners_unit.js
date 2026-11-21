@@ -100,4 +100,21 @@ ok(ld.ladder_ok("book", 1) && !ld.ladder_ok("book", 2) && ld.useful({ name: "boo
 ld = AL.planners.ladder(lenv({ cfg: Object.assign({}, lcfg), pieces: [ring(0), ring(0)] }));
 ok(ld.useful({ name: "ring", level: 0 }) && !ld.useful({ name: "ring", level: 3 }), "a piece is useful while a tier above it is still open, not once it is at the target");
 
+// ---- compound groups ----
+const grp = (lv, bag, bank) => ({ key: "ring+" + lv, item: { name: "ring", level: lv }, bag, bank: new Array(bank).fill({}) });
+const genv = (groups, o) => Object.assign({ groups, cfg: { COMPOUND_NEED_DRIVEN: false },
+  fn: { keep_of: () => 0, scroll_for: () => "cscroll0", scroll_grade: () => 0, max_grade_of: () => 1, focus_of: () => null, ladder: () => null } }, o);
+
+let cg = AL.planners.compound_groups(genv([grp(1, 3, 0), grp(0, 2, 5), grp(2, 2, 0)]));
+ok(cg.groups.map((g) => g.item.level).join() === "0,1" && cg.groups[0].max_triples === 2 && cg.groups[1].max_triples === 1, "groups with fewer than three copies are dropped; the rest are sorted lowest level first with their triple counts");
+
+cg = AL.planners.compound_groups(genv([grp(0, 3, 0)], { fn: Object.assign(genv([]).fn, { keep_of: () => 3 }) }));
+ok(cg.groups.length === 0, "a full triple that must stay behind (keep_of 3) is not compounded");
+
+cg = AL.planners.compound_groups(genv([grp(0, 3, 0)], { fn: Object.assign(genv([]).fn, { scroll_grade: () => 2 }) }));
+ok(cg.groups.length === 0 && cg.skipped.length === 1, "a scroll above the allowed tier skips the group and reports it");
+
+cg = AL.planners.compound_groups({ groups: [grp(0, 6, 0)], cfg: { COMPOUND_NEED_DRIVEN: true }, fn: Object.assign(genv([]).fn, { ladder: () => ({ take_triples: (n, L, avail) => Math.min(avail, 1) }) }) });
+ok(cg.groups.length === 1 && cg.groups[0].max_triples === 1, "with the ladder on, the ladder decides how many triples");
+
 process.exit(fails ? 1 : 0);

@@ -1,7 +1,7 @@
 // ============================== AL.planners: pure Merchant planners (stage 5 of the refactor, 2026-11-21) ==============================
 // A planner decides; it does not walk, open the bank or send anything. It reads a plain input object and returns a plan, so it can be tested
 // without the game. The Merchant builds the input from its live state (`env`) and acts on the plan.
-// Planners so far: sweep (which finished / stuck gear goes to which character), copies (the copy limit), surplus (the bank-full seller), ladder (the compound ladder).
+// Planners so far: sweep (which finished / stuck gear goes to which character), copies (the copy limit), surplus (the bank-full seller), ladder (the compound ladder), compound_groups (which stacks to compound).
 AL.planners = (function () {
   "use strict";
 
@@ -265,5 +265,38 @@ AL.planners = (function () {
     return { levels, demand, held, preferred, ladder_ok, take_triples, useful, report };
   }
 
-  return { sweep, copies, surplus, ladder };
+  // ---- compound groups: which stacks of identical items are compounded now, and how many triples ----
+  // env.groups   [{ key, item, bag, bank: [..] }]  copies per kind and level (bag count, bank entries), built by the Merchant
+  // env.cfg      { COMPOUND_NEED_DRIVEN }
+  // env.fn       keep_of(name), scroll_for(item), scroll_grade(item), max_grade_of(name), focus_of(name), ladder() -> the ladder planner state
+  // Returns { groups: [g with .scroll .grade .max_triples], skipped: [g] } (skipped = needs a scroll above the allowed tier), lowest level first.
+  function compound_groups(env) {
+    const { cfg, fn } = env;
+    const skipped = [];
+    let ladder_cs = null;
+    const groups = env.groups
+      .filter((g) => g.bag + g.bank.length >= 3 + fn.keep_of(g.item.name))
+      .map((g) => Object.assign(g, { scroll: fn.scroll_for(g.item), grade: fn.scroll_grade(g.item) }))
+      .filter((g) => {
+        if (g.grade <= fn.max_grade_of(g.item.name)) return true;
+        skipped.push(g);
+        return false;
+      })
+      .sort((a, b) => (a.item.level || 0) - (b.item.level || 0))
+      .filter((g) => {
+        // never use the last copies: a failed compound destroys all three, so a full triple stays behind
+        const spare = Math.floor((g.bag + g.bank.length - fn.keep_of(g.item.name)) / 3);
+        if (!cfg.COMPOUND_NEED_DRIVEN && !fn.focus_of(g.item.name)) {
+          g.max_triples = spare;
+          return spare > 0;
+        }
+        if (!ladder_cs) ladder_cs = fn.ladder();
+        // lowest level first; every planned triple changes what the next one sees
+        g.max_triples = ladder_cs.take_triples(g.item.name, g.item.level || 0, spare);
+        return g.max_triples > 0;
+      });
+    return { groups, skipped };
+  }
+
+  return { sweep, copies, surplus, ladder, compound_groups };
 })();

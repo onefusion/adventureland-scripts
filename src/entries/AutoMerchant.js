@@ -3344,8 +3344,8 @@ try {
     });
   }
 
+  // The decisions live in AL.planners.compound_groups (src/lib/planners.js, pure); this wrapper counts the copies held and logs what was skipped.
   function plan_groups() {
-    let ladder_cs = null;
     const by = {};
     for (const i of bag_list(comp_ok)) {
       const k = comp_key(character.items[i]);
@@ -3356,46 +3356,29 @@ try {
       const k = comp_key(b.it);
       (by[k] = by[k] || { key: k, item: b.it, bag: 0, bank: [] }).bank.push(b);
     }
-    return Object.values(by)
-      .filter((g) => g.bag + g.bank.length >= 3 + keep_of(g.item.name))
-      .map((g) =>
-        Object.assign(g, {
-          scroll: scroll_for(g.item),
-          grade: scroll_grade(g.item),
-        })
-      )
-      .filter((g) => {
-        if (g.grade <= max_grade_of(g.item.name)) return true;
-        say(
-          "Compound: " +
-            comp_label(g.item) +
-            " needs " +
-            g.scroll +
-            ", above the allowed tier (COMPOUND_MAX_SCROLL_GRADE " +
-            max_grade_of(g.item.name) +
-            ") - skipped"
-        );
-        return false;
-      })
-      .sort((a, b) => (a.item.level || 0) - (b.item.level || 0))
-      .filter((g) => {
-        // never use the last copies: a failed compound destroys all three, so a full triple stays behind
-        const spare = Math.floor(
-          (g.bag + g.bank.length - keep_of(g.item.name)) / 3
-        );
-        if (!CFG.COMPOUND_NEED_DRIVEN && !focus_of(g.item.name)) {
-          g.max_triples = spare;
-          return spare > 0;
-        }
-        if (!ladder_cs) ladder_cs = comp_state();
-        // lowest level first; every planned triple changes what the next one sees
-        g.max_triples = ladder_cs.take_triples(
-          g.item.name,
-          g.item.level || 0,
-          spare
-        );
-        return g.max_triples > 0;
-      });
+    const plan = AL.planners.compound_groups({
+      groups: Object.values(by),
+      cfg: CFG,
+      fn: {
+        keep_of,
+        scroll_for,
+        scroll_grade,
+        max_grade_of,
+        focus_of,
+        ladder: comp_state,
+      },
+    });
+    for (const g of plan.skipped)
+      say(
+        "Compound: " +
+          comp_label(g.item) +
+          " needs " +
+          g.scroll +
+          ", above the allowed tier (COMPOUND_MAX_SCROLL_GRADE " +
+          max_grade_of(g.item.name) +
+          ") - skipped"
+      );
+    return plan.groups;
   }
   const comp_due = () =>
     CFG.COMPOUND_ENABLED &&
