@@ -87,3 +87,16 @@ console.log('lead_unit OK');
   o.L.start_merchant();assert.deepStrictEqual(started,['M/2']);assert.strictEqual(o.L.L.m.done,false,'Start re-arms the guard');
   console.log('lead_unit merchant stop/start OK');
 }
+
+// al_cmd console commands: only the lead, any case, merchant alias
+{
+  const stopped=[],started=[],told=[];global.stop_character=(n)=>{stopped.push(n)};global.start_character=(n,sl)=>{started.push(n+'/'+sl);return {}};
+  const mk=(lead_name)=>{const logs=[];const L=lead.create({CFG:{PARTY_LEADER:lead_name},say:(x)=>logs.push(x),alive:()=>true,me:{name:'R',cls:'ranger'},members:[{name:'R',cls:'ranger'},{name:'Wex',cls:'warrior',slot:'4'}],can_lead:{ranger:true},
+    merchant:{name:'Goodies',slot:'2',enabled:true,max_tries:3,retry_ms:60000,grace_ms:30000,is_online:()=>false},hooks:{start:(n,sl)=>started.push(n+'/'+sl)}});return {L,logs}};
+  let o=mk('W');o.L.command('stop wex');o.L.command('stop merchant');assert.strictEqual(stopped.length,0,'not the lead: ignored');
+  o=mk('R');o.L.command('stop goodies');assert.deepStrictEqual(stopped,['Goodies'],'stop by the Merchant name, any case');
+  o.L.command('start merchant');assert.ok(started.indexOf('Goodies/2')>=0,'start merchant');
+  o.L.command('start WEX');assert.ok(started.indexOf('Wex/4')>=0,'start a roster member, any case');
+  const n=stopped.length;o.L.command('stop nobody');o.L.command('dance wex');o.L.command('stop');assert.strictEqual(stopped.length,n,'unknown name / verb / missing target: nothing happens');
+  console.log('lead_unit al_cmd OK');
+}
