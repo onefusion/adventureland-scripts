@@ -28,7 +28,7 @@
     FOCUS_MAX_AGE_MS: 5000,
     FOCUS_MARK: true,
     ESCORT_WAIT_MS: 6000, // the Warrior is in the party and has not engaged yet (no focus): wait up to this long before opening fire on a monster nobody has aggro'd. 0 = never wait
-    PARTY_SUPPORT: C.PARTY_SUPPORT, // Priest SexyHexy (code slot 7) and Warrior SexyWexy (code slot 8). The account allows only 3 running non-merchant characters: with both running, the follower Rangers stay off (an offline member is simply ignored) // non-Ranger helpers (the Priest, running AutoPriest v5.js): part of the party, get party_state, report potions / level / bag to the leader and are served by the courier. Empty = none
+    PARTY_SUPPORT: C.PARTY_SUPPORT, // Priest SexyHexy (code slot 5) and Warrior SexyWexy (code slot 4). The account allows only 3 running non-merchant characters: with both running, the follower Rangers stay off (an offline member is simply ignored) // non-Ranger helpers (the Priest, running AutoPriest v5.js): part of the party, get party_state, report potions / level / bag to the leader and are served by the courier. Empty = none
     PARTY_SUPPORT_SLOTS: C.PARTY_SUPPORT_SLOTS, // CODE slot of each support character (used to start them when PARTY_START_MEMBERS is on)
     BAG_SHARE: true, // v6 (Sean 2026-11-20): spare items (what would wait for the Merchant) are handed to the Priest when she is close: she has the bag room and never runs the courier trips; the Merchant's junk trips collect them from her bag
     BAG_SHARE_TO: C.BAG_SHARE_TO,

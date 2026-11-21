@@ -76,3 +76,14 @@ console.log('lead_unit OK');
   f=mkf('W',60000);T+=1000;f.L.tick();T+=40000;character.x=50;f.L.tick();T+=40000;f.L.tick();assert.strictEqual(f.reloads,0,'idle: moving resets the clock');
   console.log('lead_unit auto-reload OK');
 }
+
+// Stop / Start buttons for the Merchant: only the lead, a stop ends the auto-start
+{
+  const stopped=[],started=[];global.stop_character=(n)=>{stopped.push(n)};global.start_character=(n,sl)=>{started.push(n+'/'+sl);return {}};
+  const mkm=(lead_name)=>{const logs=[];const L=lead.create({CFG:{PARTY_LEADER:lead_name},say:(x)=>logs.push(x),alive:()=>true,me:{name:'R',cls:'ranger'},members:[{name:'R',cls:'ranger'},{name:'W',cls:'warrior'}],can_lead:{ranger:true},
+    merchant:{name:'M',slot:'2',enabled:true,max_tries:3,retry_ms:60000,grace_ms:30000,is_online:()=>false},hooks:{}});return {L,logs}};
+  let o=mkm('W');o.L.stop_merchant();o.L.start_merchant();assert.strictEqual(stopped.length+started.length,0,'not the lead: neither works');
+  o=mkm('R');o.L.stop_merchant();assert.deepStrictEqual(stopped,['M']);assert.strictEqual(o.L.L.m.done,true,'a stop ends the auto-start');
+  o.L.start_merchant();assert.deepStrictEqual(started,['M/2']);assert.strictEqual(o.L.L.m.done,false,'Start re-arms the guard');
+  console.log('lead_unit merchant stop/start OK');
+}

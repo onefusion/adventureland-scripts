@@ -12,14 +12,14 @@
 AL.config = (function () {
   // ---------------------------------------------------- roster (D13: the harness can replace it; the game uses this one)
   const roster = {
-    merchant: { name: "Goodies", cls: "merchant", slot: "3" }, // not in the game party, does not follow the lead (D14)
-    leader: { name: "SexyDexy", cls: "ranger", slot: "2" }, // the Ranger that leads the party and does the courier trips when no follower Ranger is online
+    merchant: { name: "Goodies", cls: "merchant", slot: "2" }, // not in the game party, does not follow the lead (D14)
+    leader: { name: "SexyDexy", cls: "ranger", slot: "3" }, // the Ranger that leads the party and does the courier trips when no follower Ranger is online
     followers: [
-      { name: "SexyLexy", cls: "ranger", slot: "2" }, // follower Rangers (the account runs 3 non-merchant characters: with the Warrior and the Priest on, they stay off)
-      { name: "SexyRexy", cls: "ranger", slot: "2" },
+      { name: "SexyLexy", cls: "ranger", slot: "3" }, // follower Rangers (the account runs 3 non-merchant characters: with the Warrior and the Priest on, they stay off)
+      { name: "SexyRexy", cls: "ranger", slot: "3" },
     ],
-    warrior: { name: "SexyWexy", cls: "warrior", slot: "8" }, // the tank
-    priest: { name: "SexyHexy", cls: "priest", slot: "7" },
+    warrior: { name: "SexyWexy", cls: "warrior", slot: "4" }, // the tank
+    priest: { name: "SexyHexy", cls: "priest", slot: "5" },
     lead_order: ["ranger", "warrior", "priest"], // E1 (stage 4): who is preferred when the party elects a lead
     merchant_in_party: false, // D14: the Merchant is not in the game party, does not lead it and does not invite; the lead Ranger invites the others. true = the v5 way (he leads and invites)
     auto_reload: { build: true, lib: true, idle: true, idle_ms: 15 * 60000, min_gap_ms: 60 * 60000 }, // Sean 2026-11-21: reload requests (never mid-fight): build / lib id differs from the lead's, or nothing changed for idle_ms. The same cause fires at most once per min_gap_ms

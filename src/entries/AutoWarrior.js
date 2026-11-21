@@ -1,16 +1,20 @@
 var AL; // the shared library (code slot "lib"), read once each time this script starts - require_code runs the lib module again on every call, so never call it in a loop
 try {
-  AL = require_code("lib");
+  try {
+    AL = require_code("lib");
+  } catch (e0) {
+    AL = require_code("1"); // Sean 2026-11-21: the lib is also code slot 1 (a name that does not match still finds it by number)
+  }
 } catch (e) {
   try {
-    game_log("[Warrior] [lib] require_code(\"lib\") failed: " + (e && e.message ? e.message : e) + ' - save "AL Libs v6.js" in a code slot named "lib" and restart', "#CF575F");
+    game_log("[Warrior] [lib] require_code(\"lib\") failed: " + (e && e.message ? e.message : e) + ' - save "AL Libs v6.js" in code slot 1 (named "lib") and restart', "#CF575F");
   } catch (e2) {}
 }
 (function AutoWarriorV5() {
   "use strict";
   if (!AL || AL.VERSION < 4) {
     game_log(
-      '[Warrior] shared library missing or old: save "AL Libs v6.js" (version 4+) in a code slot named "lib" and restart',
+      '[Warrior] shared library missing or old: save "AL Libs v6.js" (version 4+) in code slot 1 (named "lib") and restart',
       "#CF575F"
     );
     return;
@@ -27,7 +31,7 @@ try {
   // names, code slots and the shared item lists come from the one config file (src/lib/config.js); the CFG keys keep their v5 names
   const C = AL.config.for_script("Warrior");
   const CFG = {
-    SELF_CODE_SLOT: C.SELF_CODE_SLOT, // CODE slot (name or number) THIS script is saved in (SexyWexy = the Warrior, code slot 8; AutoRanger's PARTY_SUPPORT_SLOTS must say the same)
+    SELF_CODE_SLOT: C.SELF_CODE_SLOT, // CODE slot (name or number) THIS script is saved in (SexyWexy = the Warrior, code slot 4; AutoRanger's PARTY_SUPPORT_SLOTS must say the same)
     PARTY_LEADER: C.PARTY_LEADER, // exact, case-sensitive: the Warrior follows him and tanks for his party
     PARTY_ACCEPT_FROM: C.PARTY_ACCEPT_FROM, // party invitations are accepted from these characters ONLY
     PARTY_JOIN_MS: 20000, // not in the leader's party: ask to join this often (the leader accepts; the Merchant or the leader may also invite)

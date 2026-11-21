@@ -13,7 +13,8 @@
     "SURPLUS_DRY_RUN": "stage 6: removed (false since 2026-11-15; the sellers really sell)",
     "UPGRADE_DRY_RUN": "stage 6: removed (false; no log-only upgrade mode any more)",
     "COMPOUND_NEED_DRIVEN": "stage 6: removed (the ladder is the only compound path)",
-    "COMPOUND_MAX_INPUT_LEVEL": "stage 6: removed (only used by the pre-ladder path)"
+    "COMPOUND_MAX_INPUT_LEVEL": "stage 6: removed (only used by the pre-ladder path)",
+    "SELF_CODE_SLOT": "2026-11-21: code slots moved (lib 1, Merchant 2, Ranger 3, Warrior 4, Priest 5)"
   },
   "AutoRanger": {
     "BAG_SHARE": "stage 2: Ranger hands spare items to the Priest",
@@ -22,13 +23,18 @@
     "BAG_SHARE_EVERY_MS": "stage 2",
     "BAG_SHARE_MAX": "stage 2",
     "BAG_SHARE_RANGE": "stage 2",
-    "PARTY_ACCEPT_FROM": "stage 4 (D14): the Merchant is not in the game party (roster.merchant_in_party false)"
+    "PARTY_ACCEPT_FROM": "stage 4 (D14): the Merchant is not in the game party (roster.merchant_in_party false)",
+    "SELF_CODE_SLOT": "2026-11-21: code slots moved (lib 1, Merchant 2, Ranger 3, Warrior 4, Priest 5)",
+    "PARTY_SUPPORT_SLOTS": "2026-11-21: code slots moved (lib 1, Merchant 2, Ranger 3, Warrior 4, Priest 5)",
+    "PRIEST_CODE_SLOT": "2026-11-21: code slots moved (lib 1, Merchant 2, Ranger 3, Warrior 4, Priest 5)"
   },
   "AutoPriest": {
     "BAG_SHARE_FROM": "stage 2: who may hand her spare items",
-    "PARTY_ACCEPT_FROM": "stage 4 (D14): the Merchant is not in the game party (roster.merchant_in_party false)"
+    "PARTY_ACCEPT_FROM": "stage 4 (D14): the Merchant is not in the game party (roster.merchant_in_party false)",
+    "SELF_CODE_SLOT": "2026-11-21: code slots moved (lib 1, Merchant 2, Ranger 3, Warrior 4, Priest 5)"
   },
   "AutoWarrior": {
-    "PARTY_ACCEPT_FROM": "stage 4 (D14): the Merchant is not in the game party (roster.merchant_in_party false)"
+    "PARTY_ACCEPT_FROM": "stage 4 (D14): the Merchant is not in the game party (roster.merchant_in_party false)",
+    "SELF_CODE_SLOT": "2026-11-21: code slots moved (lib 1, Merchant 2, Ranger 3, Warrior 4, Priest 5)"
   }
 }

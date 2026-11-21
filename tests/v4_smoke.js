@@ -1653,7 +1653,7 @@ T("LD5 Merchant auto-start: the lead starts him when he is offline - after the g
   const L = party_ranger(w, ROSTER.ranger.name, { x: 387, y: 1066 });
   await w.clock.run(400);
   const n = (w.started || []).filter((x) => x === ROSTER.merchant.name).length;
-  return [[n === 3, "3 start attempts, got " + n], [logged(w, ROSTER.ranger.name, /start attempt 1\/3/) && logged(w, ROSTER.ranger.name, /start attempt 3\/3/) && logged(w, ROSTER.ranger.name, /giving up/), "every attempt logged, then gave up"], [(w.started_slots || {})[ROSTER.merchant.name] === "3", "code slot 3"]];
+  return [[n === 3, "3 start attempts, got " + n], [logged(w, ROSTER.ranger.name, /start attempt 1\/3/) && logged(w, ROSTER.ranger.name, /start attempt 3\/3/) && logged(w, ROSTER.ranger.name, /giving up/), "every attempt logged, then gave up"], [(w.started_slots || {})[ROSTER.merchant.name] === MERCH_SLOT, "code slot " + MERCH_SLOT]];
 });
 T("LD6 Merchant auto-start: he is already running (Sean logged him in) -> never started, and not after he logs out again", async (w) => {
   if (!HAS_LEAD) return skip_lead;
@@ -2691,7 +2691,7 @@ T("PR5 the leader starts offline followers and the Priest (own code slot)", asyn
   const L = make_char(w, ROSTER.ranger.name, { x: 387, y: 1066 }, "AutoRanger v4.js", [[/HUNT_ENABLED: true/, "HUNT_ENABLED: false"], [/GEAR_SHARE: true/, "GEAR_SHARE: false"], [/PARTY_START_MEMBERS: false/, "PARTY_START_MEMBERS: true"], [/PARTY_SUPPORT: (?:\[[^\]]*\]|C\.PARTY_SUPPORT)/, 'PARTY_SUPPORT: ["SexyHexy"]']]);
   L.script_char = true; add_item(L, "hpot1", 200); add_item(L, "mpot1", 200);
   await w.clock.run(60);
-  return [[(w.started || []).indexOf("SexyLexy") !== -1 && (w.started || []).indexOf("SexyRexy") !== -1, "followers started: " + JSON.stringify(w.started)], [(w.started || []).indexOf("SexyHexy") !== -1 && w.started_slots.SexyHexy === "7", "Priest started in slot " + (w.started_slots || {}).SexyHexy]];
+  return [[(w.started || []).indexOf("SexyLexy") !== -1 && (w.started || []).indexOf("SexyRexy") !== -1, "followers started: " + JSON.stringify(w.started)], [(w.started || []).indexOf("SexyHexy") !== -1 && w.started_slots.SexyHexy === PRIEST_SLOT, "Priest started in slot " + (w.started_slots || {}).SexyHexy]];
 });
 T("PR6 the leader stops code-started followers on request (set stop_characters), once", async (w) => {
   const L = make_char(w, ROSTER.ranger.name, { x: 387, y: 1066 }, "AutoRanger v4.js", [[/HUNT_ENABLED: true/, "HUNT_ENABLED: false"], [/GEAR_SHARE: true/, "GEAR_SHARE: false"]]);
@@ -3226,6 +3226,8 @@ T("SC6 scheduler: a round that keeps waiting behind a busier, higher-priority on
 const RANGER_SRC = src("AutoRanger v4.js");
 const IS_R5 = /STEP TABLE \(v5\)/.test(RANGER_SRC);
 const skip_r4 = [[true, "skipped: this Ranger has no step table (v4)"]];
+// code slots as the scripts under test have them (v6: Merchant 2, Priest 5 since 2026-11-21; v5: 3 and 7)
+const MERCH_SLOT = /AL\.lead\.create/.test(RANGER_SRC) ? "2" : "3", PRIEST_SLOT = /AL\.lead\.create/.test(RANGER_SRC) ? "5" : "7";
 const HAS_LEAD = /AL\.lead\.create/.test(RANGER_SRC);
 const skip_lead = [[true, "skipped: no party lead module in this build (v5)"]];
 T("RS1 ranger step table: the brain loop runs its steps in the v4 order (guards against an accidental reorder)", async (w) => {

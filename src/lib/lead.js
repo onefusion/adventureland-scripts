@@ -350,6 +350,23 @@ AL.lead = (function () {
       lead_log("STOP CODE: stopping " + name + " - drive it by hand; the lead's Start button starts it again");
       AL.call(() => stop_character(name));
     }
+    // Goodies is outside the party and the election but the lead can still stop and start him (Sean 2026-11-21). A stop also ends the auto-start, otherwise it would bring him straight back.
+    function stop_merchant() {
+      const M = env.merchant;
+      if (!M || !M.name) return lead_log("no Merchant in the roster", "#CF575F");
+      if (!i_lead()) return lead_log("only the lead can stop " + M.name + " (the lead is " + L.lead + ")", "#CF575F");
+      L.m.done = true;
+      lead_log("STOP CODE: stopping the Merchant " + M.name + " - the auto-start is off until the Start button; his stand and jobs stop where they are", "#E0A040");
+      AL.call(() => stop_character(M.name));
+    }
+    function start_merchant() {
+      const M = env.merchant;
+      if (!M || !M.name) return lead_log("no Merchant in the roster", "#CF575F");
+      if (!i_lead()) return lead_log("only the lead can start " + M.name + " (the lead is " + L.lead + ")", "#CF575F");
+      L.m = { tries: 0, last: 0, done: false };
+      lead_log("START: starting the Merchant " + M.name + " in code slot " + M.slot);
+      AL.call(() => start_character(M.name, M.slot));
+    }
     function start(name) {
       const m = env.members.find((x) => x.name === name);
       if (!m) return lead_log("unknown character " + name, "#CF575F");
@@ -370,13 +387,17 @@ AL.lead = (function () {
         add("al_stop_" + n, "Stop " + n, () => stop(n));
         add("al_hold_" + n, "Hold " + n, () => ctl(n, L.peer_hold && L.peer_hold[n] ? "resume" : "hold"));
       }
+      if (env.merchant && env.merchant.name) {
+        add("al_stop_merchant", "Stop " + env.merchant.name, () => stop_merchant());
+        add("al_start_merchant", "Start " + env.merchant.name, () => start_merchant());
+      }
       add("al_hold_all", "Hold all", () => follower_names().forEach((n) => ctl(n, "hold")));
       add("al_resume_all", "Resume all", () => follower_names().forEach((n) => ctl(n, "resume")));
       add("al_stop_all", "Stop all", () => follower_names().forEach((n) => stop(n)));
       add("al_reload_all", "Reload all", () => { follower_names().forEach((n) => ctl(n, "reload")); request_reload("Reload all button"); });
     }
     lead_log("lead module started: lead is " + L.lead + (i_lead() ? " (me)" : "") + ", " + (can_lead[me.cls] ? "I can lead" : "I cannot lead") + ", election after " + Math.round(election_ms / 1000) + " s without news");
-    return { L, handle, tick, request_reload, claim, hand_over, election, stop, start, ctl, add_buttons, held: () => L.hold, is_lead: i_lead, lead: () => L.lead, candidates };
+    return { L, handle, tick, request_reload, claim, hand_over, election, stop, start, stop_merchant, start_merchant, ctl, add_buttons, held: () => L.hold, is_lead: i_lead, lead: () => L.lead, candidates };
   }
   // a reason string while a monster is on me or on a party member nearby (a fight is going on), "" otherwise. names: party names; radius in px
   function fight_near(names, radius) {
