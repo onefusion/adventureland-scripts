@@ -1,0 +1,4440 @@
+var AL; // the shared library (code slot "lib"), read once each time this script starts - require_code runs the lib module again on every call, so never call it in a loop
+try {
+  AL = require_code("lib");
+} catch (e) {
+  try {
+    game_log("[Ranger] [lib] require_code(\"lib\") failed: " + (e && e.message ? e.message : e) + ' - save "AL Libs v6.js" in a code slot named "lib" and restart', "#CF575F");
+  } catch (e2) {}
+}
+(function AutoRangerV5() {
+  "use strict";
+  if (!AL || AL.VERSION < 4) {
+    game_log(
+      '[Ranger] shared library missing or old: save "AL Libs v6.js" (version 4+) in a code slot named "lib" and restart',
+      "#CF575F"
+    );
+    return;
+  }
+  // a newer copy of this script (re-engage / reload) makes this one stop all its loops, timers and handlers
+  const GEN = AL.new_generation();
+  const alive = () => AL.is_current(GEN);
+
+  // ============================ CONFIG ============================
+  // names, code slots and the shared item lists come from the one config file (src/lib/config.js); the CFG keys keep their v5 names
+  const C = AL.config.for_script("Ranger");
+  const CFG = {
+    MERCHANT_NAME: C.MERCHANT_NAME, // exact, case-sensitive
+    MERCHANT_CODE_SLOT: "", // CODE slot of the Merchant's script (e.g. "3") to let the leader start him when he is offline; "" = never auto-start him (so you can log in with him and update his code)
+    SELF_CODE_SLOT: C.SELF_CODE_SLOT, // CODE slot (name or number) THIS script is saved in. The Re-engage button reloads the saved text from it.
+
+    // --- need ladder (v4): low potions or a full bag -> retreat to town, ask the Merchant (60s ETA rule), fall back ---
+    RETREAT_NEAR_PX: 250, // on main: farther than this from SAFE_SPOT -> use the town skill first, then walk
+    DISENGAGE_STEP_PX: 120, // before using the town skill he steps this far away from monsters that could hit him (a hit interrupts the cast)
+    DISENGAGE_MARGIN_PX: 120, // monsters count as a threat when closer than their range + this, or when they are targeting him
+    DISENGAGE_MAX_MS: 8000, // give up running after this long and cast anyway
+    LADDER_BACKOFF_MS: 120000, // a need that is still unmet after the whole ladder: wait this long before trying again
+    HELLO_DELAY_MS: 4000, // restart handshake: send hello this long after start
+
+    // --- party of Rangers: ONE script for all of them. The leader decides (goals, hunts); followers go to him and shoot what he shoots ---
+    // Leave PARTY_MEMBERS empty to play solo. Save this same script in the same code slot for every Ranger.
+    PARTY_LEADER: C.PARTY_LEADER, // exact, case-sensitive
+    PARTY_MEMBERS: C.PARTY_MEMBERS, // the follower Rangers' names, e.g. ["Dexy2", "Dexy3"]
+    PARTY_ACCEPT_FROM: C.PARTY_ACCEPT_FROM, // a follower accepts party invitations from this character (the Merchant sends them when he is online) AND from PARTY_LEADER, nobody else
+    PARTY_JOIN_MS: 20000, // v5: a follower / the Priest that is not in the leader's party asks to join it this often (the leader accepts requests from his own members only), and the leader invites members that are online but not in his party (only while HE is the party head - when the Merchant leads the party, the Merchant invites)
+    PARTY_HUNTS_UNTIL_LEVEL: 50, // v5 (Sean 2026-11-18 16:17): while the party is still in bees-only mode, Daisy hunts are allowed once EVERY member has reached this level, but only the easy ones (HUNT_MAX_DIFFICULTY_BEES_ONLY). Goals and boss events stay off until PARTY_BEES_UNTIL_LEVEL. 0 = off (no hunts while bees-only)
+    HUNT_MAX_DIFFICULTY_BEES_ONLY: 0, // v5: difficulty limit for hunts taken in bees-only mode (0 easy / green)
+    PARTY_BEES_UNTIL_LEVEL: 60, // the whole party only farms bees (no goals, no Daisy hunts) until EVERY follower has reached this level; 0 = off
+    TANK_NAME: C.TANK_NAME, // the Warrior: announces the focus target (the biggest monster hitting the party); we mark it and shoot the rest
+    FOCUS_TARGET: true,
+    FOCUS_MAX_AGE_MS: 5000,
+    FOCUS_MARK: true,
+    ESCORT_WAIT_MS: 6000, // the Warrior is in the party and has not engaged yet (no focus): wait up to this long before opening fire on a monster nobody has aggro'd. 0 = never wait
+    PARTY_SUPPORT: C.PARTY_SUPPORT, // Priest SexyHexy (code slot 7) and Warrior SexyWexy (code slot 8). The account allows only 3 running non-merchant characters: with both running, the follower Rangers stay off (an offline member is simply ignored) // non-Ranger helpers (the Priest, running AutoPriest v5.js): part of the party, get party_state, report potions / level / bag to the leader and are served by the courier. Empty = none
+    PARTY_SUPPORT_SLOTS: C.PARTY_SUPPORT_SLOTS, // CODE slot of each support character (used to start them when PARTY_START_MEMBERS is on)
+    BAG_SHARE: true, // v6 (Sean 2026-11-20): spare items (what would wait for the Merchant) are handed to the Priest when she is close: she has the bag room and never runs the courier trips; the Merchant's junk trips collect them from her bag
+    BAG_SHARE_TO: C.BAG_SHARE_TO,
+    BAG_SHARE_MIN_ITEMS: 3, // ask only when at least this many items wait for the Merchant
+    BAG_SHARE_EVERY_MS: 90000,
+    BAG_SHARE_MAX: 12, // items per hand-over
+    BAG_SHARE_RANGE: 250, // the Priest must be this close (send_item works within about 400)
+    PRIEST_CODE_SLOT: C.PRIEST_CODE_SLOT, // CODE slot AutoPriest v5.js is saved in (used to start the support characters)
+    PARTY_START_MEMBERS: false, // the main Ranger starts follower characters that are offline (needs SELF_CODE_SLOT)
+    STATE_EVERY_MS: 4000, // the leader tells the followers where he is and what he farms this often
+    STATE_STALE_MS: 20000, // no news from the leader for this long: followers farm the bees on their own
+    FOLLOW_FAR_PX: 260, // a follower farther than this from the leader walks to him
+    FOLLOW_RADIUS: 160, // idle followers stay this close to the leader
+    FARM_SPOT: { map: "main", x: 496, y: 1068 }, // bees (best drops and gold). Scorpions (quivers): x 1578, y -168 with TARGET_TYPES ["scorpion"] and MAX_DIFFICULTY 1. Snakes: x -155, y 1852
+    FARM_ROTATION: ["poisio", "armadillo", "croc", "porcupine", "arcticbee"], // (Sean 2026-11-19) farm in rotation: after every finished hunt the base farm moves to the next monster of this list and stays there until the next hunt ends (Poison Sacks, Armadillo Scales, Croc Scales). [] = no rotation (FARM_MONSTER only). Which one is next is kept in set("farm_rot_idx")
+    FARM_MONSTER: "poisio", // v5 (Sean 2026-11-18 23:46): the base farm is now the Poisios (main map, -262..20 x 1198..1522): a Poison Sack sells for about 1,000 gold, a Bee Wing for 25, and they drop less often so they fill the bag and bank more slowly. Set "" for the bees again (FARM_SPOT / TARGET_TYPES below). (older note:)  v5 (Sean 2026-11-17: rats were tried, off again - Rats drop only rattail; the Mansion Gold Earring is a map drop): a monster type (G.monsters key, e.g. "arcticbee", "poisio", "rat") to farm instead of the bees: FARM_SPOT becomes the centre of its nearest spawn box and TARGET_TYPES is set to it. "" = the FARM_SPOT / TARGET_TYPES above. Needs MAX_DIFFICULTY that allows it (poisio hits hard: 1)
+    FARM_RADIUS: 100, // idle farther than this from FARM_SPOT -> walk back
+    // --- who to attack -------------------------------------------------
+    PRIORITY_TYPES: [], // monster types attacked first whenever visible on screen, whatever their difficulty
+    MAX_DIFFICULTY: 1, // (v5: 1 for the Mansion Rats; bees are easy anyway) (scorpions need 1)   the game's HP-bar colour: 0 = easy (green), 1 = medium (orange), 2 = hard (red)
+    DEATH_RETREAT: true, // Sean 2026-11-20: a party member dies on the base farm (the Porcupines wiped the party: the Warrior died and the others kept fighting) -> everybody leaves for town at once, and that monster is skipped by the farm rotation for DEATH_AVOID_MS
+    KIT_WAIT_MS: 600000, // Sean 2026-11-20: the Warrior reports he has no Basher: the group waits in town (next to the Merchant) this long at most for the Merchant to bring one
+    DEATH_RETREAT_HOLD_MS: 90000, // stay in town this long (the dead respawn and come back to the leader meanwhile)
+    DEATH_AVOID_MS: 2700000, // the rotation does not pick that monster again for this long
+    TRY_MONSTER_MS: 360000, // Sean 2026-11-20: "Try monster" button / set("try_monster", "<monster>"): the group goes to its nearest spawn and takes on ONE of them with single-target shots; a kill = success, any death or this much time without a kill = failure; then back to the normal farm
+    FORCE_FARM: true, // v5 (Sean 2026-11-18): console command set("force_farm", "<monster>") sends the whole group to that monster's nearest spawn and lets THAT monster past MAX_DIFFICULTY (nothing else). Any death (not during the Grinch fight) drops it and the group goes back to the bees; set it again by hand to retry. set("force_farm", "") ends it
+    FORCE_CHECK_MS: 3000,
+    LUCK_STOP: true, // v5 (Sean 2026-11-18): the leader walks to the Merchant (SAFE_SPOT) and asks him to cast Merchant's Luck on every party member before a forced farm and before a boss event, and about once an hour while farming (the buff lasts an hour)
+    LUCK_STOP_BEES_MS: 60 * 60000, // regular renewal while farming
+    LUCK_STOP_TIMEOUT_MS: 120000, // the Merchant has not answered after this long: go on without
+    LUCK_STOP_MIN_LEFT_MS: 10 * 60000, // a buff with less than this left counts as missing
+    LUCK_STOP_RETRY_MS: 30 * 60000, // no answer (Merchant away / busy): not again for this long
+    IGNORE_NAMES: ["Target Automatron", "Fairy"], // by in-game name - covers all 7 'target*' training dummies
+    IGNORE_TYPES: [], // extra monster types (G.monsters keys) never to attack
+    TARGET_TYPES: ["bee"], // [] = any easy monster; otherwise only these types
+    LEASH_RADIUS: 400, // ignore ordinary targets farther than this from FARM_SPOT (0 = no limit)
+
+    HP_POTION: "hpot1", // tier-1 (400 HP / 500 MP) - Poisios hit hard
+    MP_POTION: "mpot1",
+    POTION_REQUEST_AT: 80, // ask the Merchant when either potion is at/below this
+    POTION_CRITICAL: 8, // at/below this, stop waiting and go to the NPC
+    // --- Courier trip (party mode): ONE follower fetches potions for the whole party and takes the junk of all three to town ---
+    COURIER_ENABLED: true,
+    LEADER_TRIP_WHEN_ALONE: true, // v5 (Sean 2026-11-17): no follower Ranger is online -> the leader himself makes the potion / junk / gear trip for the whole party (the Priest and Warrior follow him to town)
+
+    COURIER_QUIET_AT: 120, // v5: while NO boss event, hunt or farm goal is running, a trip starts already at this many potions (and no new farm goal starts below it), so the restock happens between events, not in the middle of one
+    COURIER_POTION_AT: 40, // any Ranger at/below this of either potion starts a trip
+    BOSS_POTION_TARGET: 600, // v5: during a boss event each trip fills everyone up to this many of each potion (Merchant stock is raised to match)
+    BOSS_COURIER_POTION_AT: 80, // v5: while a boss event runs the trip starts this early (a long fight burns potions; the courier is back within a minute because the post is in town)
+    BOSS_TOPOFF_BELOW: 200, // v5: once per boss event, right after it starts: anyone below this many of either potion starts a top-off trip (the party waits at the post for the boss anyway)
+    COURIER_STOPGAP: 10, // the courier hands this many of a low potion to a Ranger before leaving...
+    COURIER_KEEP: 20, // ...but only while he keeps at least this many himself
+    COURIER_JUNK_EACH: 30, // junk items each other Ranger / the Warrior / the Priest gives the courier per trip (limited by the courier's free slots; was 12)
+    COURIER_GOLD_KEEP: 5000, // the others give the courier gold above this, so it can pay the Merchant
+    COURIER_COOLDOWN_MS: 120000, // earliest next trip after one ended
+    GEAR_READY_MAX_MS: 1200000, // a "gear is waiting" message from the Merchant starts a trip for this long
+    COURIER_MAX_MS: 900000, // the leader gives up on a trip after this long
+    COURIER_COLLECT_WAIT_MS: 20000,
+    COURIER_DELIVER_WAIT_MS: 150000, // after the town trip: how long the courier looks for the others before giving up
+    EMERGENCY_POTIONS: 8, // party mode: a Ranger this low (and no courier coming) runs his own ladder as before
+    POTION_TARGET: 250, // how many of each to hold after a restock (long boss fights burn through potions)
+
+    GOLD_KEEP: 5000, // keep this much; the rest is swept to the Merchant
+    SWEEP_MIN: 2000, // don't bother sweeping less than this
+    PAY_RANGE: 150, // must be this close to the Merchant to send gold
+
+    // Survival
+    HP_USE_PCT: 0.8,
+    MP_USE_PCT: 0.6,
+    FLEE_HP_PCT: 0.45,
+    RESPAWN_DELAY_MS: 3000,
+
+    // Skills
+    MULTISHOT_MIN_MP_PCT: 0.4, // only use 3shot/5shot above this MP fraction
+    TRI_SHOT_MONSTERS: ["bee"], // v5: 3shot/5shot are ONLY used on these monster types (several get hit at once and aggro the Ranger). Every other monster is shot one at a time. Add a type here to allow it.
+    SINGLE_TARGET_TYPES: ["scorpion", "minimush", "bbpompom", "pppompom", "snake", "osnake", "cave_snake"], // never 3shot/5shot these: one at a time (scorpions: only one aggros; Pom Poms: the hunt is too hard when several are pulled)
+    // --- farm goals: monsters farmed on purpose for the drops that build the DEX gear (see the Merchant's compound priority) ---
+    // Goals are tried in rotation (the one visited longest ago first) whenever no accepted Daisy hunt is running; with none available he farms bees.
+    // A goal is skipped when the monster is too tough, one kill would take too long, or it has no regular spawn he can walk to.
+    // Switch off / on from the game console:  set("farm_goals", "off")  /  set("farm_goals", "")
+    GOALS_ENABLED: true,
+    GOAL_MAX_HP: 1000000, // never farm monsters with more HP than this
+    GOAL_MAX_TTK_S: 900, // skip a goal when one kill would take longer than this (estimated: HP / (attack x frequency x HUNT_EFFICIENCY))
+    GOAL_MAX_DIFFICULTY: 1, // the game's HP-bar rating, as for hunts
+    GOAL_WAIT_MS: 120000, // at the spawn and none in view for this long: not respawned yet - rest the goal for the monster's respawn time
+    GOAL_MAX_PATH_FAILS: 6,
+    // v5: a monster with SEVERAL spawn areas (the Phoenix has 5 on this server and picks one at random each respawn, "randomrespawn") is searched area by area:
+    // v5: the game log cannot be selected or copied and old lines scroll away, so status lines are ALSO written to the browser console (F12), where they can be copied
+    CONSOLE_STATUS: true, // status, report and problem lines (red/amber) also go to console.log; CONSOLE_ALL mirrors everything
+    CONSOLE_ALL: false, // true: EVERY line this script writes to the game log also goes to console.log
+    GOAL_NOTE_MS: 60000, // v5: "Goal: ..." progress line this often while a farm goal runs (also copied to the console)
+    // v5 danger stop-gap: a fast HP drop with several monsters on him is logged, and he casts town at once (the cast takes ~3 s, so it only helps when it starts early)
+    DANGER_ENABLED: true,
+    DANGER_HP_PCT: 0.35, // HP at/below this fraction...
+    DANGER_DROP_PCT: 0.4, // ...after losing at least this fraction of max HP within DANGER_WINDOW_MS...
+    DANGER_WINDOW_MS: 4000,
+    DANGER_MIN_ATTACKERS: 3, // ...with at least this many monsters targeting him
+    DANGER_TOWN: true, // cast town when it triggers
+    GOAL_BOX_WAIT_MS: 60000, // patrol each area this long, then go to the next one (single-area monsters keep GOAL_WAIT_MS)
+    GOAL_SWEEP_REST_MS: 600000, // every area searched without finding it: rest the goal this long (the monster respawns somewhere else meanwhile)
+    GOAL_SWEEP_OTHER_MAPS: false, // false: only areas on the map the monster's spawn entry belongs to (the Phoenix's halloween and cave areas are skipped)
+    GOALS: [
+      // want = items worth the trip; the drop odds from the game data are logged when a goal starts
+      {
+        type: "phoenix",
+        session_min: 10, // v5: one visit lasts this long (a sweep of its 5 areas takes ~5 min) ...
+        every_min: 30, // v5 (Sean 2026-11-17): ... and starts at most this often; the rest of the time he farms bees / does hunts and boss events. 0 / unset = no limit
+        want: ["dexearring", "stormfeather"],
+      }, // main map: Earring of Dexterity 12%; Storm Feather (the Wind Belt needs 40) also drops
+      { type: "mvampire", session_min: 20, want: ["dexearring"], enabled: false }, // v5: off while the Phoenix is checked every 30 min (remove "enabled: false" to bring Dracul back)
+      // // Dracul, Cave of Darkness: respawns every ~18 min
+      {
+        type: "fireroamer",
+        session_min: 60,
+        want: ["orbofdex"],
+        enabled: false,
+      }, // Fire Spirits, desertland: Orb of Dexterity 0.07% - a very long haul, switched off
+    ],
+    // --- boss events: the whole party drops what it is doing and goes after a server boss while it is up ---
+    // The game publishes live bosses in parent.S[type] = {live, hp, max_hp, map, x, y}; he teleports, so the position is chased.
+    // Search never stops until lose_ms has passed with no sign of the boss (not in view, S not live): then it is assumed dead. A boss that does not teleport can have a short lose_ms (the server's live flag is the proof); the Grinch keeps 5 min because he teleports in and out.
+    // Switch off / on from the game console:  set("boss_events", "off")  /  set("boss_events", "")
+    BOSS_EVENTS_ENABLED: true,
+    BOSS_WHEN_BEES_ONLY: ["grinch"], // v5 (Sean 2026-11-17): while the party is in bees-only mode (someone is below PARTY_BEES_UNTIL_LEVEL, e.g. the Priest) only these boss events are joined
+    BOSS_EVENTS: [
+      { type: "grinch", max_ms: 0, lose_ms: 5 * 60000, post: true, post_radius: 600 }, // Grinch: teleports in and out (3M HP on this server). post: true = the party WAITS at SAFE_SPOT (town) and shoots him when he is in range, it does not chase him; he counts as "around" while the server shows him within post_radius of the post
+      { type: "snowman", lose_ms: 30000 }, // Snowman: 1 damage per hit, melee only and slow - kite and shoot. v5 (Sean 2026-11-17): he does not teleport, so when the server stops reporting him live (and he is not in view) he counts as dead after 30 s, not 3 min
+    ],
+    BOSS_STALE_MS: 90000, // during a boss event the followers wait this long for news from the leader (instead of STATE_STALE_MS) before they go back to the bees
+    BOSS_MAX_MS: 15 * 60000, // v5: a boss event ends after this long (a boss entry can set its own max_ms; 0 = no cap, the Grinch has none)
+    BOSS_CAP_REST_MS: 30 * 60000, // after a capped event the same boss is not joined again for this long
+    BOSS_CHECK_MS: 5000,
+    BOSS_MOVE_MS: 4000, // re-aim the walk at the boss's reported position this often
+    BOSS_LOG_MS: 60000, // progress line (HP left, estimated time) this often
+    // --- monster hunts (Daisy, main town) --------------------------------
+    // He picks up a hunt, checks whether he can finish it, and either goes after it or lets it expire.
+    // Switch off / on from the game console without re-pasting:  set("monster_hunts", "off")  /  set("monster_hunts", "")
+    HUNT_ENABLED: true,
+    HUNT_NPC: "monsterhunter", // Daisy
+    HUNT_NPC_FALLBACK: { map: "main", x: 126, y: -413 }, // used if find_npc cannot place her
+    HUNT_MAX_DIFFICULTY: 1, // the game's HP-bar rating: 0 easy (green), 1 medium (orange), 2 hard (red). Harder hunts are skipped
+    HUNT_MAX_MONSTER_HP: 250000, // never attempt monsters with more HP than this (bosses)
+    HUNT_AVOID_TYPES: [], // monster types (G.monsters keys) to never hunt, even if they look doable
+    ESCORT: true, // Sean 2026-11-20: the Warrior or Priest has not been within ESCORT_NEAR_PX of me (or on my map) for ESCORT_AFTER_MS: stop and walk to them (never on my own junk / potion trip, a courier trip, a retreat or a boss event). Twice within 10 min = this farm keeps splitting the party: it is skipped for a while
+    ESCORT_AFTER_MS: 60000,
+    ESCORT_NEAR_PX: 700,
+    ESCORT_FRESH_MS: 20000, // only trust a member's position report younger than this (older = offline or dead: nothing to walk to)
+    BOAR_FLEE: true, // v5 (Sean 2026-11-18): a Wild Boar (three at a time in Winterland) that targets anybody in the party: every character leaves through the portal NPC for the main map and the party farms the normal bees for BOAR_HOLD_MS (the forced farm, hunts and goals wait) before going back
+    BOAR_MAPS: ["winterland"],
+    BOAR_TYPES: ["boar"],
+    BOAR_HOLD_MS: 10 * 60000,
+    HUNT_DANGER_TYPES: ["greenjr"], // roaming monsters that kill a Ranger in seconds (Green Jr.: attack speed 20). A hunt does not walk to a spawn where the server shows one, and a Ranger who sees one close by runs to town and holds hunts for HUNT_DANGER_HOLD_MS
+    HUNT_DANGER_RADIUS: 800, // seen this close to me during a hunt: run (the game does not list him in parent.S, so sight is the only warning; 800 is about a screen)
+    HUNT_DANGER_SPOT_RADIUS: 900, // the server shows one this close to the hunt's spawn: do not go there
+    HUNT_DANGER_HOLD_MS: 600000,
+    HUNT_DANGER_FOLLOW_HOLD_MS: 60000, // v5: a follower who ran stays in town this long before following the leader again (longer while the server shows the monster near the leader)
+    HUNT_EFFICIENCY: 0.5, // share of nominal damage that really lands (misses, armor, walking) - used for the time estimate
+    HUNT_TRAVEL_BUFFER_S: 120, // extra seconds assumed for getting there
+    HUNT_STARTUP_WAIT_MS: 4000, // after a (re)start, wait this long for the character's state before deciding whether a hunt is active
+    HUNT_COOLDOWN_MS: 3600000, // after a hunt ends (done or expired) farm normally this long before asking Daisy again (1 hour)
+    HUNT_RETRY_MS: 600000, // if Daisy gave nothing, wait this long before asking again
+    HUNT_MAX_PATH_FAILS: 6, // this many failed walks toward the monsters ("path not found") -> give the hunt up
+    HUNT_ARRIVE_RADIUS: 220, // closer than this to the spawn: stop travelling, look for the monsters
+    FIVESHOT_INTERVAL_MS: 30000, // 5shot (level 75+) at most this often - it costs even more MP
+    THREESHOT_INTERVAL_MS: 30000, // 3shot at most this often (it costs a lot of MP); plain attacks in between
+    SUPERSHOT_TYPES: [], // supershot costs 400 MP - only worth it on big targets
+    HUNTERSMARK_TYPES: [],
+    BOSS_MARK: true, // boss events: the Rangers use Hunter's Mark (+10% damage taken, 10 s, 240 MP) on the boss in rotation so it never runs out
+    BOSS_MARK_REFRESH_MS: 3000, // cast again once the mark has less than this left (whoever sees it first; the others then see a fresh mark and skip)
+    BOSS_MARK_MIN_MP_PCT: 0.3, // never below this MP fraction (potions / attacks come first)
+
+    // --- inventory cleaning --------------------------------------------
+    CLEAN_ENABLED: true,
+    CLEAN_WHEN_FREE_SLOTS: 10, // start cleaning when this few slots (or fewer) are free
+    JUNK_ITEMS: C.JUNK_ITEMS, // item keys (G.items) - bee-area gear drops that can only be sold
+    // Accessories the Merchant compounds (3 identical -> 1 better). Never sold: when the bag fills up they are
+    // handed to the Merchant, who banks them. (Without a Merchant they simply stay in the bag.)
+    // v5: spare equipment in the bag (not worn, not locked) that the game lets you upgrade or compound goes to the Merchant too (the Fire Bows the bees drop):
+    // he upgrades it, and the gear sweep gives it to whoever it beats. GEAR_KEEP lists item names a Ranger keeps in his bag instead.
+    GEAR_HANDOFF: true,
+    GEAR_KEEP: [],
+    HANDOFF_ALL_ITEMS: true, // v5: EVERY unlocked, unworn item that is not a potion/elixir goes to the Merchant, who sorts it (sells junk, banks the rest). false = only upgradeable gear (see above)
+    BAG_KEEP: ["tracker", "jacko", "computer"], // names a Ranger always keeps in his bag (besides potions and elixirs)
+    BAG_KEEP_PREFIXES: C.BAG_KEEP_PREFIXES,
+    GEAR_HANDOFF_GRACE_MS: 180000, // gear the Merchant just handed him (to be worn) is left alone this long
+    GEAR_TRIP_MIN: 1, // a courier trip also starts (between events) when a Ranger carries this many spare gear items...
+    GEAR_TRIP_EVERY_MS: 1200000, // ...but not more often than this
+    KEEP_FOR_COMPOUND: C.KEEP_FOR_COMPOUND, // orbg (Orb of Beginnings, Sean 2026-11-18): kept and banked for the Merchant's compound focus. The last five (before it): Grinch and Snowman gear drops - kept and banked (never sold) so the gear sweep can hand out what beats the worn gear
+    // Stackable loot (materials, drops...) piles up and fills the bag. When the bag is nearly full the Merchant collects it
+    // (at SAFE_SPOT, not out in the field) and banks it. Potions and scrolls are never handed over.
+    STACK_TO_MERCHANT: true,
+    STACK_PICKUP_MIN: 3, // ask for a pickup once this many bag slots hold stackable loot
+    STACK_KEEP: [], // extra item keys to always keep on the Ranger
+    STACK_KEEP_PREFIXES: C.STACK_KEEP_PREFIXES,
+    SAFE_SPOT: { map: "main", x: -110, y: 15 }, // main-town meeting spot next to the Merchant's stand (also where fallback 3 waits)
+    GEAR_SHARE: true, // tell the Merchant what is worn (he upgrades items that would beat it and hands them over)
+    GEAR_REPORT_MS: 60000,
+    JUNK_ACTION: "sell", // "sell" = sell for gold (default) | "destroy" = delete
+    SELL_NPC: "basics", // Gabriel (merchant, main town) - walked to if selling in place is refused
+    BOSS_DUMP_ENABLED: true, // when a boss event starts (Grinch button / auto), hand ALL junk, keepers and stackables to the Merchant if he is within BOSS_DUMP_RANGE, so he sells it and the bag has room for the drops
+    GRINCH_CIRCLE: true, // Sean 2026-11-19: the server lists the Grinch near the post but he is not in view (invisible after a teleport): the Ranger, the Warrior and the Priest each walk a small circle around where they stand until he shows up again, then the circle stops and the fight goes on
+    GRINCH_CIRCLE_RADIUS: 60,
+    GRINCH_CIRCLE_STEP_MS: 1500,
+    GRINCH_CIRCLE_AFTER_MS: 4000, // not in view for this long before the circling starts
+    GRINCH_REFRESH: true, // Sean 2026-11-19: a party member takes a normal hit during a boss fight but no monster in view is on him (Grinch invisible after a teleport): step a few pixels to refresh the view
+    GRINCH_REFRESH_MS: 15000, // ... at most this often
+    BOSS_DUMP_RANGE: 250,
+    BOSS_DUMP_RETRY_MS: 20000, // while the event runs and he is not close yet, look again this often (for BOSS_DUMP_WINDOW_MS)
+    BOSS_DUMP_WINDOW_MS: 180000,
+    BOSS_DUMP_SLOW_MS: 5 * 60000, // after the first window the hand-over looks again every 5 min ...
+    BOSS_DUMP_SLOW_AFTER_MS: 30 * 60000, // ... and after this long into the event every 10 min (BOSS_DUMP_SLOWER_MS), until the event is over
+    BOSS_DUMP_SLOWER_MS: 10 * 60000,
+    BOSS_AFTER_TRIP: true, // when a boss event is over (dead, gone or capped), a courier trip brings every Ranger's drops and leftovers to the Merchant so the bags are empty again
+    BOSS_AFTER_DELAY_MS: 20000, // wait this long after the event ends so the last drops are picked up first
+    BOSS_AFTER_WINDOW_MS: 10 * 60000, // the post-event trip must start within this long, else it is dropped
+    BOSS_AFTER_MIN_ITEMS: 1, // a Ranger with at least this many junk/spare items counts
+    PACE_START_MS: 1500, // v5: minimum gap after a start_character request (the account limit answers in bursts), through the shared request queue
+    PACE_TRANSFER_MS: 0, // v5: minimum gap between send_item / send_gold requests. 0 = no waiting (v4 behaviour, they are still sent one at a time); raise it if the server ever answers "throttled"
+    RANGER_STATUS_MS: 30 * 60000, // v5: how often the status line (which step used the loop, which timers are running) is logged; set("ranger_status","1") prints it now
+    JUNK_SEND_RANGE: 60, // hand the items over once the Merchant is this close
+    SELL_MIN_JUNK: 3, // only make that walk once at least this many junk items are waiting
+    JUNK_MAX_LEVEL: C.JUNK_MAX_LEVEL, // never touch an item upgraded above this level
+    JUNK_ANY_LEVEL: C.JUNK_ANY_LEVEL, // ...except Rings of Joy (Sean 2026-11-18): junk at any level
+  };
+
+  // ============================ HELPERS ===========================
+  // shared helpers live in the "lib" code slot (AL Lib v1.js)
+  const { wait, now, d2, safe, call, unit_cost } = AL;
+  const say_game = AL.logger("Ranger");
+  function console_line(msg) {
+    let t = "";
+    try {
+      t = new Date().toLocaleTimeString();
+    } catch (e) {}
+    try {
+      console.log("[" + character.name + " " + t + "] " + msg);
+    } catch (e) {}
+  }
+  const ev_keep = AL.runtime.ev_keep; // the lines that matter for "why did that happen" are also kept in the game's storage: game_log(get("events")) shows the last 50
+
+  const say = (msg, color) => {
+    ev_keep(msg);
+    // status and report lines, plus every problem line (red / amber colour), also go to the console where they are easy to copy
+    if (CFG.CONSOLE_ALL || (CFG.CONSOLE_STATUS && (/^(Loop since last status|Goal: |Farm goal|Boss|boss|Monster hunt|DANGER|Dead|Told the|Courier|Delivery received|Stopgap|Bank |ERROR|Cannot|Could not|Hurt and)/.test(String(msg)) || color === "#CF575F" || color === "#E1A951" || color === "#E0A040")))
+      console_line(msg);
+    return say_game(msg, color);
+  };
+  const { describe_dest, log_move, travel } = AL.mover({
+    say,
+    default_ms: 90000,
+  });
+
+  // ============================== STATE ===========================
+  const R = {
+    started_at: Date.now(),
+    hunt_checked: false,
+    mh: null,
+    mh_check_at:
+      +(function () {
+        try {
+          return get("hunt_next_at");
+        } catch (e) {
+          return 0;
+        }
+      })() || 0,
+    last_3shot: 0,
+    last_5shot: 0,
+    ladder: null, // the need ladder in progress (jobs sent to the Merchant, meeting point...)
+    ladder_next: 0, // earliest time the next ladder may start
+    gear_busy: false, // a gear item from the Merchant is being equipped
+    unreach: {}, // monster id -> time until which it is ignored (no path to get in range)
+    xmove_at: 0,
+    tether_next: 0,
+    xmove_last: null,
+    fled_at: 0,
+    lock: null,
+    goal: null, // the farm goal being worked on
+    boss: null, // the boss event being fought {cfg, type, name, started, last_seen, pos, ...}
+    boss_check_at: 0,
+    boss_end: {},
+    follow_goal: null, // follower: monster type the leader is farming
+    leader: null, // follower: last party_state from the leader {map,x,y,goal,at}
+    follow_at: 0,
+    follow_fails: 0,
+    follow_block_until: 0,
+    party_invite_at: 0,
+    party_join_at: 0,
+    party_wait: {}, // member name (or "leader") -> since when he has been out of the party (the fallback invites / requests wait a minute while the Merchant is online)
+    levels: {}, // leader: follower name -> {level, at, hp, mp, free, junk, gold, map, busy} from their party_level messages
+    trip: null, // leader: the courier trip in progress {id, courier, at}
+    gear_ready_at: 0, // leader: when the Merchant last said gear is waiting for the party
+    courier_next: 0,
+    courier_warn_at: 0,
+    courier: null, // courier: the trip he is running {id, members, phase, buy, goal, got, shares}
+    courier_gear: [], // courier: gear the Merchant gave him for the other Rangers [{to,name,level,slot}]
+    bees_only: null, // leader: last announced bees-only state
+    force: null, // leader: forced farm {type, started, saved: {FARM_SPOT, TARGET_TYPES}} (set("force_farm", ...))
+    force_check_at: 0,
+    force_rip: {}, // member name -> was dead at the last look (a death edge drops the forced farm)
+    luck_need: null, // leader: {why, at} a Merchant's Luck stop is wanted (forced farm / boss start)
+    luck_last: 0,
+    luck_retry_at: 0,
+    luck_busy: false,
+    luck_done: null, // the Merchant's last mluck_done {id, cast, failed}
+    luck_boss_key: null,
+    level_sent_at: 0,
+    state_sent_at: 0,
+    goal_check_at: 0,
+    goal_cool: {}, // type -> time before which the goal is not tried again
+    goal_end: {}, // type -> when its last session ended (rotation)
+    goal_start: {}, // type -> when its last session started (every_min)
+    goal_bad: {}, // type -> spawn boxes that could not be reached
+    goal_logged: {},
+    goal_stats: {}, // v5: type -> lifetime results of farm goals this session
+    goal_gate_since: 0,
+    post_boss: null, // v5: set when a boss event ends; the next courier check starts a hand-over trip
+    boss_skip: {}, // v5: type -> time before which a capped boss is not joined again
+    hp_hist: [],
+    danger_at: 0,
+    last_attackers: "",
+  };
+
+  // ===================== GEAR (worn items shared with the Merchant) ============
+  const GEAR_SLOTS = [
+    "helmet",
+    "chest",
+    "pants",
+    "gloves",
+    "shoes",
+    "cape",
+    "ring1",
+    "ring2",
+    "earring1",
+    "earring2",
+    "amulet",
+    "belt",
+    "orb",
+    "mainhand",
+    "offhand",
+  ];
+  function send_gear_report() {
+    if (!CFG.GEAR_SHARE) return;
+    const slots = {};
+    for (const s of GEAR_SLOTS) {
+      const it = character.slots && character.slots[s];
+      if (it && it.name) {
+        slots[s] = { name: it.name, level: it.level || 0 };
+        if (it.stat_type) slots[s].stat_type = String(it.stat_type); // stat scroll applied (the Merchant scores it)
+      }
+    }
+    call(() =>
+      send_cm(CFG.MERCHANT_NAME, {
+        type: "gear_report",
+        cls: character.ctype,
+        stat: { level: character.level, xp: Math.floor(character.xp || 0), max_xp: Math.floor(character.max_xp || 0), free: free_slots(), deaths: R.deaths || 0, drops: drops_out(), gold: Math.floor(character.gold || 0), farm: is_leader() ? String(CFG.FARM_MONSTER || "") : "" },
+        slots,
+        map: character.map,
+        x: Math.round(character.x),
+        y: Math.round(character.y),
+      })
+    );
+  }
+  const find_gear = (name, level) => {
+    for (let i = 0; i < character.isize; i++) {
+      const it = character.items[i];
+      if (it && it.name === name && (it.level || 0) === level) return i;
+    }
+    return -1;
+  };
+  // The Merchant hands over an item and says where it goes: wait for it, equip it
+  async function gear_receive(d) {
+    R.gear_recv_at = now();
+    R.gear_busy = true;
+    try {
+      await gear_receive_inner(d);
+    } finally {
+      R.gear_busy = false;
+    }
+  }
+  async function gear_receive_inner(d) {
+    const slot = String(d.slot || "");
+    const name = String(d.name || "");
+    const level = Number(d.level) || 0;
+    if (GEAR_SLOTS.indexOf(slot) === -1 || !name) return;
+    const got = await call(() =>
+      wait_for(() => find_gear(name, level) >= 0, 15000)
+    );
+    if (got.failed)
+      return say(
+        "Gear from the Merchant never arrived: " + name + " +" + level,
+        "#CF575F"
+      );
+    const old = character.slots && character.slots[slot];
+    const res = await call(() => equip(find_gear(name, level), slot));
+    if (res.failed)
+      return say(
+        "Could not equip " + name + " +" + level + ": " + res.reason,
+        "#CF575F"
+      );
+    say(
+      "Equipped " +
+        name +
+        " +" +
+        level +
+        " in " +
+        slot +
+        (old && old.name
+          ? " (was " + old.name + " +" + (old.level || 0) + ", now in the bag)"
+          : ""),
+      "#5BCB5B"
+    );
+    await wait(1500);
+    send_gear_report();
+    // hand-me-down: tell the Merchant what we just replaced; he says whether a follower Ranger would gain from it (gear_pass)
+    if (old && old.name && is_leader() && CFG.PARTY_MEMBERS.length)
+      call(() =>
+        send_cm(CFG.MERCHANT_NAME, {
+          type: "gear_replaced",
+          name: old.name,
+          level: old.level || 0,
+          stat_type: old.stat_type ? String(old.stat_type) : undefined,
+        })
+      );
+  }
+  // The Merchant says a follower would gain from what we replaced: hand it over when he stands next to us, then tell him to equip it
+  async function gear_pass(d) {
+    const to = String(d.to || "");
+    const name = String(d.name || "");
+    const level = Number(d.level) || 0;
+    const slot = String(d.slot || "");
+    if (
+      !is_leader() ||
+      CFG.PARTY_MEMBERS.indexOf(to) === -1 ||
+      GEAR_SLOTS.indexOf(slot) === -1 ||
+      !name
+    )
+      return;
+    R.gear_busy = true;
+    try {
+      const have = await call(() =>
+        wait_for(() => find_gear(name, level) >= 0, 5000)
+      );
+      if (have.failed)
+        return say(
+          "Hand-me-down " + name + " +" + level + " is not in my bag",
+          "#CF575F"
+        );
+      const close = () => {
+        let p = null;
+        try {
+          p = get_player(to);
+        } catch (e) {}
+        return (
+          !!p &&
+          p.map === character.map &&
+          d2(character, p) < CFG.PAY_RANGE + 50
+        );
+      };
+      const there = await call(() => wait_for(close, 60000));
+      if (there.failed)
+        return say(
+          to + " never came close - keeping " + name + " +" + level,
+          "#CF575F"
+        );
+      const idx = find_gear(name, level);
+      if (idx < 0) return;
+      await call(() => send_cm(to, { type: "gear_give", name, level, slot })); // tell him first so he is already waiting
+      const res = await call_paced("transfer", () => send_item(to, idx, 1));
+      if (res.failed)
+        return say(
+          "Could not hand " +
+            name +
+            " +" +
+            level +
+            " to " +
+            to +
+            ": " +
+            res.reason,
+          "#CF575F"
+        );
+      say(
+        "Gave " + name + " +" + level + " to " + to + " for his " + slot,
+        "#5BCB5B"
+      );
+    } finally {
+      R.gear_busy = false;
+    }
+  }
+  if (CFG.GEAR_SHARE) {
+    setTimeout(() => alive() && send_gear_report(), 20000);
+    const gear_timer = setInterval(
+      () => (alive() ? send_gear_report() : clearInterval(gear_timer)),
+      CFG.GEAR_REPORT_MS
+    );
+  }
+
+  // ===================== MESSAGES FROM THE MERCHANT ===============
+  // v4 job protocol (AL.proto): job_status {id,state,eta,doing} (the first one is the ack), job_ready, job_done, job_failed,
+  // cancel_ack, hello, gear_give. Messages for jobs we do not hold are ignored.
+  const ladder_job = (id) =>
+    R.ladder ? R.ladder.jobs.find((j) => j.id === id) : null;
+  function send_hello() {
+    const ids = R.ladder
+      ? R.ladder.jobs.filter((j) => !j.terminal).map((j) => j.id)
+      : [];
+    AL.send(CFG.MERCHANT_NAME, { type: "hello", jobs: ids, want_reply: true });
+  }
+  // Sean 2026-11-19: the Grinch can be invisible for a moment after a teleport and still hit somebody. When a party member (a player, not an NPC) loses HP to a normal hit
+  // (not a condition like burn / poison) and no visible monster is targeting him, a few steps sideways make the game refresh the view and the Grinch shows up again.
+  function unseen_hit(d) {
+    try {
+      if (!d || !CFG.GRINCH_REFRESH || !alive() || !(R.boss || grinch_fight())) return;
+      if (!(Number(d.damage) > 0)) return;
+      const src = d.source;
+      if (src && src !== "attack" && src !== "monster") return; // a condition (burn, poison, ...), not a monster's hit
+      const ents = parent.entities || {};
+      const tid = d.id || (d.target && d.target.id) || d.tid;
+      const tg = d.target && typeof d.target === "object" ? d.target : tid === character.id || tid === character.name ? character : ents[tid];
+      if (!tg || tg.type !== "character" || tg.npc) return;
+      if (tg.name !== character.name && party_names().indexOf(tg.name) === -1) return;
+      const seen = (e) => e && e.type === "monster" && !e.dead && !e.rip && e.visible !== false;
+      const hid = d.hid || (d.actor && d.actor.id);
+      if (hid && seen(ents[hid])) return; // the attacker is in view
+      if (Object.values(ents).some((e) => seen(e) && (e.target === tg.name || e.target === tg.id))) return; // somebody visible is on him
+      if (now() - (R.refresh_at || 0) < CFG.GRINCH_REFRESH_MS) return;
+      R.refresh_at = now();
+      R.refresh_n = (R.refresh_n || 0) + 1;
+      const dx = R.refresh_n % 2 ? 40 : -40;
+      say("Hit on " + tg.name + " but no monster in view (the Grinch is probably invisible after a teleport) - stepping aside to refresh the view", "#E0A040");
+      call(() => move(character.x + dx, character.y));
+    } catch (e) {}
+  }
+  try { game.on("hit", unseen_hit); } catch (e) {}
+  const LEAD_ENV = AL.config.lead_env(character.name, "ranger");
+  LEAD_ENV.merchant.is_online = () => !!(get_active_characters() || {})[CFG.MERCHANT_NAME] || is_online(CFG.MERCHANT_NAME);
+  const LEAD = AL.lead.create(Object.assign(LEAD_ENV, { CFG, say, alive,
+    busy: () => (R.boss ? "boss event" : grinch_fight() ? "Grinch fight" : R.force ? (R.force.trial ? "Try monster" : "forced farm") + " of " + R.force.type : R.goal ? "farm goal " + R.goal.type : R.ladder || R.courier || R.trip || R.retreat_go ? "a trip / job is running" : AL.lead.fight_near(party_names(), 500)),
+    hooks: { start_merchant: (n, slot) => call_paced("start", () => start_character(n, slot)), announce: () => { if (CFG.PARTY_MEMBERS.length) send_party_state(); }, reload: () => AL.reengage({ say, slot: CFG.SELF_CODE_SLOT, restart: AutoRangerV5 }) } })); // stage 4
+  setInterval(() => { try { LEAD.tick(); } catch (e) {} }, 5000);
+  character.on("cm", function (m) {
+    if (!alive()) return;
+    try {
+      if (LEAD.handle(m)) return;
+      const d = AL.parse_job(
+        m,
+        (n) =>
+          n === CFG.MERCHANT_NAME ||
+          (CFG.FOCUS_TARGET && n === CFG.TANK_NAME) ||
+          (is_follower() && n === CFG.PARTY_LEADER) ||
+          (is_leader() &&
+            n !== character.name &&
+            (CFG.PARTY_MEMBERS.indexOf(n) !== -1 || CFG.PARTY_SUPPORT.indexOf(n) !== -1)) ||
+          (courier_on() &&
+            n !== character.name &&
+            party_names().indexOf(n) !== -1)
+      );
+      if (!d) return;
+      if (d.type === "bag_room_ok" && CFG.BAG_SHARE && m.name === CFG.BAG_SHARE_TO) {
+        share_give(m.name, Number(d.max) || 0);
+        return;
+      }
+      if (d.type === "boar_alert" || d.type === "boar_flee") {
+        if ((d.type === "boar_alert" && is_leader()) || (d.type === "boar_flee" && m.name === CFG.PARTY_LEADER)) R.boar_cm = now();
+        return;
+      }
+      if (d.type === "focus") {
+        if (m.name === CFG.TANK_NAME && CFG.FOCUS_TARGET)
+          R.focus = { id: typeof d.tid === "string" || typeof d.tid === "number" ? String(d.tid) : null, at: now() };
+        return;
+      }
+      if (d.type === "gear_ready") {
+        if (is_leader() && m.name === CFG.MERCHANT_NAME && courier_on())
+          R.gear_ready_at = now();
+        return;
+      }
+      if (
+        d.type === "courier_go" ||
+        d.type === "courier_collect" ||
+        d.type === "courier_collected" ||
+        d.type === "courier_done"
+      ) {
+        courier_message(m.name, d);
+        return;
+      }
+      if (d.type === "party_level") {
+        if (is_leader() && (CFG.PARTY_MEMBERS.indexOf(m.name) !== -1 || CFG.PARTY_SUPPORT.indexOf(m.name) !== -1)) {
+          const n = (v) => Math.max(0, Math.min(1e9, Number(v) || 0));
+          R.levels[m.name] = {
+            level: n(d.level),
+            at: now(),
+            hp: n(d.hp),
+            mp: n(d.mp),
+            free: n(d.free),
+            junk: n(d.junk),
+            gear: n(d.gear),
+            gold: n(d.gold),
+            map: typeof d.map === "string" ? d.map.slice(0, 40) : "",
+            x: Number.isFinite(+d.x) ? +d.x : undefined,
+            y: Number.isFinite(+d.y) ? +d.y : undefined,
+            busy: !!d.busy,
+            basher: d.basher === true,
+          };
+        }
+        return;
+      }
+      if (d.type === "died") {
+        if (is_leader() && (CFG.PARTY_MEMBERS.indexOf(m.name) !== -1 || CFG.PARTY_SUPPORT.indexOf(m.name) !== -1)) { force_death(m.name); death_note(m.name); }
+        return;
+      }
+      if (d.type === "retreat" && is_follower() && m.name === CFG.PARTY_LEADER) {
+        const ms = Math.max(0, Math.min(900000, Number(d.ms) || 0));
+        if (!ms) { if (R.retreat) R.retreat.until = now(); return; } // the leader ends the retreat
+        R.retreat = { until: now() + ms, why: "the leader retreats", farm: "", spot: !!d.spot };
+        R.retreat_go = true;
+        return;
+      }
+      if (d.type === "need_basher" && is_leader() && CFG.PARTY_SUPPORT.indexOf(m.name) !== -1) { kit_note(m.name); return; }
+      if (d.type === "mluck_done" && m.name === CFG.MERCHANT_NAME) {
+        const l = (v) => (Array.isArray(v) ? v.slice(0, 12).map((x) => String(x).slice(0, 30)) : []);
+        R.luck_done = { id: String(d.id || "").slice(0, 30), cast: l(d.cast), failed: l(d.failed), off: !!d.off };
+        return;
+      }
+      if (d.type === "party_state") {
+        if (!is_follower() || m.name !== CFG.PARTY_LEADER) return;
+        const str = (v) => (typeof v === "string" && v.length <= 40 ? v : null);
+        R.leader = {
+          map: str(d.map) || "main",
+          x: Number(d.x) || 0,
+          y: Number(d.y) || 0,
+          goal: str(d.goal) && G.monsters[d.goal] ? d.goal : null,
+          bees: !!d.bees,
+          force: str(d.force) && G.monsters[d.force] ? d.force : null,
+          at: now(),
+        };
+        R.follow_goal = R.leader.goal;
+        return;
+      }
+      if (m.name === CFG.PARTY_LEADER && d.type !== "gear_give") return; // the leader only sends party_state and hand-me-downs
+      if (d.type === "gear_give") {
+        // the Merchant gives the courier gear for the others too: it is carried until he meets them
+        if (m.name === CFG.MERCHANT_NAME && d.to && d.to !== character.name) {
+          if (party_names().indexOf(d.to) !== -1 && R.courier_gear.length < 12)
+            R.courier_gear.push({
+              to: d.to,
+              name: String(d.name || ""),
+              level: Number(d.level) || 0,
+              slot: String(d.slot || ""),
+            });
+          return;
+        }
+        gear_receive(d);
+        return;
+      }
+      if (m.name !== CFG.MERCHANT_NAME) return; // everything below is Merchant traffic
+      if (d.type === "gear_pass") {
+        if (m.name === CFG.MERCHANT_NAME) gear_pass(d);
+        return;
+      }
+      if (d.type === "hello") {
+        // the Merchant restarted and lost his queue: re-send every job of ours he does not list (resume, no ghosts)
+        const theirs = Array.isArray(d.jobs) ? d.jobs : [];
+        if (R.ladder)
+          for (const j of R.ladder.jobs)
+            if (!j.terminal && theirs.indexOf(j.id) === -1) {
+              say(
+                "Merchant restarted - re-sending my " + j.jtype + " request",
+                "#51D2E1"
+              );
+              j.last_seen = now();
+              AL.send(CFG.MERCHANT_NAME, j.payload);
+            }
+        if (d.want_reply)
+          AL.send(CFG.MERCHANT_NAME, {
+            type: "hello",
+            jobs: R.ladder
+              ? R.ladder.jobs.filter((j) => !j.terminal).map((j) => j.id)
+              : [],
+            want_reply: false,
+          });
+        return;
+      }
+      const j = ladder_job(d.id);
+      if (!j) return;
+      j.last_seen = now();
+      if (d.type === "job_status") {
+        j.status = String(d.state || "");
+        j.eta = Number(d.eta);
+        j.doing = String(d.doing || "").slice(0, 80);
+      } else if (d.type === "job_ready") {
+        j.ready = true;
+        if (Number(d.cap) > 0) j.cap = Number(d.cap);
+      } else if (d.type === "job_done") {
+        j.done = true;
+        j.terminal = true;
+        j.sent_hp = Number(d.hp) || 0;
+        j.sent_mp = Number(d.mp) || 0;
+        j.got = Number(d.got) || 0;
+      } else if (d.type === "job_failed") {
+        j.failed = String(d.reason || "failed");
+        j.terminal = true;
+        say(
+          "Merchant could not do the " + j.jtype + " job: " + j.failed,
+          "#CF575F"
+        );
+      } else if (d.type === "cancel_ack") {
+        j.cancel_acked = true;
+      }
+    } catch (e) {}
+  });
+
+  // ============================ SURVIVAL ==========================
+  async function survive() {
+    if (character.rip) {
+      force_death(character.name);
+      R.deaths = (R.deaths || 0) + 1; // for the Merchant's hourly report
+      if (is_leader()) death_note(character.name);
+      else call(() => send_cm(CFG.PARTY_LEADER, { type: "died" }));
+      say("Dead - respawning" + (R.last_attackers ? " (last attackers: " + R.last_attackers + ")" : ""), "#CF575F");
+      R.last_attackers = "";
+      R.hp_hist = [];
+      await wait(CFG.RESPAWN_DELAY_MS);
+      await call(() => respawn());
+      await wait(1500);
+      if (!have_need()) {
+        log_move(CFG.FARM_SPOT, "heading back after respawn");
+        call(() => smart_move(CFG.FARM_SPOT)); // head back (not awaited); with a need the ladder takes over
+      }
+      return true;
+    }
+    const hp_pct = character.hp / character.max_hp;
+    const mp_pct = character.mp / character.max_mp;
+    if (CFG.DANGER_ENABLED) {
+      // v5: how fast HP is falling (every pass: a hit can take him from full to low between two samples) and who is hitting him
+      const t = now();
+      R.hp_hist.push({ t, p: hp_pct });
+      while (R.hp_hist.length && t - R.hp_hist[0].t > CFG.DANGER_WINDOW_MS) R.hp_hist.shift();
+      if (hp_pct < 0.6) {
+        const hit = threats().filter((e) => e.target === character.name || e.target === character.id);
+        if (hit.length) {
+          const kinds = {};
+          for (const e of hit) kinds[e.mtype] = (kinds[e.mtype] || 0) + 1;
+          R.last_attackers = Object.keys(kinds).map((k) => kinds[k] + "x " + k).join(", "); // kept for the death report
+        }
+        const top = Math.max.apply(null, R.hp_hist.map((h) => h.p));
+        if (hp_pct <= CFG.DANGER_HP_PCT && top - hp_pct >= CFG.DANGER_DROP_PCT && hit.length >= CFG.DANGER_MIN_ATTACKERS && t - R.danger_at > 30000) {
+          R.danger_at = t;
+          say("DANGER: HP " + Math.round(hp_pct * 100) + "% after losing " + Math.round((top - hp_pct) * 100) + "% in " + Math.round(CFG.DANGER_WINDOW_MS / 1000) + "s, " + R.last_attackers + " on me" + (CFG.DANGER_TOWN ? " - casting town" : ""), "#CF575F");
+          if (CFG.DANGER_TOWN) call(() => town());
+        }
+      }
+    }
+    if (!is_on_cooldown("use_hp")) {
+      // drink the configured potion by name; use_skill("use_hp") would pick one for us
+      if (hp_pct <= CFG.HP_USE_PCT && quantity(CFG.HP_POTION) > 0)
+        call(() => equip(locate_item(CFG.HP_POTION)));
+      else if (mp_pct <= CFG.MP_USE_PCT && quantity(CFG.MP_POTION) > 0)
+        call(() => equip(locate_item(CFG.MP_POTION)));
+    }
+    if (
+      hp_pct <= CFG.FLEE_HP_PCT &&
+      quantity(CFG.HP_POTION) === 0 &&
+      now() - R.fled_at > 20000
+    ) {
+      R.fled_at = now();
+      R.ladder_next = 0; // out of potions is a need: the ladder starts as soon as he is in town
+      say("Hurt and out of HP potions - retreating to town", "#CF575F");
+      await call(() => town());
+    }
+    return false;
+  }
+
+  // ============================ INVENTORY =========================
+  function free_slots() {
+    let n = 0;
+    for (let i = 0; i < character.isize; i++) if (!character.items[i]) n++;
+    return n;
+  }
+
+  function junk_slots() {
+    const out = [];
+    for (let i = 0; i < character.isize; i++) {
+      const it = character.items[i];
+      if (!it || CFG.JUNK_ITEMS.indexOf(it.name) === -1) continue;
+      if (it.l || ((it.level || 0) > CFG.JUNK_MAX_LEVEL && CFG.JUNK_ANY_LEVEL.indexOf(it.name) === -1)) continue; // locked or upgraded: keep
+      out.push(i);
+    }
+    return out;
+  }
+
+  // Compound material: any item (any level, not locked) whose key is in KEEP_FOR_COMPOUND
+  function keep_slots() {
+    const out = [];
+    for (let i = 0; i < character.isize; i++) {
+      const it = character.items[i];
+      if (!it || CFG.KEEP_FOR_COMPOUND.indexOf(it.name) === -1 || it.l)
+        continue;
+      out.push(i);
+    }
+    return out;
+  }
+  // Stackable loot: anything the game marks as stackable, except potions/scrolls and the STACK_KEEP list
+  function stack_slots() {
+    const out = [];
+    if (!CFG.STACK_TO_MERCHANT) return out;
+    for (let i = 0; i < character.isize; i++) {
+      const it = character.items[i];
+      if (!it || it.l || !G.items[it.name] || !G.items[it.name].s) continue;
+      if (CFG.STACK_KEEP.indexOf(it.name) !== -1) continue;
+      if (CFG.STACK_KEEP_PREFIXES.some((p) => it.name.indexOf(p) === 0))
+        continue;
+      out.push(i);
+    }
+    return out;
+  }
+  // v5: spare gear (see GEAR_HANDOFF)
+  function gear_slots() {
+    const out = [];
+    if (!CFG.GEAR_HANDOFF || now() - (R.gear_recv_at || 0) < CFG.GEAR_HANDOFF_GRACE_MS) return out;
+    const carried = (R.courier_gear || []).slice(); // gear the courier carries for the others
+    for (let i = 0; i < character.isize; i++) {
+      const it = character.items[i];
+      const def = it && G.items[it.name];
+      if (!it || it.l || !def || def.s) continue; // stackables have their own rules (stack_slots / STACK_KEEP)
+      if (!CFG.HANDOFF_ALL_ITEMS && !def.upgrade && !def.compound) continue;
+      if (CFG.BAG_KEEP.indexOf(it.name) !== -1 || CFG.BAG_KEEP_PREFIXES.some((p) => it.name.indexOf(p) === 0)) continue;
+      if (CFG.GEAR_KEEP.indexOf(it.name) !== -1 || CFG.JUNK_ITEMS.indexOf(it.name) !== -1 || CFG.KEEP_FOR_COMPOUND.indexOf(it.name) !== -1) continue;
+      const k = carried.findIndex((c) => c.name === it.name && (Number(c.level) || 0) === (it.level || 0));
+      if (k !== -1) {
+        carried.splice(k, 1);
+        continue;
+      }
+      out.push(i);
+    }
+    return out;
+  }
+  const handoff_slots = () => junk_slots().concat(keep_slots(), stack_slots(), gear_slots());
+
+  // Sells (or destroys) every junk slot. A slot only counts as done if it is actually empty afterwards.
+  async function dump_junk(action) {
+    let done = 0;
+    for (const i of junk_slots()) {
+      const it = character.items[i];
+      if (!it) continue;
+      const name = it.name;
+      const gold_before = character.gold;
+      const res = await call(() =>
+        action === "sell" ? sell(i, it.q || 1) : destroy(i)
+      );
+      const gone = await call(() =>
+        wait_for(
+          () => !character.items[i] || character.items[i].name !== name,
+          2500
+        )
+      );
+      if (res.failed || gone.failed) {
+        say(
+          "Could not " +
+            action +
+            " " +
+            name +
+            ": " +
+            (res.reason || gone.reason || "slot unchanged"),
+          "#CF575F"
+        );
+        return { done, ok: false };
+      }
+      done++;
+      if (action === "sell")
+        say(
+          "Sold " +
+            name +
+            " (+" +
+            Math.max(0, character.gold - gold_before) +
+            "g)"
+        );
+      await wait(150);
+    }
+    return { done, ok: true };
+  }
+
+  // ============================ NEED LADDER =======================
+  // A "need" = low potions or a full bag. Ladder (see agent/merchant-ranger-coordination-spec.md):
+  //   1 pause the hunt (the hunt record stays; it resumes afterwards) and retreat to the NEAREST TOWN on this map
+  //   2 send the job request(s) - the 60s clock starts when the request is SENT
+  //   3 wait up to 60s: reply with ETA <= 60s -> wait through the whole delivery; ETA > 60s or no reply -> step 4
+  //   4 fallback 1: send travel_to_main, go to the main map, ask again there (same 60s rule)
+  //   5 fallback 2: sell junk at Gabriel (BEFORE banking) -> withdraw only the restock gold, buy potions at Ernis -> bank keepers/stackables
+  //   6 fallback 3: bank full -> stand at the main-town safe spot, re-ask every ~30s until the Merchant is available
+  //   7 need met -> resume the hunt
+  const P = AL.proto;
+  const M = CFG.MERCHANT_NAME;
+
+  const courier_on = () => CFG.COURIER_ENABLED && CFG.PARTY_MEMBERS.length > 0;
+  const in_trip = () => !!R.courier && R.courier.phase === "trip";
+  const potion_target = () => (R.boss ? Math.max(CFG.BOSS_POTION_TARGET, CFG.POTION_TARGET) : CFG.POTION_TARGET);
+  const potion_goal = (name) =>
+    in_trip()
+      ? name === CFG.HP_POTION
+        ? R.courier.goal.hp
+        : R.courier.goal.mp
+      : potion_target();
+  function potion_need() {
+    const hp = quantity(CFG.HP_POTION);
+    const mp = quantity(CFG.MP_POTION);
+    if (in_trip())
+      return hp < R.courier.goal.hp || mp < R.courier.goal.mp
+        ? { hp, mp }
+        : null;
+    const at = courier_on() ? CFG.EMERGENCY_POTIONS : CFG.POTION_REQUEST_AT;
+    return hp <= at || mp <= at ? { hp, mp } : null;
+  }
+  // number of items waiting to be handed over / sold / banked, when the bag is nearly full (else 0)
+  function bag_need() {
+    if (in_trip()) return handoff_slots().length; // the courier takes everything he carries to the Merchant
+    // party mode: the courier handles bags; a Ranger only runs his own ladder when he is almost out of room
+    if (
+      !CFG.CLEAN_ENABLED ||
+      free_slots() > (courier_on() ? 1 : CFG.CLEAN_WHEN_FREE_SLOTS)
+    )
+      return 0;
+    const waiting = handoff_slots().length;
+    return waiting >= CFG.SELL_MIN_JUNK ? waiting : 0;
+  }
+  const have_need = () => !!potion_need() || bag_need() > 0;
+
+  // keeps him alive and tidy while the ladder waits; true = he died (the ladder is abandoned, the need stays)
+  async function ladder_tick() {
+    if (await survive()) return true;
+    call(() => loot());
+    return false;
+  }
+
+  // The town skill: teleports to the map's spawn (its "nearest town"). No path search, so it also works from a bad spot.
+  // monsters that could hit him during the town cast: targeting him, or within their range + a margin
+  function threats() {
+    const out = [];
+    for (const id in parent.entities) {
+      const e = parent.entities[id];
+      if (!e || e.type !== "monster" || !e.visible || e.dead) continue;
+      const def = (G.monsters && G.monsters[e.mtype]) || {};
+      const reach =
+        (Number(e.range) || Number(def.range) || 40) + CFG.DISENGAGE_MARGIN_PX;
+      if (
+        e.target === character.name ||
+        e.target === character.id ||
+        d2(character, e) < reach
+      )
+        out.push(e);
+    }
+    return out;
+  }
+  // run away from whatever is attacking him; town() is a cast and a hit (or moving) cancels it
+  async function disengage() {
+    const t0 = now();
+    let steps = 0;
+    while (now() - t0 < CFG.DISENGAGE_MAX_MS) {
+      const th = threats();
+      if (!th.length) break;
+      let cx = 0,
+        cy = 0;
+      for (const e of th) {
+        cx += e.x;
+        cy += e.y;
+      }
+      cx /= th.length;
+      cy /= th.length;
+      const base = Math.atan2(character.y - cy, character.x - cx);
+      let went = false;
+      for (const off of [0, 0.6, -0.6, 1.2, -1.2, 1.9, -1.9]) {
+        const a = base + off;
+        const tx = character.x + Math.cos(a) * CFG.DISENGAGE_STEP_PX;
+        const ty = character.y + Math.sin(a) * CFG.DISENGAGE_STEP_PX;
+        if (typeof can_move_to === "function" && !can_move_to(tx, ty)) continue;
+        const r = await call(() => xmove(tx, ty));
+        if (!r.failed) {
+          went = true;
+          steps++;
+          break;
+        }
+      }
+      if (!went) break;
+      await ladder_tick();
+    }
+    try {
+      stop();
+    } catch (e) {}
+    const left = threats().length;
+    if (steps)
+      say(
+        "Moved away from " +
+          (left ? "the monsters (still " + left + " close)" : "the monsters") +
+          " before using town",
+        "#E1A951"
+      );
+    return !left;
+  }
+  async function use_town() {
+    const from = { map: character.map, x: character.x, y: character.y };
+    for (let i = 0; i < 3; i++) {
+      await disengage();
+      say(
+        "Retreating to the nearest town (town skill, try " + (i + 1) + "/3)",
+        "#E1A951"
+      );
+      const res = await call(() => town());
+      if (res.failed) say("town() was refused: " + res.reason, "#CF575F");
+      const moved = await call(() =>
+        wait_for(
+          () => character.map !== from.map || d2(character, from) > 150,
+          12000
+        )
+      );
+      if (!moved.failed) {
+        await wait(800);
+        return true;
+      }
+      say(
+        "town() did not move me within 12s (hit while casting? on cooldown?)",
+        "#CF575F"
+      );
+      if (await ladder_tick()) return false;
+    }
+    return false;
+  }
+  const here = () => ({
+    map: character.map,
+    x: Math.round(character.x),
+    y: Math.round(character.y),
+  });
+
+  // step 1: nearest town on the current map. On main that is the safe spot next to the Merchant's stand.
+  // Returns false when he could not get away (then the ladder is abandoned and he goes back to hunting).
+  async function retreat_to_town(L) {
+    if (character.map === CFG.SAFE_SPOT.map) {
+      if (d2(character, CFG.SAFE_SPOT) > CFG.RETREAT_NEAR_PX) {
+        if (!(await use_town())) return false; // away from the fight first
+      }
+      if (d2(character, CFG.SAFE_SPOT) > 60) {
+        const r = await travel(
+          CFG.SAFE_SPOT,
+          90000,
+          "waiting for the Merchant at the safe spot"
+        );
+        if (r.failed)
+          say("Could not walk to the safe spot: " + r.reason, "#CF575F");
+        if (d2(character, CFG.SAFE_SPOT) > CFG.RETREAT_NEAR_PX * 2)
+          return false; // still out in the field
+      }
+    } else if (!(await use_town())) return false; // another map: its spawn is its town
+    L.meet = here();
+    return true;
+  }
+
+  function make_job(jtype, extra, meet) {
+    const j = {
+      id: AL.job_id(jtype[0]),
+      jtype,
+      created_at: now(),
+      sent_at: 0,
+      reached: true,
+      status: null,
+      eta: null,
+      last_seen: now(),
+      ready: false,
+      cap: 0,
+      handed: false,
+      settled: false,
+      done: false,
+      failed: "",
+      cancel_acked: false,
+      terminal: false,
+      committed: false,
+      payload: null,
+    };
+    j.payload = Object.assign(
+      {
+        type: "job_request",
+        id: j.id,
+        jtype,
+        map: meet.map,
+        x: meet.x,
+        y: meet.y,
+      },
+      extra
+    );
+    return j;
+  }
+  async function send_job(j) {
+    j.sent_at = now(); // the 60s clock starts when the request is SENT
+    j.last_seen = now();
+    const r = await AL.send(M, j.payload);
+    j.reached = r.delivered;
+    return r;
+  }
+  function build_jobs(L) {
+    const jobs = [];
+    const pn = potion_need();
+    if (pn) {
+      const trip = in_trip();
+      jobs.push(
+        make_job(
+          "restock",
+          Object.assign(
+            trip
+              ? {
+                  hp: R.courier.buy.hp,
+                  mp: R.courier.buy.mp,
+                  courier: Object.keys(R.courier.members).filter(
+                    (n) => n !== character.name
+                  ),
+                }
+              : {
+                  hp: Math.max(0, potion_target() - pn.hp),
+                  mp: Math.max(0, potion_target() - pn.mp),
+                }
+          ),
+          L.meet
+        )
+      );
+    }
+    const bn = bag_need();
+    if (bn) {
+      const names = [
+        ...new Set(handoff_slots().map((i) => character.items[i].name)),
+      ];
+      jobs.push(
+        make_job(
+          junk_slots().length ? "junk" : "stack",
+          { count: bn, names },
+          L.meet
+        )
+      );
+    }
+    return jobs;
+  }
+
+  // Cancel what is still open and wait briefly for the cancel_ack (the Merchant turns back if he is already walking over).
+  async function cancel_jobs(L) {
+    if (!L || !alive()) return;
+    const open = L.jobs.filter((j) => !j.terminal);
+    if (!open.length) return;
+    let reached = false;
+    for (const j of open) {
+      const r = await AL.send(M, { type: "job_cancel", id: j.id });
+      reached = reached || r.delivered;
+    }
+    const t0 = now();
+    let resent = false;
+    while (
+      reached &&
+      now() - t0 < 4000 &&
+      open.some((j) => !j.cancel_acked && !j.done && !j.failed)
+    ) {
+      await wait(250);
+      if (!resent && now() - t0 > 2000) {
+        resent = true;
+        for (const j of open)
+          if (!j.cancel_acked) AL.send(M, { type: "job_cancel", id: j.id });
+      }
+    }
+    for (const j of open) if (!j.done) j.terminal = true;
+  }
+
+  // Boss event start: empty the bag of everything the Merchant takes (junk, keepers, stackables) while he stands close by
+  async function boss_dump_step() {
+    if (!CFG.BOSS_DUMP_ENABLED) return;
+    const ev = R.boss
+      ? R.boss
+      : is_follower() && R.leader && CFG.BOSS_EVENTS.some((b) => b.type === R.leader.goal)
+      ? R.leader
+      : null;
+    if (!ev) {
+      R.dump_key = null;
+      R.dump_first = 0;
+      return;
+    }
+    const key = R.boss ? "b" + R.boss.started : "f" + R.leader.goal + ":" + (R.dump_first || (R.dump_first = now()));
+    if (R.dump_key !== key) {
+      R.dump_key = key;
+      R.dump_start = now();
+      R.dump_next = 0;
+      R.dump_done = false;
+    }
+    if (now() < R.dump_next) return;
+    // Sean 2026-11-19: the first BOSS_DUMP_WINDOW_MS (3 min) look every BOSS_DUMP_RETRY_MS (20 s); up to 30 min every 5 min; after that every 10 min - until the event is over (new drops are handed over too)
+    const el = now() - R.dump_start;
+    R.dump_next = now() + (el < CFG.BOSS_DUMP_WINDOW_MS ? CFG.BOSS_DUMP_RETRY_MS : el < CFG.BOSS_DUMP_SLOW_AFTER_MS ? CFG.BOSS_DUMP_SLOW_MS : CFG.BOSS_DUMP_SLOWER_MS);
+    const slots = handoff_slots();
+    if (!slots.length) return;
+    const m = get_player(M);
+    if (!m || d2(character, m) > CFG.BOSS_DUMP_RANGE) return;
+    const stack_n = [];
+    for (const i of stack_slots()) { const x = character.items[i]; if (x && stack_n.indexOf(x.name) === -1) stack_n.push(x.name); }
+    if (stack_n.length) await AL.send(M, { type: "boss_handoff", names: stack_n }); // tells him these are stackables to bank, not to sell
+    let n = 0;
+    for (const i of slots) {
+      const it = character.items[i];
+      if (!it) continue;
+      const name = it.name;
+      const res = await call_paced("transfer", () => send_item(M, i, it.q || 1));
+      const gone = await call(() =>
+        wait_for(() => !character.items[i] || character.items[i].name !== name, 3000)
+      );
+      if (res.failed || gone.failed) {
+        say("Boss hand-over: send_item failed for " + name + ": " + (res.reason || gone.reason || "slot unchanged"), "#CF575F");
+        break;
+      }
+      n++;
+      await wait(150);
+    }
+    if (n) {
+      say("Boss hand-over: gave " + n + " item(s) to " + M + " so he can sell them; " + free_slots() + " slots free for the drops", "#E0A040");
+    }
+  }
+
+  // The Merchant says he is next to us: hand over junk / keepers / stackables (the cap is what his bag can take)
+  async function do_handoff(j) {
+    j.handed = true;
+    const t0 = now();
+    for (;;) {
+      const m = get_player(M);
+      if (m && d2(character, m) <= CFG.JUNK_SEND_RANGE) break;
+      if (now() - t0 > 10000) {
+        say(
+          "Merchant said he is here but I do not see him close by - not handing anything over",
+          "#CF575F"
+        );
+        await AL.send(M, { type: "job_sent", id: j.id, count: 0 });
+        return;
+      }
+      await wait(250);
+    }
+    let n = 0;
+    for (const i of handoff_slots()) {
+      if (j.cap && n >= j.cap) break;
+      const it = character.items[i];
+      if (!it) continue;
+      const name = it.name;
+      const res = await call_paced("transfer", () => send_item(M, i, it.q || 1));
+      const gone = await call(() =>
+        wait_for(
+          () => !character.items[i] || character.items[i].name !== name,
+          3000
+        )
+      );
+      if (res.failed || gone.failed) {
+        say(
+          "send_item failed for " +
+            name +
+            ": " +
+            (res.reason || gone.reason || "slot unchanged"),
+          "#CF575F"
+        );
+        break;
+      }
+      n++;
+      await wait(150);
+    }
+    await AL.send(M, { type: "job_sent", id: j.id, count: n });
+    say(
+      "Handed " + n + " item(s) to " + M + "; " + free_slots() + " slots free"
+    );
+  }
+
+  // Merchant standing next to us after a delivery: pay him / sweep surplus gold
+  async function settle_restock(j) {
+    const m = get_player(M);
+    const sweep = Math.floor(character.gold - CFG.GOLD_KEEP);
+    if (m && sweep >= CFG.SWEEP_MIN && d2(character, m) <= CFG.PAY_RANGE) {
+      const res = await call_paced("transfer", () => send_gold(M, sweep));
+      if (res.failed) say("send_gold failed: " + res.reason, "#CF575F");
+      else
+        say(
+          "Delivery received (" +
+            j.sent_hp +
+            " HP / " +
+            j.sent_mp +
+            " MP). Sent " +
+            sweep +
+            " gold to " +
+            M
+        );
+    } else
+      say("Delivery received (" + j.sent_hp + " HP / " + j.sent_mp + " MP)");
+  }
+
+  async function service_job(j) {
+    if (j.jtype !== "restock" && j.ready && !j.handed && !j.terminal)
+      await do_handoff(j);
+    if (j.done && !j.settled) {
+      j.settled = true;
+      if (j.jtype === "restock") await settle_restock(j);
+      else
+        say(
+          "Merchant took the pickup (" +
+            j.got +
+            " item(s)); " +
+            free_slots() +
+            " slots free"
+        );
+    }
+  }
+
+  // Steps 2-3: ask, then wait. Returns "served" | "eta_too_long" | "no_answer" | "lost_contact" | "failed: <why>" | "died" | "stopped" | "no_need"
+  //   opts.limit_s    how long to wait for a first reply (default: the 60s rule)
+  //   opts.commit_any wait for the Merchant whatever his ETA (fallback 3: nothing else left to try)
+  async function ask_and_wait(L, opts) {
+    opts = opts || {};
+    const limit_ms = (opts.limit_s || P.ETA_LIMIT_S) * 1000;
+    const jobs = build_jobs(L);
+    if (!jobs.length) return "no_need";
+    L.jobs = jobs;
+    const primary = jobs[0];
+    say(
+      "Asking " +
+        M +
+        " for: " +
+        jobs.map((j) => j.jtype).join(" + ") +
+        " (meeting at " +
+        describe_dest(L.meet) +
+        ")"
+    );
+    for (const j of jobs) await send_job(j);
+    for (;;) {
+      if (!alive()) return "stopped";
+      if (await ladder_tick()) {
+        await cancel_jobs(L);
+        return "died";
+      }
+      for (const j of jobs) await service_job(j);
+      if (primary.failed) {
+        await cancel_jobs(L);
+        return "failed: " + primary.failed;
+      }
+      if (jobs.every((j) => j.terminal)) {
+        if (primary.done) {
+          await call(() => wait_for(() => !R.gear_busy, 20000)); // gear that rode along is equipped before he goes back to work
+          return "served";
+        }
+        return "failed: cancelled";
+      }
+      if (!primary.done && !primary.committed) {
+        if (primary.status) {
+          // the reply: ETA <= 60s -> wait through the whole delivery, otherwise move on to the next step
+          if (opts.commit_any || primary.eta <= P.ETA_LIMIT_S) {
+            primary.committed = true;
+            say(
+              M +
+                " answered: ETA " +
+                primary.eta +
+                "s (" +
+                (primary.doing || "?") +
+                ") - waiting for him"
+            );
+          } else {
+            say(
+              M +
+                " is busy: ETA " +
+                primary.eta +
+                "s is over " +
+                P.ETA_LIMIT_S +
+                "s (" +
+                (primary.doing || "?") +
+                ")",
+              "#CF575F"
+            );
+            await cancel_jobs(L);
+            return "eta_too_long";
+          }
+        } else if (!primary.reached || now() - primary.sent_at > limit_ms) {
+          say(
+            primary.reached
+              ? M +
+                  " did not answer within " +
+                  Math.round(limit_ms / 1000) +
+                  "s"
+              : M + " is not reachable",
+            "#CF575F"
+          );
+          await cancel_jobs(L);
+          return "no_answer";
+        }
+      }
+      // liveness, not a stopwatch: the Merchant pings every ~10s while he has a job of ours
+      for (const j of jobs)
+        if (!j.terminal && j.status && now() - j.last_seen > P.LIVENESS_MS) {
+          say(
+            "No ping from " +
+              M +
+              " for " +
+              Math.round(P.LIVENESS_MS / 1000) +
+              "s - he is gone",
+            "#CF575F"
+          );
+          await cancel_jobs(L);
+          return "lost_contact";
+        }
+      await wait(250);
+    }
+  }
+
+  // ---- fallback 2 pieces ----
+  async function buy_potions_at_ernis() {
+    const npc = find_npc("fancypots");
+    if (!npc) return say("Cannot locate the potion NPC", "#CF575F");
+    const r = await travel(
+      { map: npc.map, x: npc.x, y: npc.y },
+      90000,
+      "buying potions at Ernis (fancypots)"
+    );
+    if (r.failed) return say("Could not reach the NPC: " + r.reason, "#CF575F");
+    for (const name of [CFG.HP_POTION, CFG.MP_POTION]) {
+      const have = quantity(name);
+      const want = potion_goal(name) - have; // the normal restock amount (the whole party's on a courier trip), nothing more
+      if (want <= 0) continue;
+      const n = Math.min(want, Math.floor(character.gold / unit_cost(name)));
+      if (n <= 0) {
+        say(
+          "Not enough gold for " + name + " (have " + character.gold + ")",
+          "#CF575F"
+        );
+        continue;
+      }
+      const res = await call(() => buy_with_gold(name, n));
+      const got = await call(() =>
+        wait_for(() => quantity(name) >= have + n, 6000)
+      );
+      if (res.failed || got.failed)
+        say(
+          "Buying " + name + " failed: " + (res.reason || got.reason),
+          "#CF575F"
+        );
+      else say("Bought " + n + "x " + name);
+    }
+  }
+  const restock_gold = () =>
+    [CFG.HP_POTION, CFG.MP_POTION].reduce(
+      (sum, n) =>
+        sum + Math.max(0, potion_goal(n) - quantity(n)) * unit_cost(n),
+      0
+    );
+
+  // One visit to the bank: optionally withdraw gold, optionally store keepers + stackables.
+  // Sets L.bank_full when something could not be stored and the bag is still full.
+  async function bank_visit(L, opts) {
+    const r = await travel("bank", 90000, "bank");
+    if (r.failed || character.map !== "bank") {
+      say("Could not reach the bank: " + (r.reason || "wrong map"), "#CF575F");
+      return false;
+    }
+    const ready = await call(() => wait_for(() => character.bank, 8000));
+    if (ready.failed) {
+      say("Bank data never loaded", "#CF575F");
+      return false;
+    }
+    if (opts.withdraw > 0) {
+      const avail = Number(character.bank && character.bank.gold);
+      const amount = Math.floor(
+        isFinite(avail) ? Math.min(opts.withdraw, avail) : opts.withdraw
+      );
+      if (amount > 0) {
+        const before = character.gold;
+        const wd = await call(() => bank_withdraw(amount));
+        const done = await call(() =>
+          wait_for(() => character.gold >= before + amount - 1, 5000)
+        );
+        if (wd.failed || done.failed)
+          say("Withdrawal failed: " + (wd.reason || done.reason), "#CF575F");
+        else say("Withdrew " + amount + " gold (only what the restock needs)");
+      } else
+        say(
+          "Nothing to withdraw from the bank (balance " + avail + ")",
+          "#CF575F"
+        );
+    }
+    if (opts.store) {
+      let stored = 0;
+      let failed = 0;
+      for (const i of keep_slots().concat(stack_slots())) {
+        const it = character.items[i];
+        if (!it) continue;
+        const name = it.name;
+        const res = await call(() => bank_store(i));
+        const gone = await call(() =>
+          wait_for(
+            () => !character.items[i] || character.items[i].name !== name,
+            3000
+          )
+        );
+        if (res.failed || gone.failed) {
+          failed++;
+          say(
+            "Could not bank " +
+              name +
+              ": " +
+              (res.reason || gone.reason || "slot unchanged"),
+            "#CF575F"
+          );
+          break; // the bank is full: no point trying the rest
+        }
+        stored++;
+      }
+      say("Banked " + stored + " item(s); " + free_slots() + " slots free");
+      if (failed && bag_need() > 0) L.bank_full = true;
+    }
+    return true;
+  }
+
+  // Fallback 2 (no Merchant at all), in this order: a) sell junk at Gabriel  b) withdraw + buy potions  c) bank what is left
+  async function fallback_self_service(L) {
+    say(
+      "No Merchant available - handling it myself (sell, potions, bank)",
+      "#CF575F"
+    );
+    if (character.map !== "main") {
+      const r = await travel(
+        CFG.SAFE_SPOT,
+        150000,
+        "to the main map for self-service"
+      );
+      if (r.failed)
+        return say("Could not get to the main map: " + r.reason, "#CF575F");
+    }
+    // a) sellable junk first - BEFORE anything goes into the bank
+    if (junk_slots().length) {
+      let npc = null;
+      try {
+        npc = find_npc(CFG.SELL_NPC);
+      } catch (e) {}
+      if (!npc) npc = { map: "main", x: -89, y: -165 }; // Gabriel's spot on main, if find_npc fails
+      const r = await travel(
+        { map: npc.map || npc.in, x: npc.x, y: npc.y },
+        90000,
+        "selling junk to Gabriel"
+      );
+      if (!r.failed) {
+        const sold = await dump_junk(
+          CFG.JUNK_ACTION === "destroy" ? "destroy" : "sell"
+        );
+        say(
+          "Sold " + sold.done + " junk item(s); " + free_slots() + " slots free"
+        );
+      } else
+        say("Could not reach " + CFG.SELL_NPC + ": " + r.reason, "#CF575F");
+    }
+    // b) potions: only the gold the normal restock needs, nothing extra
+    let stored_at_bank = false;
+    if (potion_need()) {
+      const short = Math.ceil(restock_gold() - character.gold);
+      if (short > 0) {
+        // while at the bank anyway, store the keepers / stackables too (selling already happened)
+        stored_at_bank = await bank_visit(L, {
+          withdraw: short,
+          store: bag_need() > 0,
+        });
+      }
+      await buy_potions_at_ernis();
+    }
+    // c) keepers / stackables into the bank (unless that visit already did it, or the bag is fine now)
+    if (bag_need() > 0 && !stored_at_bank) await bank_visit(L, { store: true });
+  }
+
+  // Fallback 3: the bank is full too. Full stop at the main-town safe spot, re-ask every ~30s until the Merchant is free.
+  async function fallback_wait_for_merchant(L) {
+    say(
+      "Bank and bag are both full - waiting at the safe spot for the Merchant to make room (asking every ~30s)",
+      "#CF575F"
+    );
+    for (;;) {
+      if (!alive() || !bag_need()) return;
+      if (await ladder_tick()) return;
+      if (
+        character.map !== CFG.SAFE_SPOT.map ||
+        d2(character, CFG.SAFE_SPOT) > 150
+      ) {
+        const tr = await travel(
+          CFG.SAFE_SPOT,
+          150000,
+          "waiting for the Merchant at the safe spot"
+        );
+        if (tr.failed) {
+          // no path: do not hammer the pathfinder, and give up after a few tries (the ladder backs off, he hunts)
+          say("Cannot reach the safe spot (" + tr.reason + ")", "#CF575F");
+          if (++L.walk_fails >= 3) return;
+          await wait(10000);
+          continue;
+        }
+      }
+      L.meet = here();
+      const out = await ask_and_wait(L, { limit_s: 30, commit_any: true });
+      if (
+        out === "served" ||
+        out === "died" ||
+        out === "stopped" ||
+        out === "no_need"
+      )
+        return;
+      await wait(2000);
+    }
+  }
+
+  async function run_ladder() {
+    const L = (R.ladder = {
+      started: now(),
+      jobs: [],
+      meet: null,
+      bank_full: false,
+      walk_fails: 0,
+    });
+    if (is_leader() && CFG.PARTY_MEMBERS.length) send_party_state(); // tell the Warrior and the Priest at once: this is a trip, stay and fight
+    const why = [
+      potion_need() ? "low potions" : "",
+      bag_need() ? "full bag" : "",
+    ]
+      .filter(Boolean)
+      .join(" + ");
+    say(
+      "Need: " + why + " - pausing the hunt and retreating to town",
+      "#E1A951"
+    );
+    let out = "";
+    try {
+      if (!(await retreat_to_town(L))) {
+        // never stand idle in the field: give the ladder up, keep hunting, try again after the backoff
+        out = "retreat_failed";
+        say(
+          "Could not retreat to town - back to hunting, will retry in " +
+            Math.round(CFG.LADDER_BACKOFF_MS / 1000) +
+            "s",
+          "#CF575F"
+        );
+        return;
+      }
+      out = await ask_and_wait(L); // steps 2-3
+      if (
+        out !== "served" &&
+        out !== "died" &&
+        out !== "stopped" &&
+        out !== "no_need"
+      ) {
+        say("Merchant not usable here (" + out + ")", "#CF575F");
+        if (character.map !== "main") {
+          // fallback 1: tell him BEFORE the portal so he stops walking toward our old town
+          await AL.send(M, { type: "travel_to_main" });
+          const r = await travel(
+            CFG.SAFE_SPOT,
+            150000,
+            "portal to the main map"
+          );
+          if (r.failed)
+            say("Could not get to the main map: " + r.reason, "#CF575F");
+          else {
+            L.meet = here();
+            out = await ask_and_wait(L);
+          }
+        }
+        if (
+          out !== "served" &&
+          out !== "died" &&
+          out !== "stopped" &&
+          out !== "no_need"
+        ) {
+          await fallback_self_service(L); // fallback 2
+          if (L.bank_full) await fallback_wait_for_merchant(L); // fallback 3
+        }
+      }
+    } finally {
+      await cancel_jobs(L);
+      R.ladder = null;
+      R.ladder_next =
+        out === "died"
+          ? now() + 5000
+          : have_need()
+          ? now() + CFG.LADDER_BACKOFF_MS
+          : 0;
+      say(
+        have_need()
+          ? "Ladder finished but a need remains (" +
+              (potion_need() ? "potions " : "") +
+              (bag_need() ? "bag" : "") +
+              ") - trying again in " +
+              Math.round((R.ladder_next - now()) / 1000) +
+              "s"
+          : "Need met - resuming the hunt",
+        have_need() ? "#CF575F" : "#5BCB5B"
+      );
+    }
+  }
+
+  // ============================== COMBAT ==========================
+  // The game colours a monster's HP bar with calculate_difficulty():
+  // 0 = easy (green), 1 = medium (orange), 2 = hard (red). We ask the game itself and
+  // fall back to a copy of its formula if that function is not reachable.
+  function difficulty_of(m) {
+    try {
+      if (typeof parent.calculate_difficulty === "function")
+        return parent.calculate_difficulty(m);
+    } catch (e) {}
+    const c = parent.character || character;
+    const mdps = m.attack * m.frequency;
+    const dps = c.attack * c.frequency;
+    let hp = c.hp;
+    let mhp = m.hp;
+    for (let i = 0; i < 30; i++) {
+      hp -= mdps * 2;
+      mhp -= dps * 2;
+      hp += 400;
+      if (hp < 0 || mhp < 0) break;
+    }
+    if (hp < 0) return 2;
+    if (c.hp - hp > c.max_hp * 0.3) return 1;
+    return 0;
+  }
+
+  function is_ignored(e) {
+    if (CFG.IGNORE_TYPES.indexOf(e.mtype) !== -1) return true;
+    const def = G.monsters[e.mtype];
+    return !!def && CFG.IGNORE_NAMES.indexOf(def.name) !== -1;
+  }
+  const is_hunt_monster = (e) => {
+    const h = hunt_state();
+    return (
+      !!h &&
+      !!R.mh &&
+      !!R.mh.verdict &&
+      R.mh.verdict.ok &&
+      R.mh.id === h.id &&
+      e.mtype === h.id
+    );
+  };
+  const is_leader = () =>
+    !CFG.PARTY_MEMBERS.length || character.name === CFG.PARTY_LEADER;
+  const is_follower = () =>
+    CFG.PARTY_MEMBERS.length > 0 &&
+    character.name !== CFG.PARTY_LEADER &&
+    CFG.PARTY_MEMBERS.indexOf(character.name) !== -1;
+  const party_names = () => [CFG.PARTY_LEADER].concat(CFG.PARTY_MEMBERS, CFG.PARTY_SUPPORT);
+  // the leader's last news, only while it is fresh
+  const leader_state = () =>
+    is_follower() &&
+    R.leader &&
+    now() - R.leader.at < (CFG.BOSS_EVENTS.some((b) => b.type === R.leader.goal) ? CFG.BOSS_STALE_MS : CFG.STATE_STALE_MS)
+      ? R.leader
+      : null;
+  // where the leader is right now: his live position when he is on screen, otherwise what he last told us
+  function leader_pos() {
+    const L = leader_state();
+    if (!L) return null;
+    let lp = null;
+    try {
+      lp = get_player(CFG.PARTY_LEADER);
+    } catch (e) {}
+    if (lp && lp.map === character.map && !lp.rip)
+      return {
+        map: lp.map,
+        x: lp.real_x !== undefined ? lp.real_x : lp.x,
+        y: lp.real_y !== undefined ? lp.real_y : lp.y,
+      };
+    return { map: L.map, x: L.x, y: L.y };
+  }
+  // the monster the leader is shooting (followers shoot it too)
+  function leader_target() {
+    if (!leader_state()) return null;
+    let lp = null;
+    try {
+      lp = get_player(CFG.PARTY_LEADER);
+    } catch (e) {}
+    const id = lp && lp.target;
+    const e = id && parent.entities[id];
+    return e &&
+      e.type === "monster" &&
+      e.visible &&
+      !e.dead &&
+      !is_ignored(e) &&
+      !(R.unreach[id] > now())
+      ? e
+      : null;
+  }
+  // v5: FARM_MONSTER -> FARM_SPOT and TARGET_TYPES, worked out once from the game's spawn data
+  // v5: the rotation of the base farm monster (CFG.FARM_ROTATION): advances when a hunt ends
+  function rot_idx() {
+    if (R.rot_idx === undefined) {
+      let v = 0;
+      try { v = parseInt(get("farm_rot_idx"), 10) || 0; } catch (e) {}
+      R.rot_idx = ((v % CFG.FARM_ROTATION.length) + CFG.FARM_ROTATION.length) % CFG.FARM_ROTATION.length;
+    }
+    return R.rot_idx;
+  }
+  const farm_avoided = (t) => !!R.avoid && (R.avoid[t] || 0) > now();
+  // (Sean 2026-11-20) during the boar hold the Warrior and Priest do not go into Winterland: the rotation must not send the leader there either
+  const boar_held_farm = (t) => {
+    if (!CFG.BOAR_FLEE || now() >= (R.boar_until || 0)) return false;
+    const sp = nearest_spawn(t);
+    return !!sp && CFG.BOAR_MAPS.indexOf(sp.map) !== -1;
+  };
+  function rotate_farm(force) {
+    if (!CFG.FARM_ROTATION.length || !is_leader() || (!force && now() - (R.rot_at || 0) < 300000)) return;
+    R.rot_at = now();
+    rot_idx();
+    R.rot_idx = (R.rot_idx + 1) % CFG.FARM_ROTATION.length;
+    for (let k = 0; k < CFG.FARM_ROTATION.length && (farm_avoided(CFG.FARM_ROTATION[R.rot_idx]) || boar_held_farm(CFG.FARM_ROTATION[R.rot_idx])); k++) R.rot_idx = (R.rot_idx + 1) % CFG.FARM_ROTATION.length; // (a monster that just killed somebody is skipped for a while)
+    try { set("farm_rot_idx", R.rot_idx); } catch (e) {}
+    const t = CFG.FARM_ROTATION[R.rot_idx];
+    const sp = nearest_spawn(t);
+    if (!sp) return say("Farm rotation: no regular spawn found for " + t + " - keeping the old farm spot", "#CF575F");
+    const spot = { map: sp.map, x: Math.round(sp.x), y: Math.round(sp.y) };
+    if (R.force) R.force.saved = { FARM_SPOT: spot, TARGET_TYPES: [t] }; // (a forced farm is running: the new base comes back when it ends)
+    else { CFG.FARM_SPOT = spot; CFG.TARGET_TYPES = [t]; }
+    CFG.FARM_MONSTER = t;
+    R.farm_applied = true;
+    R.state_sent_at = 0;
+    say("Farm rotation: after the hunt, farming " + ((G.monsters[t] || {}).name || t) + " at " + spot.map + " " + spot.x + "," + spot.y + " until the next hunt is done", "#51D2E1");
+  }
+  // ===== v5 (Sean 2026-11-20): death on the base farm -> everybody retreats to town together; that monster is skipped for a while =====
+  function death_note(name) {
+    if (!CFG.DEATH_RETREAT || !is_leader()) return;
+    if (R.boss || grinch_fight() || R.force) return; // the Grinch fight may cost lives; a forced farm has its own rule (force_death)
+    if (now() < (R.retreat_next || 0)) return; // one retreat for the whole wipe
+    R.retreat_next = now() + CFG.DEATH_RETREAT_HOLD_MS + 30000;
+    const on_farm = !R.goal && CFG.FARM_MONSTER && character.map === CFG.FARM_SPOT.map && d2(character, CFG.FARM_SPOT) <= 700;
+    const farm = on_farm ? CFG.FARM_MONSTER : "";
+    if (farm) (R.avoid = R.avoid || {})[farm] = now() + CFG.DEATH_AVOID_MS;
+    R.retreat = { until: now() + CFG.DEATH_RETREAT_HOLD_MS, why: name + " died" + (farm ? " on the " + ((G.monsters[farm] || {}).name || farm) : ""), farm };
+    R.retreat_go = true;
+    for (const n of CFG.PARTY_MEMBERS.concat(CFG.PARTY_SUPPORT)) if (n !== character.name) call(() => send_cm(n, { type: "retreat", ms: CFG.DEATH_RETREAT_HOLD_MS }));
+  }
+  // the Warrior has no basher: everybody waits in the main town next to the Merchant's stand until he has one (or KIT_WAIT_MS passes)
+  function kit_note(name) {
+    if (!CFG.DEATH_RETREAT || !is_leader() || R.boss || grinch_fight() || R.force) return;
+    if (R.retreat && R.retreat.kit) return; // already waiting
+    if (now() < (R.kit_next || 0)) return;
+    R.kit_next = now() + CFG.KIT_WAIT_MS + 120000;
+    R.retreat = { until: now() + CFG.KIT_WAIT_MS, why: name + " has no Basher - waiting in town for the Merchant to bring one", farm: "", kit: name, spot: true };
+    R.retreat_go = true;
+    for (const n of CFG.PARTY_MEMBERS.concat(CFG.PARTY_SUPPORT)) if (n !== character.name) call(() => send_cm(n, { type: "retreat", ms: CFG.KIT_WAIT_MS, spot: true }));
+  }
+  async function retreat_step() {
+    const r = R.retreat;
+    R.retreat_go = false;
+    if (!r) return true;
+    R.lock = null;
+    say("RETREAT: " + r.why + " - everybody to town for " + Math.round((r.until - now()) / 1000) + " s" + (r.farm ? "; the " + ((G.monsters[r.farm] || {}).name || r.farm) + " are skipped for " + Math.round(CFG.DEATH_AVOID_MS / 60000) + " min" : ""), "#CF575F");
+    await use_town();
+    if (r.spot && character.map === CFG.SAFE_SPOT.map && d2(character, CFG.SAFE_SPOT) > 60) await travel(CFG.SAFE_SPOT, 90000, "town meeting spot");
+    const kit_ok = () => !!r.kit && !!R.levels[r.kit] && R.levels[r.kit].basher === true && now() - R.levels[r.kit].at < 15000;
+    while (alive() && !character.rip && now() < r.until && !kit_ok()) await wait(1000);
+    if (r.kit) {
+      say(kit_ok() ? "RETREAT: " + r.kit + " has his Basher now - back to the farm" : "RETREAT: no Basher after " + Math.round(CFG.KIT_WAIT_MS / 60000) + " min - back to the farm anyway (is there a Basher / Wooden Basher in the bank or bag?)", kit_ok() ? "#5BCB5B" : "#CF575F");
+      for (const n of CFG.PARTY_MEMBERS.concat(CFG.PARTY_SUPPORT)) if (n !== character.name) call(() => send_cm(n, { type: "retreat", ms: 0 }));
+    }
+    if (is_leader() && r.farm && CFG.FARM_ROTATION.length && CFG.FARM_MONSTER === r.farm) rotate_farm(true);
+    R.state_sent_at = 0;
+    R.retreat = null;
+    return true;
+  }
+  function farm_monster_apply() {
+    if (!R.farm_applied && CFG.FARM_ROTATION.length) CFG.FARM_MONSTER = CFG.FARM_ROTATION[rot_idx()];
+    if (R.farm_applied || !CFG.FARM_MONSTER) return;
+    R.farm_applied = true;
+    const sp = nearest_spawn(CFG.FARM_MONSTER);
+    if (!sp) return say("FARM_MONSTER " + CFG.FARM_MONSTER + ": no regular spawn found - keeping the old farm spot", "#CF575F");
+    CFG.FARM_SPOT = { map: sp.map, x: Math.round(sp.x), y: Math.round(sp.y) };
+    CFG.TARGET_TYPES = [CFG.FARM_MONSTER];
+    say("Farming " + ((G.monsters[CFG.FARM_MONSTER] || {}).name || CFG.FARM_MONSTER) + " at " + sp.map + " " + CFG.FARM_SPOT.x + "," + CFG.FARM_SPOT.y, "#51D2E1");
+  }
+  // ===== v5 (Sean 2026-11-18): forced hard-monster farm =====
+  // the monster type the group is forced onto: the leader's own override, or what the leader's party_state says (followers)
+  const force_type = () => (R.force ? R.force.type : is_follower() && R.leader && R.leader.force && now() - R.leader.at < CFG.STATE_STALE_MS ? R.leader.force : null);
+  function force_restore() {
+    const f = R.force;
+    if (!f) return;
+    R.force = null;
+    CFG.FARM_SPOT = f.saved.FARM_SPOT;
+    CFG.TARGET_TYPES = f.saved.TARGET_TYPES;
+    R.state_sent_at = 0; // tell the party now
+  }
+  function force_drop(why) {
+    const f = R.force;
+    if (!f) return;
+    force_restore();
+    try { set("force_farm", ""); } catch (e) {}
+    say("Forced farm of " + ((G.monsters[f.type] || {}).name || f.type) + " DROPPED: " + why + " - back to " + (CFG.TARGET_TYPES.join("/") || "the normal targets") + " at " + CFG.FARM_SPOT.map + " " + CFG.FARM_SPOT.x + "," + CFG.FARM_SPOT.y + ". Set force_farm again by hand to retry.", "#CF575F");
+  }
+  const grinch_fight = () => !!(R.boss && R.boss.type === "grinch") || Object.values(parent.entities || {}).some((e) => e && e.type === "monster" && e.mtype === "grinch" && !e.dead && e.visible !== false);
+  function force_death(name) {
+    if (!R.force) return;
+    if (grinch_fight()) return; // the Grinch fight is allowed to cost lives
+    if (R.force.trial) return trial_end(false, name + " died", name);
+    force_drop(name + " died");
+  }
+  function force_apply(type, trial) {
+    farm_monster_apply(); // settle the old FARM_MONSTER first so the saved values are the real ones
+    const def = G.monsters[type];
+    if (!def) { try { set("force_farm", ""); } catch (e) {} return say("force_farm: '" + type + "' is not a monster in the game data", "#CF575F"); }
+    const sp = nearest_spawn(type);
+    if (!sp) { try { set("force_farm", ""); } catch (e) {} return say("force_farm: no regular spawn found for " + (def.name || type), "#CF575F"); }
+    if (R.force) force_restore();
+    R.force = { type, started: now(), saved: { FARM_SPOT: CFG.FARM_SPOT, TARGET_TYPES: CFG.TARGET_TYPES }, trial: trial ? { id: null, at: 0, hp: 1, deadline: now() + CFG.TRY_MONSTER_MS } : null };
+    CFG.FARM_SPOT = { map: sp.map, x: Math.round(sp.x), y: Math.round(sp.y) };
+    CFG.TARGET_TYPES = [type];
+    R.force_rip = {};
+    for (const n of CFG.PARTY_MEMBERS.concat(CFG.PARTY_SUPPORT)) { let p = null; try { p = get_player(n); } catch (e) {} if (p) R.force_rip[n] = !!p.rip; }
+    R.state_sent_at = 0;
+    if (CFG.LUCK_STOP && !trial) R.luck_need = { why: "forced farm", at: now() };
+    if (trial) return say("TRY MONSTER: " + (def.name || type) + " at " + sp.map + " " + CFG.FARM_SPOT.x + "," + CFG.FARM_SPOT.y + " - the group takes on ONE of them with single-target shots (success = it dies with nobody dead; failure = a death or " + Math.round(CFG.TRY_MONSTER_MS / 60000) + " min without a kill)", "#E0A040");
+    say("FORCED FARM: " + (def.name || type) + " at " + sp.map + " " + CFG.FARM_SPOT.x + "," + CFG.FARM_SPOT.y + " (difficulty limit bypassed for it only; any death drops it)" + (party_bees_only() ? " - the party is still below the bees-only level, forcing anyway" : ""), "#E0A040");
+  }
+  const trial_other = (e) => !!(R.force && R.force.trial && R.force.trial.id && e.mtype === R.force.type && e.id !== R.force.trial.id);
+  // ok: true = success, false = failure, null = cancelled (no verdict)
+  function trial_end(ok, why, who) {
+    const f = R.force;
+    if (!f || !f.trial) return;
+    const t = f.trial;
+    const name = (G.monsters[f.type] || {}).name || f.type;
+    const took = t.at ? Math.round((now() - t.at) / 1000) : null;
+    force_restore();
+    try { set("force_farm", ""); } catch (e) {}
+    say("TRY MONSTER RESULT: " + name + " - " + (ok === true ? "SUCCESS: killed one" + (took !== null ? " in " + took + " s" : "") + ", nobody died" : ok === false ? "FAILED: " + why + (took !== null ? " (" + took + " s after the fight started)" : " (before the fight started)") : "stopped (" + why + ")") + " - back to the normal farm", ok === true ? "#5BCB5B" : "#CF575F");
+    if (ok !== null) {
+      try {
+        const log = JSON.parse(get("try_monster_log") || "[]");
+        log.push({ at: Date.now(), type: f.type, ok, why: ok ? "" : why, secs: took });
+        set("try_monster_log", JSON.stringify(log.slice(-30)));
+      } catch (e) {}
+    }
+    if (ok === false && who) death_note(who); // somebody died: the whole party goes to town for a moment (the old farm spot is not where we stand, so nothing is blacklisted)
+  }
+  function trial_watch() {
+    const f = R.force;
+    if (!f || !f.trial) return;
+    const t = f.trial;
+    if (!t.id && R.lock) {
+      const e = parent.entities[R.lock];
+      if (e && e.type === "monster" && e.mtype === f.type && !e.dead) { t.id = e.id; t.at = now(); t.hp = e.max_hp ? e.hp / e.max_hp : 1; say("TRY MONSTER: engaging one " + ((G.monsters[f.type] || {}).name || f.type) + " - the others of its kind are left alone", "#E0A040"); }
+    }
+    if (t.id) {
+      const e = parent.entities[t.id];
+      if (e && !e.dead && !e.rip && e.max_hp) t.hp = e.hp / e.max_hp;
+      if (!e || e.dead || e.rip) {
+        if (e && (e.dead || e.rip) || t.hp <= 0.3) return trial_end(true, "", "");
+        t.id = null; // it just left my view with plenty of HP: look for it again
+      }
+    }
+    if (now() > t.deadline) trial_end(false, "no kill within " + Math.round(CFG.TRY_MONSTER_MS / 60000) + " min", "");
+  }
+  function force_poll() {
+    if (now() < (R.boar_until || 0)) return; // (boars) the bees first
+    let tv = "";
+    try { tv = String(get("try_monster") || "").trim().toLowerCase(); } catch (e) {}
+    if (tv) {
+      try { set("try_monster", ""); } catch (e) {}
+      if (R.force && R.force.trial) { if (R.force.type === tv) return; trial_end(null, "replaced by a new trial", ""); }
+      else if (R.force) return say("TRY MONSTER: a forced farm of " + ((G.monsters[R.force.type] || {}).name || R.force.type) + " is running - stop it first", "#CF575F");
+      return force_apply(tv, true);
+    }
+    if (R.force && R.force.trial) return; // (the trial runs on its own; the forced-farm key is not looked at meanwhile)
+    let v = "";
+    try { v = String(get("force_farm") || "").trim().toLowerCase(); } catch (e) {}
+    if (!v) {
+      if (R.force) { force_restore(); say("Forced farm ended by hand - back to " + (CFG.TARGET_TYPES.join("/") || "the normal targets"), "#51D2E1"); }
+      return;
+    }
+    if (R.force && R.force.type === v) return;
+    force_apply(v);
+  }
+  function force_watch() {
+    if (!R.force) return;
+    if (character.rip) return force_death(character.name);
+    for (const n of CFG.PARTY_MEMBERS.concat(CFG.PARTY_SUPPORT)) {
+      if (n === character.name) continue;
+      let p = null;
+      try { p = get_player(n); } catch (e) {}
+      if (!p) continue;
+      const was = !!R.force_rip[n];
+      R.force_rip[n] = !!p.rip;
+      if (p.rip && !was) force_death(n);
+    }
+  }
+  function force_tick() {
+    if (!CFG.FORCE_FARM || !is_leader() || !alive()) return;
+    if (now() >= R.force_check_at) { R.force_check_at = now() + CFG.FORCE_CHECK_MS; force_poll(); }
+    force_watch();
+    trial_watch();
+    farm_button_refresh(false);
+    try_button_refresh(false);
+  }
+
+  // ===== v5 (Sean 2026-11-18): Merchant's Luck stop =====
+  // everyone the Merchant should buff: me and the members that have reported in the last 5 minutes (offline ones are skipped)
+  function luck_names() {
+    return party_names().filter((n) => n === character.name || (R.levels[n] && now() - R.levels[n].at < 300000));
+  }
+  function luck_all_buffed() {
+    for (const n of luck_names()) {
+      let p = null;
+      try { p = n === character.name ? character : get_player(n); } catch (e) {}
+      const b = p && p.s && p.s.mluck;
+      if (!(b && Number(b.ms) >= CFG.LUCK_STOP_MIN_LEFT_MS)) return false;
+    }
+    return true;
+  }
+  function luck_due() {
+    if (!CFG.LUCK_STOP || !is_leader() || R.luck_busy || !alive() || character.rip) return false;
+    if (!CFG.PARTY_MEMBERS.length && !CFG.PARTY_SUPPORT.length) return false;
+    if (now() < R.luck_retry_at || R.courier || R.ladder || R.trip) return false;
+    if (character.map !== CFG.SAFE_SPOT.map) return false;
+    if (R.luck_need && now() - R.luck_need.at > 600000) R.luck_need = null;
+    if (R.luck_need) return true;
+    return !R.boss && !R.goal && now() - R.started_at > 120000 && luck_names().length > 1 && now() - R.luck_last >= CFG.LUCK_STOP_BEES_MS; // (regular renewal: only once somebody besides me has reported in, so the first stop does not leave the party out)
+  }
+  async function luck_stop() {
+    const why = R.luck_need ? R.luck_need.why : "hourly renewal";
+    R.luck_need = null;
+    if (luck_all_buffed()) { R.luck_last = now(); return say("Merchant's Luck stop (" + why + ") skipped: everyone still has the buff", "#51D2E1"); }
+    const names = luck_names();
+    const id = "l" + now();
+    R.luck_busy = true;
+    R.luck_done = null;
+    try {
+      say("Merchant's Luck stop (" + why + "): going to the Merchant with " + names.join(", "), "#E0A040");
+      if (d2(character, CFG.SAFE_SPOT) > 60) {
+        const r = await travel(CFG.SAFE_SPOT, 90000, "Merchant's Luck stop");
+        if (r.failed) { R.luck_retry_at = now() + 10 * 60000; return say("Merchant's Luck stop: could not walk to the Merchant (" + r.reason + ") - going on", "#CF575F"); }
+      }
+      await AL.send(M, { type: "mluck_request", id, names });
+      const t0 = now();
+      while (now() - t0 < CFG.LUCK_STOP_TIMEOUT_MS && !(R.luck_done && R.luck_done.id === id) && alive() && !character.rip) await wait(500);
+      const d = R.luck_done;
+      if (d && d.id === id) say("Merchant's Luck stop done: cast on " + (d.cast.join(", ") || "nobody") + (d.failed.length ? "; not cast on " + d.failed.join(", ") : "") + (d.off ? " (the Merchant cannot cast it yet)" : ""), "#5BCB5B");
+      else { R.luck_retry_at = now() + CFG.LUCK_STOP_RETRY_MS; say("Merchant's Luck stop: no answer from " + M + " in " + Math.round(CFG.LUCK_STOP_TIMEOUT_MS / 1000) + " s - going on, not again for " + Math.round(CFG.LUCK_STOP_RETRY_MS / 60000) + " min", "#CF575F"); }
+    } finally {
+      R.luck_last = now();
+      R.luck_busy = false;
+    }
+  }
+  // where idle fighters hang around: the bee spot, or the leader for followers
+  function anchor() {
+    farm_monster_apply();
+    const lp = leader_pos();
+    return lp
+      ? { spot: lp, radius: CFG.FOLLOW_RADIUS, leash: 0 }
+      : {
+          spot: CFG.FARM_SPOT,
+          radius: CFG.FARM_RADIUS,
+          leash: CFG.LEASH_RADIUS,
+        };
+  }
+  const is_goal_monster = (e) =>
+    (!!R.goal && e.mtype === R.goal.type) ||
+    (!!R.boss && e.mtype === R.boss.type) ||
+    (!!R.follow_goal && is_follower() && e.mtype === R.follow_goal);
+  const is_priority = (e) =>
+    CFG.PRIORITY_TYPES.indexOf(e.mtype) !== -1 ||
+    is_hunt_monster(e) ||
+    is_goal_monster(e);
+
+  function visible_monsters() {
+    const out = [];
+    for (const id in parent.entities) {
+      const e = parent.entities[id];
+      if (
+        e &&
+        e.type === "monster" &&
+        e.visible &&
+        !e.dead &&
+        !(R.unreach[id] > now())
+      )
+        out.push(e);
+    }
+    out.sort((a, b) => d2(character, a) - d2(character, b));
+    return out;
+  }
+
+  function priority_targets() {
+    return visible_monsters().filter(is_priority);
+  }
+
+  function easy_targets() {
+    return visible_monsters().filter((e) => {
+      if (is_priority(e) || is_ignored(e)) return false;
+      const ft = force_type();
+      if (ft ? e.mtype !== ft : CFG.TARGET_TYPES.length && CFG.TARGET_TYPES.indexOf(e.mtype) === -1)
+        return false;
+      if (
+        e.target &&
+        e.target !== character.name &&
+        party_names().concat(CFG.PARTY_SUPPORT).indexOf(e.target) === -1
+      )
+        return false; // someone else's fight
+      const an = anchor();
+      if (
+        an.leash &&
+        (character.map !== an.spot.map || d2(e, an.spot) > an.leash)
+      )
+        return false;
+      if (!an.leash && d2(e, an.spot) > CFG.FOLLOW_FAR_PX + 200) return false; // follower: stay in the leader's neighbourhood
+      return !trial_other(e) && (difficulty_of(e) <= CFG.MAX_DIFFICULTY || (!!ft && e.mtype === ft) || (CFG.FARM_ROTATION.length > 0 && e.mtype === CFG.FARM_MONSTER && CFG.FARM_ROTATION.indexOf(e.mtype) !== -1)); // v5: the forced farm monster and the current rotation monster (the porcupine can rate harder than MAX_DIFFICULTY) are the exceptions to the limit
+    });
+  }
+
+  // the monster the Warrior says is the biggest threat (fresh message, alive, in shooting range)
+  function focus_entity() {
+    const f = R.focus;
+    if (!CFG.FOCUS_TARGET || !f || !f.id || now() - f.at > CFG.FOCUS_MAX_AGE_MS) return null;
+    const e = parent.entities[f.id];
+    if (!e || e.type !== "monster" || e.dead || e.rip || e.visible === false) return null;
+    return is_in_range(e) ? e : null;
+  }
+  function pick_target() {
+    const fe = focus_entity();
+    if (fe) {
+      R.lock = fe.id;
+      return fe;
+    }
+    const pri = priority_targets();
+    if (pri.length) {
+      R.lock = null;
+      return pri[0];
+    }
+    // Finish what we already chose: the rating depends on our HP and the monster's HP,
+    // so it can flip mid-fight and we don't want to dither between targets.
+    const lt = leader_target();
+    if (lt) {
+      R.lock = lt.id;
+      return lt;
+    }
+    const locked = R.lock && parent.entities[R.lock];
+    if (
+      locked &&
+      locked.type === "monster" &&
+      locked.visible &&
+      !locked.dead &&
+      !is_ignored(locked)
+    )
+      return locked;
+    const next = easy_targets()[0] || null;
+    R.lock = next ? next.id : null;
+    return next;
+  }
+
+  async function shoot(target) {
+    const level = character.level;
+    const mp_ok = character.mp / character.max_mp >= CFG.MULTISHOT_MIN_MP_PCT;
+    let in_range =
+      is_hunt_monster(target) || is_goal_monster(target)
+        ? priority_targets().filter(
+            (m) => (is_hunt_monster(m) || is_goal_monster(m)) && is_in_range(m)
+          )
+        : is_priority(target)
+        ? [target]
+        : easy_targets().filter((m) => is_in_range(m));
+    const fe = focus_entity();
+    const tank_mode = !!fe && fe.id === target.id;
+    let tank_others = [];
+    if (tank_mode) {
+      const names = party_names();
+      tank_others = Object.values(parent.entities).filter(
+        (e) => e && e !== target && e.type === "monster" && !e.dead && !e.rip && e.visible !== false && e.target && names.indexOf(e.target) !== -1 && is_in_range(e)
+      );
+    }
+    const single0 = CFG.TRI_SHOT_MONSTERS.indexOf(target.mtype) === -1 || CFG.SINGLE_TARGET_TYPES.indexOf(target.mtype) !== -1 || !!boss_cfg(target.mtype) || !!(R.force && R.force.trial && target.mtype === R.force.type); // boss events and the Try monster trial: one target, so 3shot/5shot only waste MP
+    const single = tank_mode ? tank_others.length < 2 : single0;
+    if (tank_mode && !single) in_range = [target].concat(tank_others);
+    let res;
+
+    // the mark is the condition "marked" (skill huntersmark, 10 s, cooldown 10 s)
+    const mark = target.s && (target.s.marked || target.s.huntersmark);
+    const mark_left = mark ? Number(mark.ms) || 0 : 0;
+    const boss_mark = CFG.BOSS_MARK && !!boss_cfg(target.mtype) && character.mp / character.max_mp >= CFG.BOSS_MARK_MIN_MP_PCT;
+    const focus_mark = tank_mode && CFG.FOCUS_MARK;
+    if (
+      (CFG.HUNTERSMARK_TYPES.indexOf(target.mtype) !== -1 || boss_mark || focus_mark) &&
+      (!mark || (boss_mark && mark_left < CFG.BOSS_MARK_REFRESH_MS)) &&
+      !is_on_cooldown("huntersmark") &&
+      character.mp >= 240
+    ) {
+      call(() => use_skill("huntersmark", target));
+    }
+    if (
+      CFG.SUPERSHOT_TYPES.indexOf(target.mtype) !== -1 &&
+      !is_on_cooldown("supershot") &&
+      character.mp >= 400
+    ) {
+      res = await call(() => use_skill("supershot", target));
+    } else if (
+      mp_ok &&
+      !single &&
+      level >= 75 &&
+      in_range.length >= 5 &&
+      character.mp >= 320 &&
+      now() - R.last_5shot >= CFG.FIVESHOT_INTERVAL_MS
+    ) {
+      res = await call(() => use_skill("5shot", in_range.slice(0, 5)));
+      if (!res.failed) R.last_5shot = now();
+    } else if (
+      mp_ok &&
+      !single &&
+      level >= 60 &&
+      in_range.length >= 3 &&
+      character.mp >= 200 &&
+      now() - R.last_3shot >= CFG.THREESHOT_INTERVAL_MS
+    ) {
+      res = await call(() => use_skill("3shot", in_range.slice(0, 3)));
+      if (!res.failed) R.last_3shot = now();
+    } else {
+      res = await call(() => attack(target));
+    }
+    if (!res.failed) reduce_cooldown("attack", (character.ping || 0) * 0.95); // doc idiom: compensate for ping
+  }
+
+  function tether() {
+    if (is_moving(character) || smart.moving || now() < R.tether_next) return; // smart.moving is true while a path is still being searched
+    // hurt and out of potions: stay put in town instead of walking back into the bees
+    if (character.hp / character.max_hp < 0.5 && quantity(CFG.HP_POTION) === 0)
+      return;
+    const an = anchor();
+    const far =
+      character.map !== an.spot.map || d2(character, an.spot) > an.radius;
+    if (far) {
+      log_move(
+        an.spot,
+        "drifted " +
+          Math.round(d2(character, an.spot)) +
+          "px from the " +
+          (an.leash ? "farm spot" : "leader")
+      );
+      // at most one attempt per 3s; when there is no path ("Path not found!") wait 20s instead of retrying every tick
+      R.tether_next = now() + 3000;
+      const tgt = an.leash
+        ? an.spot
+        : {
+            map: an.spot.map,
+            x: an.spot.x + (Math.random() - 0.5) * 100,
+            y: an.spot.y + (Math.random() - 0.5) * 100,
+          };
+      call(() => smart_move(tgt)).then((r) => {
+        if (r && (r.failed || r.success === false)) {
+          R.tether_next = now() + 20000;
+          say(
+            "No path back to the farm spot (" +
+              (r.reason || "no path") +
+              ") - trying again in 20s",
+            "#CF575F"
+          );
+        }
+      });
+    }
+  }
+
+  // ========================== MONSTER HUNTS =======================
+  // Daisy (main town) hands out a hunt: kill N of one monster type before time runs out.
+  // Flow: ask Daisy -> judge the hunt -> go to the monster's spawn and kill them -> turn in -> repeat.
+  // A hunt judged too hard / too slow is simply left to expire while he farms as usual.
+  // v5: the hunt difficulty limit; while the party is in bees-only mode (only hunts, not goals, are let through) the lower BEES_ONLY limit applies
+  const hunt_max_diff = () => (R.bees_only ? Math.min(CFG.HUNT_MAX_DIFFICULTY, CFG.HUNT_MAX_DIFFICULTY_BEES_ONLY) : CFG.HUNT_MAX_DIFFICULTY);
+  const hunts_on = () => {
+    if (!CFG.HUNT_ENABLED) return false;
+    try {
+      const v = String(get("monster_hunts") || "").toLowerCase();
+      if (v === "off" || v === "none" || v === "false" || v === "0")
+        return false;
+    } catch (e) {}
+    return true;
+  };
+  function hunt_state() {
+    const h = character.s && character.s.monsterhunt;
+    return h && h.id ? h : null;
+  }
+
+  // Nearest normal spawn of a monster type (skips instances / ignored maps, like smart_move does)
+  function nearest_spawn(type, bad, skip) {
+    let best = null;
+    for (const map in G.maps) {
+      const m = G.maps[map];
+      if (!m || m.ignore || m.instance || !m.monsters) continue;
+      for (const pack of m.monsters) {
+        if (pack.type !== type) continue;
+        const boxes = pack.boundaries
+          ? pack.boundaries
+          : pack.boundary
+          ? [[map].concat(pack.boundary)]
+          : [];
+        for (const b of boxes) {
+          const bm = b[0];
+          const gm = G.maps[bm];
+          if (!gm || gm.ignore || gm.instance) continue;
+          if (skip && !CFG.GOAL_SWEEP_OTHER_MAPS && bm !== map) continue; // sweeping: stay on the spawn entry's own map
+          const c = {
+            map: bm,
+            x: (b[1] + b[3]) / 2,
+            y: (b[2] + b[4]) / 2,
+            box: b,
+          };
+          if (bad && bad[bm + ":" + b.slice(1).join(",")]) continue; // a box we could not reach
+          if (skip && skip[bm + ":" + b.slice(1).join(",")]) continue; // a box already searched in this sweep
+          const score =
+            (bm === character.map ? 0 : 1e6) +
+            (bm === character.map ? d2(character, c) : 0);
+          if (!best || score < best.score) best = { dest: c, score };
+        }
+      }
+    }
+    return best && best.dest;
+  }
+
+  // how many spawn areas a monster has (only the ones a sweep would visit)
+  function spawn_area_count(type) {
+    let n = 0;
+    for (const map in G.maps) {
+      const m = G.maps[map];
+      if (!m || m.ignore || m.instance || !m.monsters) continue;
+      for (const pack of m.monsters) {
+        if (pack.type !== type) continue;
+        const boxes = pack.boundaries ? pack.boundaries : pack.boundary ? [[map].concat(pack.boundary)] : [];
+        for (const b of boxes) {
+          const gm = G.maps[b[0]];
+          if (!gm || gm.ignore || gm.instance) continue;
+          if (!CFG.GOAL_SWEEP_OTHER_MAPS && b[0] !== map) continue;
+          n++;
+        }
+      }
+    }
+    return n;
+  }
+  // dangerous roaming monsters (HUNT_DANGER_TYPES): one in view close to me, or the server reports one near a spot
+  function danger_seen() {
+    for (const id in parent.entities) {
+      const e = parent.entities[id];
+      if (e && e.type === "monster" && e.visible && !e.dead && CFG.HUNT_DANGER_TYPES.indexOf(e.mtype) !== -1 && d2(character, e) <= CFG.HUNT_DANGER_RADIUS) return e;
+    }
+    return null;
+  }
+  // v5: a danger run applies to EVERY Ranger (leader and followers). `town` from another map only goes to THAT map's town (the
+  // Halloween Town for the Phoenix areas), so from there he walks to the portal NPC and takes it back to the main map.
+  async function return_to_main() {
+    if (character.map === "main") return true;
+    const from = character.map;
+    let npc = null;
+    try {
+      npc = find_npc("transporter");
+    } catch (e) {}
+    if (npc && npc.map === character.map) {
+      const r = await travel({ map: npc.map, x: npc.x, y: npc.y }, 60000, "portal NPC in " + from + " (back to the main map)");
+      if (r.failed) say("Could not reach the portal NPC in " + from + ": " + r.reason, "#CF575F");
+      else {
+        const places = (G.npcs && G.npcs.transporter && G.npcs.transporter.places) || {};
+        if (places.main !== undefined) {
+          await call(() => parent.socket.emit("transport", { to: "main", s: places.main }));
+          const ok = await call(() => wait_for(() => character.map === "main", 8000));
+          if (!ok.failed) {
+            say("Took the portal from " + from + " to the main map", "#5BCB5B");
+            return true;
+          }
+          say("The portal did not take me to the main map - trying a normal walk", "#CF575F");
+        }
+      }
+    }
+    const r = await travel(CFG.SAFE_SPOT, 150000, "back to the main map");
+    if (r.failed || character.map !== "main") {
+      say("Could not get back to the main map from " + from + ": " + (r.reason || "wrong map"), "#CF575F");
+      return false;
+    }
+    return true;
+  }
+  // v5 (Sean 2026-11-18): Wild Boars in Winterland. Whoever sees one target a party member leaves (and tells the leader); the leader pulls everybody out, pauses the forced farm,
+  // and for BOAR_HOLD_MS the party only farms the normal bees (hunts, goals and the forced farm wait).
+  function boar_seen() {
+    if (!CFG.BOAR_FLEE || CFG.BOAR_MAPS.indexOf(character.map) === -1) return null;
+    const names = party_names().concat([character.name]);
+    for (const id in parent.entities) {
+      const e = parent.entities[id];
+      if (e && e.type === "monster" && !e.dead && !e.rip && e.visible !== false && CFG.BOAR_TYPES.indexOf(e.mtype) !== -1 && names.indexOf(e.target) !== -1) return e;
+    }
+    return null;
+  }
+  const boar_due = () => CFG.BOAR_FLEE && now() >= (R.boar_next || 0) && CFG.BOAR_MAPS.indexOf(character.map) !== -1 && (!!boar_seen() || now() - (R.boar_cm || 0) < 30000);
+  async function boar_step() {
+    const b = boar_seen();
+    const told = !b && now() - (R.boar_cm || 0) < 30000;
+    R.boar_cm = 0;
+    R.boar_until = now() + CFG.BOAR_HOLD_MS;
+    R.danger_until = Math.max(R.danger_until || 0, R.boar_until);
+    R.boar_next = now() + 5000;
+    R.lock = null;
+    say("BOAR: " + (b ? ((G.monsters[b.mtype] || {}).name || b.mtype) + " is on " + b.target : "the " + (is_leader() ? "party" : "leader") + " reports one") + " - leaving " + character.map + " for the main map; the party farms the normal bees for " + Math.round(CFG.BOAR_HOLD_MS / 60000) + " min", "#CF575F");
+    if (is_leader()) {
+      if (R.force) { R.force_resumed = R.force.type; force_restore(); } // (force_poll puts it back once the hold is over)
+      R.state_sent_at = 0;
+      for (const n of CFG.PARTY_MEMBERS.concat(CFG.PARTY_SUPPORT)) if (n !== character.name) call(() => send_cm(n, { type: "boar_flee" }));
+    } else if (b) call(() => send_cm(CFG.PARTY_LEADER, { type: "boar_alert" }));
+    await use_town();
+    if (character.map !== "main") await return_to_main();
+    return true;
+  }
+  async function danger_step() {
+    const dz = danger_seen();
+    if (!dz) return false;
+    R.danger_until = now() + CFG.HUNT_DANGER_HOLD_MS;
+    say("DANGER: " + ((G.monsters[dz.mtype] || {}).name || dz.mtype) + " is close (" + Math.round(d2(character, dz)) + " px) - retreating to town" + (is_follower() ? ", staying back for " + Math.round(CFG.HUNT_DANGER_FOLLOW_HOLD_MS / 1000) + " s" : ", no hunts for " + Math.round(CFG.HUNT_DANGER_HOLD_MS / 60000) + " min"), "#CF575F");
+    R.lock = null;
+    if (is_follower()) R.follow_block_until = now() + CFG.HUNT_DANGER_FOLLOW_HOLD_MS;
+    await use_town();
+    if (character.map !== "main") await return_to_main();
+    R.danger_next = now() + 3000;
+    return true;
+  }
+  function danger_server(spot) {
+    for (const t of CFG.HUNT_DANGER_TYPES) {
+      const sb = server_boss(t);
+      if (sb && sb.map === spot.map && Number.isFinite(Number(sb.x)) && d2({ x: Number(sb.x), y: Number(sb.y) }, spot) <= CFG.HUNT_DANGER_SPOT_RADIUS) return t;
+    }
+    return null;
+  }
+
+  // Can I finish this hunt? Returns {ok, why, difficulty, est_s}
+  function assess_hunt(h) {
+    const def = G.monsters[h.id];
+    if (!def) return { ok: false, why: "unknown monster type " + h.id };
+    const name = def.name || h.id;
+    if (CFG.HUNT_AVOID_TYPES.indexOf(h.id) !== -1)
+      return { ok: false, why: name + " is on the avoid list" };
+    if (def.hp > CFG.HUNT_MAX_MONSTER_HP)
+      return {
+        ok: false,
+        why:
+          name +
+          " has " +
+          def.hp +
+          " HP (limit " +
+          CFG.HUNT_MAX_MONSTER_HP +
+          ")",
+      };
+    const spawn = nearest_spawn(h.id);
+    if (!spawn)
+      return { ok: false, why: name + " has no regular spawn I can walk to" };
+    const difficulty = difficulty_of({
+      attack: def.attack,
+      frequency: def.frequency,
+      hp: def.hp,
+    });
+    if (difficulty > hunt_max_diff())
+      return {
+        ok: false,
+        difficulty,
+        why:
+          name +
+          " is too dangerous (difficulty " +
+          difficulty +
+          ", limit " +
+          hunt_max_diff() +
+          ")",
+      };
+    const dps = Math.max(
+      1,
+      character.attack * character.frequency * CFG.HUNT_EFFICIENCY
+    );
+    const count = Math.max(0, +h.c || 0);
+    const est_s = Math.round((count * def.hp) / dps + CFG.HUNT_TRAVEL_BUFFER_S);
+    const left_s =
+      h.ms !== undefined && isFinite(+h.ms) ? Math.round(+h.ms / 1000) : null;
+    if (left_s !== null && est_s > left_s)
+      return {
+        ok: false,
+        difficulty,
+        est_s,
+        why:
+          count +
+          "x " +
+          name +
+          " needs ~" +
+          est_s +
+          "s but only " +
+          left_s +
+          "s are left",
+      };
+    return { ok: true, difficulty, est_s, why: "doable" };
+  }
+
+  // Between hunts he farms normally. Stored with set() so a restart does not skip the wait.
+  function start_cooldown() {
+    R.mh = null;
+    rotate_farm();
+    R.mh_check_at = now() + CFG.HUNT_COOLDOWN_MS;
+    try {
+      set("hunt_next_at", R.mh_check_at);
+    } catch (e) {}
+    say(
+      "Next monster hunt in " +
+        Math.round(CFG.HUNT_COOLDOWN_MS / 60000) +
+        " min - farming meanwhile",
+      "#51D2E1"
+    );
+  }
+
+  async function visit_daisy(why) {
+    const npc = (() => {
+      try {
+        return find_npc(CFG.HUNT_NPC);
+      } catch (e) {
+        return null;
+      }
+    })();
+    const dest =
+      npc && npc.x !== undefined
+        ? { map: npc.map || "main", x: npc.x, y: npc.y }
+        : CFG.HUNT_NPC_FALLBACK;
+    if (character.map !== dest.map || d2(character, dest) > 80) {
+      const r = await travel(dest, 120000, why);
+      if (r.failed) {
+        say("Could not reach Daisy (" + (r.reason || "?") + ")", "#CF575F");
+        return { failed: true };
+      }
+    }
+    return call(() => interact("monsterhunt"));
+  }
+
+  async function monster_hunt_step() {
+    if (!hunts_on()) return false;
+    const h = hunt_state();
+
+    // noticed the end of a hunt (done, expired or abandoned)
+    if (!h && R.mh) {
+      say("Monster hunt ended: " + R.mh.name, "#51D2E1");
+      R.mh = null;
+      start_cooldown();
+    }
+
+    // just (re)started: look at the character's state first. An unfinished hunt is resumed, never replaced.
+    if (!R.hunt_checked) {
+      if (!character.s || now() - R.started_at < CFG.HUNT_STARTUP_WAIT_MS)
+        return false; // state may not have arrived yet
+      R.hunt_checked = true;
+      say(
+        h
+          ? "Found an unfinished monster hunt: " +
+              h.c +
+              "x " +
+              ((G.monsters[h.id] || {}).name || h.id) +
+              (h.ms !== undefined && isFinite(+h.ms)
+                ? ", " + Math.round(+h.ms / 60000) + " min left"
+                : "") +
+              " - resuming it"
+          : "No active monster hunt",
+        "#51D2E1"
+      );
+    }
+
+    // --- no hunt: ask Daisy for one ---
+    if (!h) {
+      if (now() < R.mh_check_at) return false;
+      const res = await visit_daisy("asking Daisy for a monster hunt");
+      if (res.completed) {
+        say("Monster hunt completed - reward collected!", "#5BCB5B");
+        start_cooldown();
+      } else if (res.started || hunt_state()) {
+        R.mh_check_at = now() + 2000;
+      } else {
+        say(
+          "Daisy had no hunt for me (" +
+            (res.reason || "no answer") +
+            ") - trying again later",
+          "#CF575F"
+        );
+        R.mh_check_at = now() + CFG.HUNT_RETRY_MS;
+      }
+      return true;
+    }
+
+    // --- a hunt is active: judge it once per hunt ---
+    if (!R.mh || R.mh.id !== h.id) {
+      const def = G.monsters[h.id] || {};
+      const verdict = assess_hunt(h);
+      R.mh = {
+        id: h.id,
+        name: def.name || h.id,
+        verdict,
+        heading: null,
+        move_at: 0,
+        patrol_at: 0,
+        busy: false,
+        fails: 0,
+        bad: {},
+        box_fails: 0,
+      };
+      say(
+        "Monster hunt: " +
+          h.c +
+          "x " +
+          R.mh.name +
+          " - " +
+          (verdict.ok
+            ? "taking it (difficulty " +
+              verdict.difficulty +
+              ", ~" +
+              verdict.est_s +
+              "s)"
+            : "skipping, " + verdict.why),
+        verdict.ok ? "#5BCB5B" : "#CF575F"
+      );
+    }
+    if (!R.mh.verdict.ok) { hunt_why("judged not doable: " + R.mh.verdict.why); return false; } // leave it to expire, keep farming
+
+    // all killed: hand it in
+    if (+h.c <= 0) {
+      const res = await visit_daisy("turning in the monster hunt");
+      if (res.completed)
+        say("Monster hunt completed - reward collected!", "#5BCB5B");
+      else if (!res.failed)
+        say("Turn-in answered: " + JSON.stringify(res), "#CF575F");
+      start_cooldown();
+      if (res.failed) await wait(3000);
+      return true;
+    }
+
+    // dangerous roamers (Green Jr.): never walk into one, run when one is close, hold hunts for a while afterwards
+    if (CFG.HUNT_DANGER_TYPES.length) {
+      const dz = danger_seen();
+      if (dz) {
+        R.danger_until = now() + CFG.HUNT_DANGER_HOLD_MS;
+        say("DANGER: " + ((G.monsters[dz.mtype] || {}).name || dz.mtype) + " is close (" + Math.round(d2(character, dz)) + " px) - retreating to town, no hunts for " + Math.round(CFG.HUNT_DANGER_HOLD_MS / 60000) + " min", "#CF575F");
+        R.lock = null;
+        await use_town();
+        return true;
+      }
+      if (now() < (R.danger_until || 0)) { hunt_why("danger hold for another " + Math.round((R.danger_until - now()) / 60000) + " min"); return false; } // farm the bees meanwhile
+      const sp0 = nearest_spawn(h.id, R.mh.bad);
+      const dt = sp0 && danger_server(sp0);
+      if (dt) {
+        if (now() - (R.danger_log || 0) > 120000) {
+          R.danger_log = now();
+          say("Monster hunt on hold: " + ((G.monsters[dt] || {}).name || dt) + " is near the " + R.mh.name + " spawn - farming until he is gone", "#CF575F");
+        }
+        return false;
+      }
+    }
+
+    // the stored stats can understate a monster: judge the real ones the moment they are in view
+    // (only while healthy - the rating drops as our HP drops)
+    const seen = priority_targets().filter(is_hunt_monster);
+    if (seen.length && character.hp >= character.max_hp * 0.7) {
+      const worst = Math.max.apply(null, seen.map(difficulty_of));
+      if (worst > hunt_max_diff()) {
+        R.mh.verdict = {
+          ok: false,
+          why:
+            R.mh.name +
+            " is rated " +
+            (worst >= 2 ? "hard" : "difficulty " + worst) +
+            " up close",
+        };
+        R.lock = null;
+        say(
+          "Monster hunt skipped: " + R.mh.verdict.why + " - back to farming",
+          "#CF575F"
+        );
+        return false;
+      }
+    }
+
+    // targets in view: normal combat handles them (they are priority targets)
+    if (priority_targets().some(is_hunt_monster)) {
+      R.mh.last_seen = now();
+      R.mh.heading = null;
+      return false;
+    }
+
+    // not in view: go to the spawn, then patrol its area.
+    // Never interrupt a walk or a path search in progress (smart_move restarts the search every time it is called).
+    if (R.mh.busy || smart.moving || is_moving(character)) return true;
+    const spawn = nearest_spawn(h.id, R.mh.bad);
+    if (!spawn) {
+      R.mh.verdict = {
+        ok: false,
+        why: "no reachable " + R.mh.name + " spawn left",
+      };
+      say("Monster hunt abandoned: " + R.mh.verdict.why, "#CF575F");
+      return false;
+    }
+    const near =
+      character.map === spawn.map &&
+      d2(character, spawn) <= CFG.HUNT_ARRIVE_RADIUS;
+    let dest = spawn;
+    if (near) {
+      if (now() - R.mh.patrol_at < 6000) return true;
+      R.mh.patrol_at = now();
+    }
+    if (near || R.mh.box_fails > 0) {
+      // patrol inside the box (or, after a failed walk, try another point of it instead of the centre)
+      const bx = spawn.box;
+      dest = {
+        map: spawn.map,
+        x: bx[1] + Math.random() * (bx[3] - bx[1]),
+        y: bx[2] + Math.random() * (bx[4] - bx[2]),
+      };
+      log_move(dest, "searching for " + R.mh.name);
+    } else {
+      log_move(dest, "heading to " + R.mh.name + " for the monster hunt");
+    }
+    R.mh.heading = dest;
+    R.mh.move_at = now();
+    R.mh.busy = true;
+    const mh = R.mh;
+    call(() => smart_move(dest)).then((r) => {
+      mh.busy = false;
+      if (r.failed || r.success === false) {
+        mh.fails++;
+        mh.box_fails++;
+        say(
+          "Could not walk to " +
+            describe_dest(dest) +
+            " (" +
+            (r.reason || "no path") +
+            ") - failure " +
+            mh.fails +
+            "/" +
+            CFG.HUNT_MAX_PATH_FAILS,
+          "#CF575F"
+        );
+        if (mh.box_fails >= 2) {
+          // this spawn box looks unreachable: remember it and try the next one
+          mh.bad[spawn.map + ":" + spawn.box.slice(1).join(",")] = true;
+          mh.box_fails = 0;
+        }
+        if (mh.fails >= CFG.HUNT_MAX_PATH_FAILS) {
+          mh.verdict = { ok: false, why: "no path to " + mh.name };
+          say(
+            "Monster hunt abandoned: could not find a path to " +
+              mh.name +
+              " - farming instead",
+            "#CF575F"
+          );
+        }
+      } else {
+        mh.fails = 0;
+        mh.box_fails = 0;
+      }
+    });
+    return true;
+  }
+
+  // v5 (Sean 2026-11-18 16:51): the "Boss events" button became a FARM button: one button, click = type a monster name and the group farms it (the forced farm, same as
+  // set("force_farm", "<monster>")); click again = stop. It only replaces the baseline farm, so the Grinch event, boss events, Daisy hunts and goals still take priority and the farm resumes after them.
+  // Boss events can still be switched off / on from the console: set("boss_events", "off") / set("boss_events", "")
+  const monster_key = (txt) => {
+    const t = String(txt || "").trim().toLowerCase();
+    if (!t) return null;
+    if (G.monsters[t]) return t;
+    const keys = Object.keys(G.monsters);
+    const exact = keys.filter((k) => String(G.monsters[k].name || "").toLowerCase() === t);
+    if (exact.length) return exact[0];
+    const part = keys.filter((k) => String(G.monsters[k].name || "").toLowerCase().indexOf(t) !== -1);
+    return part.length === 1 ? part[0] : null;
+  };
+  function try_button_refresh(force) {
+    try {
+      if (typeof add_top_button !== "function" || !is_leader()) return;
+      const on = !!(R.force && R.force.trial);
+      const label = on ? "Trying: " + ((G.monsters[R.force.type] || {}).name || R.force.type) + " (stop)" : "Try monster";
+      if (!force && R.try_label === label) return;
+      R.try_label = label;
+      add_top_button("al_try_monster", label, () => {
+        if (!alive()) return;
+        if (R.force && R.force.trial) { trial_end(null, "stopped by hand", ""); return; }
+        let ans = null;
+        try { ans = typeof prompt === "function" ? prompt("Monster to TRY (one single-target fight; name or game id, e.g. Fire Spirit or fireroamer):", "") : parent.prompt("Monster to TRY (one single-target fight; name or game id)", ""); } catch (e) {}
+        if (ans === null || ans === undefined || !String(ans).trim()) return say("Try button: no monster entered", "#E0A040");
+        const key = monster_key(ans);
+        if (!key) return say("Try button: '" + String(ans).trim() + "' is not a monster name or id in the game data (or the name matches several)", "#CF575F");
+        try { set("try_monster", key); } catch (e) {}
+        R.force_check_at = 0;
+        say("Try button: the group goes to try one " + ((G.monsters[key] || {}).name || key) + " (click again to stop)", "#E0A040");
+      });
+    } catch (e) {}
+  }
+  function farm_button_refresh(force) {
+    try {
+      if (typeof add_top_button !== "function" || !is_leader()) return;
+      const label = R.force ? "Farm: " + ((G.monsters[R.force.type] || {}).name || R.force.type) + " (stop)" : "Farm monster";
+      if (!force && R.farm_label === label) return;
+      R.farm_label = label;
+      add_top_button("al_farm_monster", label, () => {
+        if (!alive()) return;
+        if (R.force) {
+          try { set("force_farm", ""); } catch (e) {}
+          R.force_check_at = 0;
+          say("Farm button: forced farm stopped", "#E0A040");
+          return;
+        }
+        let ans = null;
+        try { ans = typeof prompt === "function" ? prompt("Monster for the group to farm (name or game id, e.g. Fire Spirit or fireroamer):", "") : parent.prompt("Monster for the group to farm (name or game id):", ""); } catch (e) { try { ans = parent.prompt("Monster for the group to farm (name or game id):", ""); } catch (e2) {} }
+        if (ans === null || ans === undefined || !String(ans).trim()) return say("Farm button: no monster entered", "#E0A040");
+        const key = monster_key(ans);
+        if (!key) return say("Farm button: '" + String(ans).trim() + "' is not a monster name or id in the game data (or the name matches several)", "#CF575F");
+        try { set("force_farm", key); } catch (e) {}
+        R.force_check_at = 0;
+        say("Farm button: the group goes to farm " + ((G.monsters[key] || {}).name || key) + " (Grinch, boss events, hunts and goals still come first; click again to stop)", "#E0A040");
+      });
+    } catch (e) {}
+  }
+  // Buttons on the leader's game window (the same switches as the console commands set("boss_force", ...) / set("boss_events", ...)):
+  //   "Grinch"        = start the Grinch event now (the party goes to the post and waits for him)
+  //   "Farm monster"  = type a monster name: the group farms it (forced farm); click again to stop (see farm_button_refresh)
+  function add_boss_buttons() {
+    try {
+      if (typeof add_top_button !== "function" || !is_leader()) return;
+      add_top_button("al_boss_grinch", "Grinch", () => {
+        if (!alive()) return;
+        try {
+          set("boss_force", "grinch");
+        } catch (e) {}
+        say("Grinch button: starting the Grinch event (the party goes to the post)", "#E0A040");
+      });
+      farm_button_refresh(true);
+      try_button_refresh(true);
+    } catch (e) {}
+  }
+
+  // ========================== FARM GOALS ==========================
+  const goals_on = () => {
+    if (!CFG.GOALS_ENABLED) return false;
+    try {
+      const v = String(get("farm_goals") || "").toLowerCase();
+      if (v === "off" || v === "none" || v === "false" || v === "0")
+        return false;
+    } catch (e) {}
+    return true;
+  };
+  const pct = (c) =>
+    (c * 100 < 1 ? (c * 100).toFixed(2) : Math.round(c * 1000) / 10) + "%";
+  // kill time and the odds of what the goal is after, from the game data
+  function goal_estimate(def, g) {
+    const dps = Math.max(
+      1,
+      character.attack * character.frequency * CFG.HUNT_EFFICIENCY
+    );
+    const ttk = def.hp / dps;
+    const table = G.drops && G.drops.monsters && G.drops.monsters[g.type];
+    const notes = [];
+    for (const w of g.want || []) {
+      const e = Array.isArray(table) && table.find((x) => x && x[1] === w);
+      if (e && e[0] > 0) {
+        const kills = Math.ceil(1 / e[0]);
+        notes.push(
+          ((G.items[w] && G.items[w].name) || w) +
+            " " +
+            pct(e[0]) +
+            " (~" +
+            kills +
+            " kills, ~" +
+            Math.round((kills * ttk) / 60) +
+            " min at my speed)"
+        );
+      }
+    }
+    return { ttk, notes };
+  }
+  function goal_assess(g) {
+    const def = G.monsters[g.type];
+    if (!def) return { ok: false, why: "unknown monster type " + g.type };
+    const name = def.name || g.type;
+    if (def.hp > CFG.GOAL_MAX_HP)
+      return {
+        ok: false,
+        why: name + " has " + def.hp + " HP (limit " + CFG.GOAL_MAX_HP + ")",
+      };
+    if (!nearest_spawn(g.type, R.goal_bad[g.type]))
+      return { ok: false, why: name + " has no regular spawn I can walk to" };
+    const difficulty = difficulty_of({
+      attack: def.attack,
+      frequency: def.frequency,
+      hp: def.hp,
+    });
+    if (difficulty > CFG.GOAL_MAX_DIFFICULTY)
+      return {
+        ok: false,
+        why: name + " is too dangerous (difficulty " + difficulty + ")",
+      };
+    const est = goal_estimate(def, g);
+    if (est.ttk > CFG.GOAL_MAX_TTK_S)
+      return {
+        ok: false,
+        why:
+          "one " +
+          name +
+          " would take ~" +
+          Math.round(est.ttk) +
+          "s (limit " +
+          CFG.GOAL_MAX_TTK_S +
+          "s)",
+      };
+    return { ok: true, name, est, difficulty };
+  }
+  function goal_pick() {
+    let best = null;
+    for (const g of CFG.GOALS) {
+      if (g.enabled === false || (R.goal_cool[g.type] || 0) > now()) continue;
+      if (g.every_min && now() < (R.goal_start[g.type] || 0) + g.every_min * 60000) continue; // v5: at most one visit per every_min
+      const v = goal_assess(g);
+      if (!v.ok) {
+        if (now() - (R.goal_logged[g.type] || 0) > 1800000) {
+          R.goal_logged[g.type] = now();
+          say("Farm goal " + g.type + " skipped: " + v.why, "#CF575F");
+        }
+        continue;
+      }
+      const last = R.goal_end[g.type] || 0;
+      if (!best || last < best.last) best = { g, v, last };
+    }
+    return best;
+  }
+  const loot_text = (o) => {
+    const k = Object.keys(o);
+    return k.length ? k.map((n) => o[n] + "x " + n).join(", ") : "nothing";
+  };
+  // Sean 2026-11-20: every item this character loots is counted (since the script started) and sent to the Merchant in the gear report; he filters out the Christmas items and puts the rest in the hourly report / sheet
+  var drops = {}; // (var + the guard: the gear report can run before this line is reached)
+  function drops_out() {
+    if (!drops) return {};
+    const k = Object.keys(drops).sort((a, b) => drops[b] - drops[a]).slice(0, 40);
+    const o = {};
+    for (const n of k) o[n] = drops[n];
+    return o;
+  }
+  try {
+    // v5: what dropped while a goal was running (and the all-time drop count above; one hook for both)
+    character.on("loot", (d) => {
+      if (d) for (const it of d.items || []) if (it && it.name) drops[it.name] = (drops[it.name] || 0) + (it.q || 1);
+      const g = R.goal;
+      if (!g || !d) return;
+      for (const it of d.items || []) if (it && it.name) g.loot[it.name] = (g.loot[it.name] || 0) + (it.q || 1);
+    });
+  } catch (e) {}
+  function end_goal(why, cool_ms) {
+    const g = R.goal;
+    if (!g) return;
+    say("Farm goal " + g.name + " ended: " + why, "#51D2E1");
+    {
+      // v5: result of this session, and the running total for this type
+      const mins = Math.round((now() - g.started) / 60000);
+      const st = (R.goal_stats[g.type] = R.goal_stats[g.type] || { runs: 0, seen_runs: 0, kills: 0, ms: 0, loot: {} });
+      st.runs++;
+      if (g.first_seen) st.seen_runs++;
+      st.kills += g.kills;
+      st.ms += now() - g.started;
+      for (const n in g.loot) st.loot[n] = (st.loot[n] || 0) + g.loot[n];
+      say(
+        "Farm goal " + g.name + " result: " + mins + " min, " + (g.first_seen ? "seen (first after " + Math.round(g.first_seen / 60000) + " min)" : "never seen") + ", kills ~" + g.kills + ", " + Object.keys(g.visited).length + " of " + g.areas + " areas searched, loot: " + loot_text(g.loot) +
+          " | all sessions so far: " + st.runs + " (seen in " + st.seen_runs + "), " + st.kills + " kills, " + Math.round(st.ms / 60000) + " min, loot: " + loot_text(st.loot),
+        "#51D2E1"
+      );
+    }
+    R.goal_end[g.type] = now();
+    if (cool_ms) R.goal_cool[g.type] = now() + cool_ms;
+    R.goal = null;
+    R.lock = null;
+    R.goal_check_at = now() + 5000;
+  }
+  // true = he is walking / waiting for the goal monster; false = nothing to do here (monster in view -> normal combat, or no goal)
+  async function goal_step() {
+    if (!goals_on()) {
+      if (R.goal) end_goal("switched off", 0);
+      return false;
+    }
+    if (hunt_state() && R.mh && R.mh.verdict && R.mh.verdict.ok) return false; // an accepted Daisy hunt wins
+    let g = R.goal;
+    if (!g) {
+      if (now() < R.goal_check_at) return false;
+      R.goal_check_at = now() + 20000;
+      const pick = goal_pick();
+      if (!pick) return false;
+      if (courier_on() && is_leader() && party_min_potions() <= CFG.COURIER_QUIET_AT && now() - (R.goal_gate_since || (R.goal_gate_since = now())) < 600000) {
+        if (now() - (R.goal_gate_note || 0) > 300000) {
+          R.goal_gate_note = now();
+          say("Farm goal " + pick.v.name + " waits for a potion restock first (someone is at " + party_min_potions() + ")", "#E1A951");
+        }
+        return false;
+      }
+      R.goal_gate_since = 0;
+      R.goal_start[pick.g.type] = now();
+      g = R.goal = {
+        cfg: pick.g,
+        type: pick.g.type,
+        name: pick.v.name,
+        started: now(),
+        near_since: 0,
+        patrol_at: 0,
+        busy: false,
+        fails: 0,
+        box_fails: 0,
+        visited: {}, // v5: areas already searched in this goal's sweep
+        areas: spawn_area_count(pick.g.type), // v5: counted once per goal (the loop runs this step many times a second)
+        ids: {}, // v5: goal monsters in view (id -> last hp fraction), to estimate kills
+        kills: 0,
+        first_seen: 0, // ms after the start when one was first in view
+        loot: {},
+        note_at: 0,
+        bad: (R.goal_bad[pick.g.type] = R.goal_bad[pick.g.type] || {}),
+      };
+      say(
+        "Farm goal: " +
+          g.name +
+          " for " +
+          (pick.g.session_min || 30) +
+          " min. One kill ~" +
+          Math.round(pick.v.est.ttk) +
+          "s. " +
+          (pick.v.est.notes.join("; ") || "no listed drops"),
+        "#5BCB5B"
+      );
+    }
+    const def = G.monsters[g.type] || {};
+    if (now() - g.started > (g.cfg.session_min || 30) * 60000) {
+      end_goal("session time is up", 0);
+      return false;
+    }
+    const seen = visible_monsters().filter((e) => e.mtype === g.type);
+    {
+      // v5: kill estimate (a goal monster that vanished at low HP), first sighting, and the 1-minute progress line
+      const here = {};
+      for (const e of seen) {
+        here[e.id] = true;
+        g.ids[e.id] = { hp: e.max_hp ? e.hp / e.max_hp : 1, at: now() };
+      }
+      for (const id in g.ids)
+        if (!here[id] && now() - g.ids[id].at > 1500) {
+          if (g.ids[id].hp < 0.35) g.kills++;
+          delete g.ids[id];
+        }
+      if (seen.length && !g.first_seen) g.first_seen = now() - g.started || 1;
+      if (now() - g.note_at >= CFG.GOAL_NOTE_MS) {
+        g.note_at = now();
+        const where = seen.length
+          ? seen.length + " in view (" + Math.round((seen[0].max_hp ? seen[0].hp / seen[0].max_hp : 1) * 100) + "% HP)"
+          : g.near_since
+          ? "searching area " + (Object.keys(g.visited).length + 1) + " of " + g.areas + " (" + Math.round((now() - g.near_since) / 1000) + "s there)"
+          : "walking to " + (g.areas > 1 ? "area " + (Object.keys(g.visited).length + 1) + " of " + g.areas : "the spawn");
+        say(
+          "Goal: " + g.name + " - " + Math.round((now() - g.started) / 60000) + " of " + (g.cfg.session_min || 30) + " min | " + where + " | at " + character.map + " " + Math.round(character.x) + "," + Math.round(character.y) + " | kills ~" + g.kills + ", loot: " + loot_text(g.loot),
+          "#5BCB5B"
+        );
+      }
+    }
+    if (seen.length) {
+      g.near_since = g.near_since || now();
+      g.seen_at = now();
+      if (character.hp >= character.max_hp * 0.7) {
+        const worst = Math.max.apply(null, seen.map(difficulty_of));
+        if (worst > CFG.GOAL_MAX_DIFFICULTY) {
+          end_goal(
+            "rated " +
+              (worst >= 2 ? "hard" : "difficulty " + worst) +
+              " up close",
+            30 * 60000
+          );
+          return false;
+        }
+      }
+      return false; // in view: normal combat (it is a priority target)
+    }
+    if (g.busy || smart.moving || is_moving(character)) return true;
+    const sweep = g.areas > 1;
+    const spawn = nearest_spawn(g.type, g.bad, sweep ? g.visited : null);
+    if (!spawn) {
+      if (sweep && Object.keys(g.visited).length) {
+        end_goal("searched every " + g.name + " spawn area without seeing it", CFG.GOAL_SWEEP_REST_MS);
+        return false;
+      }
+      end_goal("no reachable " + g.name + " spawn left", 30 * 60000);
+      return false;
+    }
+    const bx0 = spawn.box;
+    const near =
+      character.map === spawn.map &&
+      (d2(character, spawn) <= CFG.HUNT_ARRIVE_RADIUS ||
+        (character.x >= bx0[1] - 80 &&
+          character.x <= bx0[3] + 80 &&
+          character.y >= bx0[2] - 80 &&
+          character.y <= bx0[4] + 80));
+    if (!near) g.near_since = 0;
+    let dest = spawn;
+    if (near) {
+      g.near_since = g.near_since || now();
+      if (sweep && now() - g.near_since > CFG.GOAL_BOX_WAIT_MS) {
+        g.visited[spawn.map + ":" + spawn.box.slice(1).join(",")] = now();
+        g.near_since = 0;
+        g.box_fails = 0;
+        say("Not here (" + Object.keys(g.visited).length + " of " + g.areas + " " + g.name + " spawn areas searched) - trying the next one", "#E1A951");
+        return true;
+      }
+      if (!sweep && now() - g.near_since > CFG.GOAL_WAIT_MS) {
+        end_goal(
+          "not in view after " +
+            Math.round(CFG.GOAL_WAIT_MS / 1000) +
+            "s (respawning)",
+          def.respawn > 0 ? def.respawn * 1000 : 600000
+        );
+        return false;
+      }
+      if (now() - g.patrol_at < 6000) return true;
+      g.patrol_at = now();
+    }
+    if (near || g.box_fails > 0) {
+      const bx = spawn.box;
+      dest = {
+        map: spawn.map,
+        x: bx[1] + Math.random() * (bx[3] - bx[1]),
+        y: bx[2] + Math.random() * (bx[4] - bx[2]),
+      };
+      log_move(dest, "searching for " + g.name);
+    } else log_move(dest, "heading to " + g.name + " (farm goal)");
+    g.busy = true;
+    call(() => smart_move(dest)).then((r) => {
+      g.busy = false;
+      if (r.failed || r.success === false) {
+        g.fails++;
+        g.box_fails++;
+        say(
+          "Could not walk to " +
+            describe_dest(dest) +
+            " (" +
+            (r.reason || "no path") +
+            ") - failure " +
+            g.fails +
+            "/" +
+            CFG.GOAL_MAX_PATH_FAILS,
+          "#CF575F"
+        );
+        if (g.box_fails >= 2) {
+          g.bad[spawn.map + ":" + spawn.box.slice(1).join(",")] = true;
+          g.box_fails = 0;
+        }
+        if (g.fails >= CFG.GOAL_MAX_PATH_FAILS && R.goal === g)
+          end_goal("no path to " + g.name, 30 * 60000);
+      } else {
+        g.fails = 0;
+        g.box_fails = 0;
+      }
+    });
+    return true;
+  }
+
+  // ========================== BOSS EVENTS ==========================
+  const boss_on = () => {
+    if (!CFG.BOSS_EVENTS_ENABLED) return false;
+    try {
+      const v = String(get("boss_events") || "").toLowerCase();
+      if (v === "off" || v === "none" || v === "false" || v === "0") return false;
+    } catch (e) {}
+    return true;
+  };
+  const dur_text = (ms) => (ms >= 90000 ? Math.round(ms / 60000) + " min" : Math.round(ms / 1000) + " s");
+  const boss_cfg = (type) => CFG.BOSS_EVENTS.find((b) => b.type === type && b.enabled !== false);
+  function server_boss(type) {
+    try {
+      const b = parent.S && parent.S[type];
+      return b && typeof b === "object" && b.live ? b : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  function end_boss(why, preempted) {
+    const b = R.boss;
+    if (!b) return;
+    say("Boss event " + b.name + " ended: " + why, "#51D2E1");
+    R.boss_end[b.type] = now();
+    if (preempted) R.boss_check_at = 0; // look for the higher-priority boss at once
+    if (CFG.BOSS_AFTER_TRIP && why !== "switched off" && !preempted) R.post_boss = { at: now(), name: b.name };
+    R.boss = null;
+    R.lock = null;
+    R.goal_check_at = now() + 5000;
+  }
+  // true = he is walking to / waiting for the boss (the party follows him); false = nothing to do here, or the boss is in view -> normal combat
+  // a boss with a post is not chased: the party waits there. post: true = CFG.SAFE_SPOT, or {map,x,y}
+  const boss_post = (cfg) => (cfg && cfg.post ? (cfg.post === true ? CFG.SAFE_SPOT : cfg.post) : null);
+  // does the server's report count as "he is around"? (a boss without a post: any live report; with a post: only when he is near it)
+  function boss_near(cfg, sb) {
+    if (!sb) return false;
+    const post = boss_post(cfg);
+    if (!post) return true;
+    return sb.map === post.map && Number.isFinite(Number(sb.x)) && d2({ x: Number(sb.x), y: Number(sb.y) }, post) <= (cfg.post_radius || 600);
+  }
+  // v5: is the party in bees-only mode? the leader knows (party_bees_only), followers are told in party_state
+  const bees_mode = () => (is_leader() ? !!party_bees_only() : !!(R.leader && R.leader.bees && now() - R.leader.at < CFG.STATE_STALE_MS));
+  async function boss_step() {
+    if (!boss_on()) {
+      if (R.boss) end_boss("switched off");
+      return false;
+    }
+    if (!R.boss) {
+      if (now() < R.boss_check_at) return false;
+      R.boss_check_at = now() + CFG.BOSS_CHECK_MS;
+      // manual start from the game console:  set("boss_force", "grinch")  or  set("boss_force", "grinch:main,120,-80")  (map,x,y when the server shows no position)
+      let forced = null;
+      try {
+        const fv = String(get("boss_force") || "");
+        if (fv) {
+          set("boss_force", "");
+          const m = fv.match(/^([a-z0-9_]+)(?::([a-z0-9_]+),(-?\d+),(-?\d+))?$/i);
+          const fc = m && CFG.BOSS_EVENTS.find((b) => b.type === m[1]);
+          if (!fc) say("boss_force: '" + fv + "' is not one of " + CFG.BOSS_EVENTS.map((b) => b.type).join("/") + " (format: grinch or grinch:map,x,y)", "#CF575F");
+          else forced = { cfg: fc, pos: m[2] ? { map: m[2], x: Number(m[3]), y: Number(m[4]) } : null };
+        }
+      } catch (e) {}
+      if (forced) {
+        const cfg = forced.cfg;
+        const sb0 = server_boss(cfg.type);
+        const def0 = G.monsters[cfg.type] || {};
+        R.boss = { cfg, type: cfg.type, name: def0.name || cfg.type, started: now(), last_seen: now(), pos: forced.pos, busy: false, move_at: 0, log_at: 0, hp0: Number((sb0 && sb0.hp) || def0.hp) || 0 };
+        R.lock = null;
+        say("Boss event started by hand: " + R.boss.name + (forced.pos ? " at " + forced.pos.map + " " + forced.pos.x + "," + forced.pos.y : sb0 ? " (server position)" : " - no position known, searching the spawn / waiting for him to show") + ". Staying on him until he has been gone " + dur_text(cfg.lose_ms) + ".", "#E0A040");
+      }
+      for (const cfg of forced ? [] : CFG.BOSS_EVENTS) {
+        if (cfg.enabled === false || now() - (R.boss_end[cfg.type] || 0) < 60000 || now() < (R.boss_skip[cfg.type] || 0)) continue;
+        if (bees_mode() && CFG.BOSS_WHEN_BEES_ONLY.indexOf(cfg.type) === -1) continue; // v5: a weak party (the Priest is still low level) only joins the listed events
+        const sb = server_boss(cfg.type);
+        const seen = visible_monsters().filter((e) => e.mtype === cfg.type);
+        if (!boss_near(cfg, sb) && !seen.length) continue;
+        const def = G.monsters[cfg.type] || {};
+        const hp = Number((sb && sb.hp) || (seen[0] && seen[0].hp) || def.hp) || 0;
+        const size = 1 + CFG.PARTY_MEMBERS.length;
+        const dps = Math.max(1, character.attack * character.frequency * CFG.HUNT_EFFICIENCY * size);
+        R.boss = { cfg, type: cfg.type, name: def.name || cfg.type, started: now(), last_seen: now(), pos: null, busy: false, move_at: 0, log_at: 0, hp0: hp };
+        R.lock = null;
+        say(
+          "Boss event: " + R.boss.name + " is up" + (sb && sb.map ? " at " + sb.map + " " + Math.round(sb.x) + "," + Math.round(sb.y) : "") + (boss_post(cfg) ? "; the party waits at the post (" + boss_post(cfg).map + " " + boss_post(cfg).x + "," + boss_post(cfg).y + ") and shoots him when he is in range" : "") + ". HP now " + Math.round(hp / 1000) + "k (game data says " + Math.round((def.hp || 0) / 1000) + "k); the party of " + size + " needs about " + Math.round(hp / dps / 60) + " min at ~" + Math.round(dps) + " damage/s. Staying on him until he has been gone " + dur_text(cfg.lose_ms) + ".",
+          "#E0A040"
+        );
+        break;
+      }
+      if (!R.boss) return false;
+    }
+    if (R.luck_boss_key !== R.boss.started) {
+      R.luck_boss_key = R.boss.started;
+      if (CFG.LUCK_STOP && !boss_post(R.boss.cfg)) { R.luck_need = { why: "boss " + R.boss.name, at: now() }; return true; } // the post bosses (Grinch) are fought in town next to the Merchant, who buffs everybody there
+    }
+    const b = R.boss;
+    const sb = server_boss(b.type);
+    const seen = visible_monsters().filter((e) => e.mtype === b.type);
+    R.wiggle = !!(CFG.GRINCH_CIRCLE && b.type === "grinch" && boss_post(b.cfg) && sb && boss_near(b.cfg, sb) && character.map === boss_post(b.cfg).map && d2(character, boss_post(b.cfg)) <= 300); // (only once he stands at the post) told to the Warrior and the Priest: they circle too while they cannot see him
+    if (!R.wiggle || seen.length) R.wig = null;
+    if (seen.length) {
+      b.last_seen = now();
+      b.pos = { map: character.map, x: seen[0].x, y: seen[0].y };
+    } else if (boss_near(b.cfg, sb)) b.last_seen = now();
+    if (boss_post(b.cfg)) b.pos = boss_post(b.cfg); // never chase: the post is the destination
+    else if (sb && sb.map && Number.isFinite(Number(sb.x))) b.pos = { map: sb.map, x: Number(sb.x), y: Number(sb.y) };
+    // v5: BOSS_EVENTS is in priority order (Grinch first). A lower-priority event (Snowman) gives way when a higher one turns up.
+    const bi = CFG.BOSS_EVENTS.indexOf(b.cfg);
+    for (let k = 0; k < bi; k++) {
+      const c = CFG.BOSS_EVENTS[k];
+      if (c.enabled === false || now() < (R.boss_skip[c.type] || 0) || now() - (R.boss_end[c.type] || 0) < 60000) continue;
+      if (boss_near(c, server_boss(c.type)) || visible_monsters().some((e) => e.mtype === c.type)) {
+        end_boss("a higher-priority boss (" + ((G.monsters[c.type] && G.monsters[c.type].name) || c.type) + ") is up", true);
+        return false;
+      }
+    }
+    const cap = b.cfg.max_ms !== undefined ? b.cfg.max_ms : CFG.BOSS_MAX_MS;
+    if (cap > 0 && now() - b.started > cap) {
+      R.boss_skip[b.type] = now() + CFG.BOSS_CAP_REST_MS;
+      end_boss("time cap of " + Math.round(cap / 60000) + " min reached - back to the bees (not joining " + b.name + " again for " + Math.round(CFG.BOSS_CAP_REST_MS / 60000) + " min)");
+      return false;
+    }
+    if (now() - b.last_seen > b.cfg.lose_ms) {
+      end_boss((b.cfg.lose_ms < 90000 && !sb ? "the server no longer lists him as live and he has not been seen for " : "not seen for ") + dur_text(b.cfg.lose_ms) + " - assuming he is dead");
+      return false;
+    }
+    if (now() - b.log_at >= CFG.BOSS_LOG_MS) {
+      b.log_at = now();
+      const hp = Number((sb && sb.hp) || (seen[0] && seen[0].hp)) || 0;
+      const mx = Number((sb && sb.max_hp) || (seen[0] && seen[0].max_hp) || (G.monsters[b.type] && G.monsters[b.type].hp)) || 0;
+      if (hp)
+        say("Boss " + b.name + ": " + Math.round(hp / 1000) + "k / " + Math.round(mx / 1000) + "k HP" + (mx ? " (" + Math.round((hp / mx) * 100) + "%)" : "") + (seen.length ? ", in view" : ", not in view") + (() => { try { const ps = party_names().map((n) => { const st = member_status(n); return st ? n + " " + st.hp + "/" + st.mp : null; }).filter(Boolean); return ps.length ? "; potions (hp/mp): " + ps.join(", ") : ""; } catch (e) { return ""; } })(), "#E0A040");
+      else say("Boss " + b.name + ": " + (seen.length ? "in view" : "not in view") + ", last sign " + Math.round((now() - b.last_seen) / 1000) + "s ago", "#E0A040");
+    }
+    if (seen.length && boss_post(b.cfg)) {
+      // waiting at the post: shoot him while he is in range, otherwise stay put (no chasing)
+      const t = seen[0];
+      if (get_target() !== t) change_target(t);
+      if (is_in_range(t) && !is_on_cooldown("attack")) await shoot(t);
+      return true;
+    }
+    if (seen.length) return false; // in view: normal combat (he is the priority target)
+    if (R.wiggle) {
+      if (!R.wig) R.wig = { x: character.x, y: character.y, a: 0, at: 0, since: now() };
+      if (now() - R.wig.since >= CFG.GRINCH_CIRCLE_AFTER_MS) {
+        if (now() - R.wig.at >= CFG.GRINCH_CIRCLE_STEP_MS) {
+          R.wig.at = now();
+          R.wig.a += Math.PI / 4;
+          if (!R.wig.said) { R.wig.said = true; say("The Grinch is listed near the post but not in view - walking a small circle to refresh the view", "#E0A040"); }
+          call(() => move(R.wig.x + Math.cos(R.wig.a) * CFG.GRINCH_CIRCLE_RADIUS, R.wig.y + Math.sin(R.wig.a) * CFG.GRINCH_CIRCLE_RADIUS));
+        }
+        return true;
+      }
+    }
+    if (b.busy || smart.moving) return true;
+    const sp = b.pos ? null : nearest_spawn(b.type, {});
+    const dest = b.pos || (sp && { map: sp.map, x: sp.x, y: sp.y });
+    if (!dest) return true; // no position known: wait for the server info or for him to show up
+    if (character.map === dest.map && d2(character, dest) <= 120) return true; // there already: hold, he teleports in and out
+    if (now() - b.move_at < CFG.BOSS_MOVE_MS) return true;
+    b.move_at = now();
+    b.busy = true;
+    log_move(dest, "going after " + b.name);
+    call(() => smart_move(dest)).then((r) => {
+      b.busy = false;
+      if (r.failed || r.success === false) say("Could not walk to " + describe_dest(dest) + " (" + (r.reason || "no path") + ") - trying again", "#CF575F");
+    });
+    return true;
+  }
+
+  // ========================== PARTY OF RANGERS ==========================
+  // Leader: tells every follower where he is and which monster he is farming; invites them to his party; starts them if they are offline.
+  // what the server answered when a character was started (a refusal here is how the running-character limit shows up)
+  function start_result(n, r) {
+    if (!alive()) return;
+    if (r && (r.failed || r.success === false)) {
+      if (/character_limit/i.test(JSON.stringify(r))) R.start_block_until = now() + 600000; // the account is at its running-character limit: stop asking for 10 minutes
+      say("Could not start " + n + ": " + (r.reason || r.message || JSON.stringify(r.detail || r).slice(0, 160)) + (R.start_block_until > now() ? " (account character limit: not trying again for 10 minutes)" : ""), "#CF575F");
+    } else say("Start of " + n + " answered: " + JSON.stringify(r).slice(0, 160), "#51D2E1");
+  }
+  // Stop code-started characters from the game console of the leader:  set("stop_characters", "followers")  or  set("stop_characters", "SexyLexy,SexyRexy")
+  // The leader reads the key once, stops those that are running (stop_character), and clears it so they are not stopped again.
+  function stop_requested() {
+    let v = "";
+    try {
+      v = String(get("stop_characters") || "").trim();
+    } catch (e) {}
+    if (!v) return;
+    try {
+      set("stop_characters", "");
+    } catch (e) {}
+    const want = v.toLowerCase() === "followers" ? CFG.PARTY_MEMBERS.concat(CFG.PARTY_SUPPORT) : v.split(/[\s,]+/).filter(Boolean);
+    let active = {};
+    try {
+      active = get_active_characters() || {};
+    } catch (e) {}
+    for (const n of want) {
+      if (n === character.name) continue; // never stops himself
+      if (!active[n]) {
+        say(n + " is not running - nothing to stop", "#E1A951");
+        continue;
+      }
+      say("Stopping " + n + " (stop_characters)", "#E1A951");
+      call(() => stop_character(n)).then((r) => {
+        if (r && r.failed) say("Could not stop " + n + ": " + (r.reason || JSON.stringify(r.detail || r).slice(0, 120)), "#CF575F");
+      });
+    }
+  }
+  // v5: the leader's position / goal message to everybody (also sent while he is away on a courier trip, so the Priest and Warrior follow him to town)
+  function send_party_state() {
+    R.state_sent_at = now();
+    // v5 (Sean 2026-11-18): on a town trip (potions / junk ladder, courier trip of his own) the Warrior and the Priest stay and keep fighting at the last field position instead of following him
+    const h = hunt_state();
+    const goal = R.boss
+      ? R.boss.type
+      : R.goal
+      ? R.goal.type
+      : h && R.mh && R.mh.verdict && R.mh.verdict.ok
+      ? h.id
+      : null;
+    // (Sean 2026-11-18) ...but once the leader has taken a hunt / goal / boss (or a forced farm) on the way, there is nothing to wait for at the old spot: the party follows him to it
+    const trip = !!(R.ladder || R.trip) && !goal && !R.force;
+    if (!trip && !character.rip) R.field = { map: character.map, x: Math.round(character.x), y: Math.round(character.y) };
+    const farm = R.field || { map: CFG.FARM_SPOT.map, x: CFG.FARM_SPOT.x, y: CFG.FARM_SPOT.y };
+      for (const n of CFG.PARTY_MEMBERS.concat(CFG.PARTY_SUPPORT))
+        if (n !== character.name)
+          call(() =>
+            send_cm(n, {
+              type: "party_state",
+              map: character.map,
+              x: Math.round(character.x),
+              y: Math.round(character.y),
+              goal,
+              trip,
+              farm,
+              bees: !!R.bees_only,
+              force: R.force ? R.force.type : null,
+              wiggle: !!R.wiggle,
+              types: goal ? [] : (CFG.TARGET_TYPES || []).slice(0, 5), // what the Warrior may pull when nothing is fighting yet
+            })
+          );
+  }
+  function leader_tick() {
+    if (!is_leader() || !CFG.PARTY_MEMBERS.length) return;
+    stop_requested();
+    courier_check();
+    if (now() - R.state_sent_at >= CFG.STATE_EVERY_MS) send_party_state();
+    if (now() - R.party_invite_at >= 20000) {
+      R.party_invite_at = now();
+      for (const n of CFG.PARTY_MEMBERS) {
+        if (n === character.name) continue;
+        try {
+          if (
+            CFG.PARTY_START_MEMBERS &&
+            now() >= (R.start_block_until || 0) &&
+            !get_active_characters()[n] &&
+            CFG.SELF_CODE_SLOT
+          ) {
+            say("Starting " + n + "...");
+            call_paced("start", () => start_character(n, CFG.SELF_CODE_SLOT)).then((r) => start_result(n, r));
+          }
+        } catch (e) {}
+      }
+      for (const n of CFG.PARTY_SUPPORT) {
+        if (n === character.name) continue;
+        try {
+          if (
+            CFG.PARTY_START_MEMBERS &&
+            now() >= (R.start_block_until || 0) &&
+            !get_active_characters()[n] &&
+            (CFG.PARTY_SUPPORT_SLOTS[n] || CFG.PRIEST_CODE_SLOT)
+          ) {
+            say(
+              "Starting " +
+                n +
+                " (support, code slot " +
+                (CFG.PARTY_SUPPORT_SLOTS[n] || CFG.PRIEST_CODE_SLOT) +
+                ")..."
+            );
+            call_paced("start", () => start_character(n, CFG.PARTY_SUPPORT_SLOTS[n] || CFG.PRIEST_CODE_SLOT)).then((r) => start_result(n, r));
+          }
+        } catch (e) {}
+      }
+    }
+  }
+  // ============================ COURIER TRIP ======================
+  // The leader never leaves the fight. When any Ranger runs low (or full), the leader picks the follower with the most potions
+  // as the courier. The courier: gives stopgap potions to anyone nearly out, collects junk and spare gold from the others, runs the
+  // normal need ladder once for the WHOLE party (one Merchant job), walks back and hands every Ranger his share and his gear.
+  function my_status() {
+    return {
+      hp: quantity(CFG.HP_POTION),
+      mp: quantity(CFG.MP_POTION),
+      free: free_slots(),
+      junk: handoff_slots().length,
+      gear: gear_slots().length,
+      gold: Math.floor(character.gold),
+      map: character.map,
+      busy: !!(R.ladder || R.courier),
+    };
+  }
+  function member_status(n) {
+    if (n === character.name) return my_status();
+    const e = R.levels[n];
+    return e && now() - e.at < CFG.STATE_STALE_MS * 2 ? e : null;
+  }
+  function party_min_potions() {
+    let m = Infinity;
+    for (const n of party_names()) {
+      const st = member_status(n);
+      if (st) m = Math.min(m, st.hp, st.mp);
+    }
+    return m;
+  }
+  function courier_check() {
+    if (!courier_on() || !is_leader()) return;
+    if (R.trip) {
+      if (now() - R.trip.at > CFG.COURIER_MAX_MS) {
+        say(
+          "Courier trip by " +
+            R.trip.courier +
+            " took too long - giving up on it",
+          "#CF575F"
+        );
+        R.trip = null;
+        R.courier_next = now() + CFG.COURIER_COOLDOWN_MS;
+      }
+      return;
+    }
+    if (now() < R.courier_next) return;
+    const members = {};
+    let trigger = null;
+    const topoff_check = !!(R.boss && !R.boss.topped && now() - R.boss.started > 10000);
+    if (topoff_check) R.boss.topped = true; // looked at once per event, whether or not a trip is needed
+    const quiet = !R.boss && !R.goal && !(hunt_state() && R.mh && R.mh.verdict && R.mh.verdict.ok); // v5: between events the restock starts early
+    for (const n of party_names()) {
+      const st = member_status(n);
+      if (!st) continue;
+      members[n] = { hp: st.hp, mp: st.mp, free: st.free, junk: st.junk, gear: st.gear || 0 };
+      if (trigger) continue;
+      if (Math.min(st.hp, st.mp) <= (quiet ? Math.max(CFG.COURIER_QUIET_AT, CFG.COURIER_POTION_AT) : R.boss ? Math.max(CFG.BOSS_COURIER_POTION_AT, CFG.COURIER_POTION_AT) : CFG.COURIER_POTION_AT))
+        trigger = n + " is low on potions";
+      else if (topoff_check && Math.min(st.hp, st.mp) < CFG.BOSS_TOPOFF_BELOW)
+        trigger = n + " starts the " + R.boss.name + " fight with " + Math.min(st.hp, st.mp) + " potions - top off first";
+      else if (
+        CFG.CLEAN_ENABLED &&
+        st.free <= CFG.CLEAN_WHEN_FREE_SLOTS &&
+        st.junk >= CFG.SELL_MIN_JUNK
+      )
+        trigger = n + " has a full bag";
+      else if (
+        quiet &&
+        CFG.GEAR_HANDOFF &&
+        (st.gear || 0) >= CFG.GEAR_TRIP_MIN &&
+        now() - (R.spare_trip_at || 0) > CFG.GEAR_TRIP_EVERY_MS
+      ) {
+        trigger = n + " carries spare gear for the Merchant to upgrade";
+        R.spare_trip_at = now();
+      }
+    }
+    if (R.post_boss && now() - R.post_boss.at > CFG.BOSS_AFTER_WINDOW_MS) R.post_boss = null;
+    if (!trigger && R.post_boss && now() - R.post_boss.at >= CFG.BOSS_AFTER_DELAY_MS && !R.boss) {
+      const has = Object.keys(members).some((n) => (members[n].junk || 0) + (members[n].gear || 0) >= CFG.BOSS_AFTER_MIN_ITEMS);
+      if (has) {
+        trigger = "the " + R.post_boss.name + " event is over - everyone's drops go to the Merchant";
+        R.post_boss = null;
+      } else if (now() - R.post_boss.at > CFG.BOSS_AFTER_DELAY_MS + 60000) R.post_boss = null; // nothing to hand over
+    }
+    let gear = false;
+    if (
+      !trigger &&
+      R.gear_ready_at &&
+      now() - R.gear_ready_at < CFG.GEAR_READY_MAX_MS
+    ) {
+      trigger = "better gear is waiting at the Merchant";
+      gear = true;
+    }
+    if (!trigger) return;
+    let best = null;
+    for (const n of CFG.PARTY_MEMBERS) {
+      if (n === character.name) continue;
+      const st = member_status(n);
+      if (!st || st.busy || st.map !== character.map) continue;
+      const score = Math.min(st.hp, st.mp);
+      if (!best || score > best.score) best = { n, score };
+    }
+    if (!best && CFG.LEADER_TRIP_WHEN_ALONE && !R.courier && !R.ladder && now() - R.started_at > 120000 && !CFG.PARTY_MEMBERS.some((n) => n !== character.name && R.levels[n] && now() - R.levels[n].at < 180000)) {
+      // v5: nobody else can go: the leader makes the trip himself
+      const sid = AL.job_id("c");
+      R.trip = { id: sid, courier: character.name, at: now(), self: true };
+      send_party_state(); // (a trip: the Warrior and the Priest stay and fight)
+      say("Courier trip: " + trigger + " - no follower Ranger is online, " + character.name + " goes to town himself", "#51D2E1");
+      courier_message(character.name, { type: "courier_go", id: sid, members, gear });
+      return;
+    }
+    if (!best) {
+      if (now() - R.courier_warn_at > 60000) {
+        R.courier_warn_at = now();
+        say(
+          "Courier trip needed (" + trigger + ") but no follower is free to go",
+          "#CF575F"
+        );
+      }
+      return;
+    }
+    const id = AL.job_id("c");
+    R.trip = { id, courier: best.n, at: now() };
+    say(
+      "Courier trip: " +
+        trigger +
+        " - " +
+        best.n +
+        " goes to town for everyone",
+      "#51D2E1"
+    );
+    call(() => send_cm(best.n, { type: "courier_go", id, members, gear }));
+  }
+  function courier_message(from, d) {
+    if (d.type === "courier_go") {
+      const self_trip = from === character.name && is_leader() && !!R.trip && R.trip.self && R.trip.id === d.id;
+      if (!self_trip && (!is_follower() || from !== CFG.PARTY_LEADER)) return;
+      if (R.courier || R.ladder) {
+        call(() =>
+          send_cm(from, {
+            type: "courier_done",
+            id: d.id,
+            ok: false,
+            reason: "busy",
+          })
+        );
+        return;
+      }
+      const members = {};
+      const n = (v) => Math.max(0, Math.min(1e6, Math.floor(Number(v) || 0)));
+      for (const k in d.members || {})
+        if (party_names().indexOf(k) !== -1) {
+          const m = d.members[k] || {};
+          members[k] = {
+            hp: n(m.hp),
+            mp: n(m.mp),
+            free: n(m.free),
+            junk: n(m.junk),
+            gear: n(m.gear),
+          };
+        }
+      members[character.name] = members[character.name] || {
+        hp: 0,
+        mp: 0,
+        free: 0,
+        junk: 0,
+        gear: 0,
+      };
+      R.courier = {
+        id: d.id,
+        members,
+        gear: !!d.gear,
+        phase: "queued",
+        buy: { hp: 0, mp: 0 },
+        goal: { hp: 0, mp: 0 },
+        got: {},
+        shares: {},
+      };
+      say(
+        "Courier trip for the party: " + Object.keys(members).join(", "),
+        "#51D2E1"
+      );
+    } else if (d.type === "courier_done") {
+      if (
+        is_leader() &&
+        R.trip &&
+        R.trip.id === d.id &&
+        R.trip.courier === from
+      ) {
+        say(
+          "Courier " +
+            from +
+            " is back (" +
+            (d.ok ? "ok" : "failed: " + (d.reason || "?")) +
+            ")",
+          d.ok ? "#5BCB5B" : "#CF575F"
+        );
+        R.trip = null;
+        R.gear_ready_at = 0; // the Merchant says again at his next sweep if more is waiting
+        R.courier_next = now() + CFG.COURIER_COOLDOWN_MS;
+      }
+    } else if (d.type === "courier_collect") {
+      courier_give(from, d);
+    } else if (d.type === "courier_collected") {
+      if (R.courier && R.courier.id === d.id)
+        R.courier.got[from] = {
+          items: Number(d.items) || 0,
+          gold: Number(d.gold) || 0,
+        };
+    }
+  }
+  const potion_slot = (name) =>
+    character.items.findIndex((it) => it && it.name === name);
+  async function give_potions(to, name, q) {
+    q = Math.min(q, quantity(name));
+    if (q <= 0) return 0;
+    const i = potion_slot(name);
+    if (i < 0) return 0;
+    const res = await call_paced("transfer", () => send_item(to, i, q));
+    if (res.failed) {
+      say(
+        "Could not give " + q + " " + name + " to " + to + ": " + res.reason,
+        "#CF575F"
+      );
+      return 0;
+    }
+    return q;
+  }
+  // another Ranger (the courier) asks for junk and spare gold
+  async function courier_give(to, d) {
+    const max = Math.max(
+      0,
+      Math.min(CFG.COURIER_JUNK_EACH, Math.floor(Number(d.max) || 0))
+    );
+    let items = 0;
+    for (const i of handoff_slots().slice(0, max)) {
+      const it = character.items[i];
+      if (!it) continue;
+      const res = await call_paced("transfer", () => send_item(to, i, it.q || 1));
+      if (!res.failed) items++;
+      await wait(150);
+    }
+    let gold = 0;
+    const surplus = Math.floor(character.gold - CFG.COURIER_GOLD_KEEP);
+    let p = null;
+    try {
+      p = get_player(to);
+    } catch (e) {}
+    if (
+      surplus >= CFG.SWEEP_MIN &&
+      p &&
+      p.map === character.map &&
+      d2(character, p) <= CFG.PAY_RANGE
+    ) {
+      const res = await call_paced("transfer", () => send_gold(to, surplus));
+      if (!res.failed) gold = surplus;
+    }
+    await call(() =>
+      send_cm(to, { type: "courier_collected", id: d.id, items, gold })
+    );
+  }
+  async function courier_collect(C) {
+    const others = Object.keys(C.members).filter((n) => n !== character.name);
+    // 1) stopgap potions for whoever is nearly out
+    for (const n of others) {
+      const m = C.members[n];
+      for (const [pot, key] of [
+        [CFG.HP_POTION, "hp"],
+        [CFG.MP_POTION, "mp"],
+      ])
+        if (
+          m[key] <= CFG.COURIER_POTION_AT &&
+          quantity(pot) - CFG.COURIER_STOPGAP >= CFG.COURIER_KEEP
+        ) {
+          const g = await give_potions(n, pot, CFG.COURIER_STOPGAP);
+          if (g) {
+            m[key] += g;
+            say("Stopgap: " + g + " " + pot + " to " + n);
+          }
+        }
+    }
+    // 2) junk and spare gold from the others, as much as my bag can take
+    // Sean 2026-11-19: a member with a bag full of junk (the Warrior with 30+ Rings of Joy) must not be held to an equal share: whoever needs less leaves his room to the others
+    let room = Math.max(0, free_slots() - 4);
+    const shares = {};
+    const order = others.slice().sort((x, y) => (((C.members[x] || {}).junk) || CFG.COURIER_JUNK_EACH) - (((C.members[y] || {}).junk) || CFG.COURIER_JUNK_EACH));
+    order.forEach((n, k) => {
+      const need = ((C.members[n] || {}).junk) || CFG.COURIER_JUNK_EACH;
+      const sh = Math.min(CFG.COURIER_JUNK_EACH, need, Math.floor(room / (order.length - k)));
+      shares[n] = sh;
+      room -= sh;
+    });
+    for (const n of others)
+      call(() => send_cm(n, { type: "courier_collect", id: C.id, max: shares[n] }));
+    const t0 = now();
+    while (
+      others.some((n) => !C.got[n]) &&
+      now() - t0 < CFG.COURIER_COLLECT_WAIT_MS
+    )
+      await wait(500);
+    const items = others.reduce(
+      (a, n) => a + ((C.got[n] && C.got[n].items) || 0),
+      0
+    );
+    const gold = others.reduce(
+      (a, n) => a + ((C.got[n] && C.got[n].gold) || 0),
+      0
+    );
+    say(
+      "Collected " +
+        items +
+        " item(s) and " +
+        gold +
+        " gold from " +
+        others.length +
+        " Ranger(s)"
+    );
+  }
+  // what to buy for the whole party, and what each Ranger gets back
+  function courier_size(C) {
+    const hp = {};
+    const mp = {};
+    let bhp = 0;
+    let bmp = 0;
+    for (const n in C.members) {
+      const mine = n === character.name;
+      const h = mine ? quantity(CFG.HP_POTION) : C.members[n].hp;
+      const m = mine ? quantity(CFG.MP_POTION) : C.members[n].mp;
+      hp[n] = Math.max(0, potion_target() - h);
+      mp[n] = Math.max(0, potion_target() - m);
+      bhp += hp[n];
+      bmp += mp[n];
+    }
+    // a gear-only trip still needs a Merchant meeting: order one potion so the normal job exists
+    if (C.gear && bhp === 0 && bmp === 0) bhp = 1;
+    C.shares = { hp, mp };
+    C.buy = { hp: bhp, mp: bmp };
+    C.goal = {
+      hp: quantity(CFG.HP_POTION) + bhp,
+      mp: quantity(CFG.MP_POTION) + bmp,
+    };
+  }
+  async function courier_deliver(C) {
+    const others = Object.keys(C.members).filter((n) => n !== character.name);
+    const pending = {};
+    for (const n of others) pending[n] = true;
+    const t0 = now();
+    while (
+      Object.keys(pending).length &&
+      now() - t0 < CFG.COURIER_DELIVER_WAIT_MS &&
+      alive()
+    ) {
+      if (await ladder_tick()) break; // died
+      const pos = is_leader() ? R.field || CFG.FARM_SPOT : leader_pos(); // v5: on his own trip the leader walks back to where the Warrior and the Priest stayed
+      if (
+        pos &&
+        (character.map !== pos.map || d2(character, pos) > CFG.FOLLOW_RADIUS)
+      ) {
+        const r = await travel(
+          { map: pos.map, x: pos.x, y: pos.y },
+          90000,
+          "back to the party"
+        );
+        if (r.failed) await wait(2000);
+      }
+      for (const n of Object.keys(pending)) {
+        let p = null;
+        try {
+          p = get_player(n);
+        } catch (e) {}
+        if (
+          !p ||
+          p.map !== character.map ||
+          d2(character, p) > CFG.PAY_RANGE + 50
+        )
+          continue;
+        // the courier never gives away his own last COURIER_KEEP (the Merchant was busy, or the order came in short)
+        const gh = await give_potions(
+          n,
+          CFG.HP_POTION,
+          Math.min(
+            C.shares.hp[n] || 0,
+            quantity(CFG.HP_POTION) - CFG.COURIER_KEEP
+          )
+        );
+        const gm = await give_potions(
+          n,
+          CFG.MP_POTION,
+          Math.min(
+            C.shares.mp[n] || 0,
+            quantity(CFG.MP_POTION) - CFG.COURIER_KEEP
+          )
+        );
+        for (const g of R.courier_gear.filter((x) => x.to === n)) {
+          const idx = find_gear(g.name, g.level);
+          if (idx < 0) continue;
+          await call(() =>
+            send_cm(n, {
+              type: "gear_give",
+              name: g.name,
+              level: g.level,
+              slot: g.slot,
+            })
+          );
+          const res = await call_paced("transfer", () => send_item(n, idx, 1));
+          if (!res.failed)
+            say(
+              "Gave " +
+                g.name +
+                " +" +
+                g.level +
+                " to " +
+                n +
+                " for his " +
+                g.slot,
+              "#5BCB5B"
+            );
+        }
+        R.courier_gear = R.courier_gear.filter((x) => x.to !== n);
+        say(
+          "Delivered to " + n + ": " + gh + " HP / " + gm + " MP potions",
+          "#5BCB5B"
+        );
+        delete pending[n];
+      }
+      await wait(1000);
+    }
+    return Object.keys(pending);
+  }
+  async function run_courier() {
+    const C = R.courier;
+    let ok = false;
+    let reason = "";
+    // the step loop (and with it leader_tick) waits while I am the courier: when the leader makes the trip himself the party must still hear where he is
+    const state_timer = is_leader() ? setInterval(() => alive() && send_party_state(), CFG.STATE_EVERY_MS) : null;
+    try {
+      C.phase = "collect";
+      await courier_collect(C);
+      courier_size(C);
+      // v5: tell the Merchant before leaving the field what the party needs, so potions and hands are ready when the courier arrives
+      try {
+        const nt = await AL.send(M, { type: "courier_notice", id: C.id, hp: C.buy.hp, mp: C.buy.mp, items: handoff_slots().length });
+        say("Told the Merchant: " + C.buy.hp + " " + CFG.HP_POTION + " + " + C.buy.mp + " " + CFG.MP_POTION + " to pick up, " + handoff_slots().length + " item(s) to sort" + (nt && nt.delivered === false ? " (he did not answer)" : ""), "#51D2E1");
+      } catch (e) {}
+      C.phase = "trip";
+      if (potion_need() || bag_need()) await run_ladder();
+      C.phase = "deliver";
+      const missed = await courier_deliver(C);
+      ok = !missed.length;
+      if (!ok) reason = "never met " + missed.join(", ");
+    } catch (e) {
+      reason = (e && e.message) || String(e);
+      say("Courier error: " + reason, "#CF575F");
+    } finally {
+      if (state_timer) clearInterval(state_timer);
+      R.courier = null;
+      R.courier_gear = R.courier_gear.filter(() => false);
+      R.ladder_next = 0;
+      if (R.trip && R.trip.self && R.trip.id === C.id) courier_message(character.name, { type: "courier_done", id: C.id, ok, reason }); // v5: my own trip
+      else
+        await call(() =>
+          send_cm(CFG.PARTY_LEADER, {
+            type: "courier_done",
+            id: C.id,
+            ok,
+            reason,
+          })
+        );
+    }
+  }
+
+  // Followers tell the leader their level, so he knows when the whole party is ready for the bigger goals
+  // v5: party membership without the Merchant. Followers ask the leader to let them in; the leader invites members that are online but not in his party
+  const party_has = (n) => {
+    try {
+      const p = get_party() || {};
+      return !!p[n];
+    } catch (e) {
+      return false;
+    }
+  };
+  // get_active_characters() only lists characters this game window knows about: characters Sean launched himself may be missing from it,
+  // so a member also counts as online when we heard from him lately (party_level / party_state) or can see him
+  const is_online = (n) => {
+    try {
+      if (get_active_characters()[n]) return true;
+    } catch (e) {
+      return true; // cannot tell: try anyway
+    }
+    try {
+      if (n === CFG.PARTY_LEADER && R.leader && now() - R.leader.at < 60000) return true;
+      const e = R.levels[n];
+      if (e && now() - e.at < 60000) return true;
+      if (parent.entities && parent.entities[n]) return true;
+    } catch (e2) {}
+    return false;
+  };
+  // the Merchant normally sends the invitations; when he is online the Rangers only step in after a member has been out of the party for a minute
+  const party_gap = (n) => {
+    if (party_has(n) || !is_online(n)) {
+      delete R.party_wait[n];
+      return false;
+    }
+    const since = R.party_wait[n] || (R.party_wait[n] = now());
+    return CFG.PARTY_ACCEPT_FROM !== CFG.MERCHANT_NAME || !is_online(CFG.MERCHANT_NAME) || now() - since > 60000;
+  };
+  function party_join_tick() {
+    if (!alive() || character.rip || now() - R.party_join_at < CFG.PARTY_JOIN_MS) return;
+    R.party_join_at = now();
+    if (is_follower()) {
+      if (party_has(CFG.PARTY_LEADER) || !is_online(CFG.PARTY_LEADER)) {
+        delete R.party_wait.leader;
+        return;
+      }
+      const since = R.party_wait.leader || (R.party_wait.leader = now());
+      if (CFG.PARTY_ACCEPT_FROM === CFG.MERCHANT_NAME && is_online(CFG.MERCHANT_NAME) && now() - since <= 60000) return; // (only when the Merchant leads the party, v5 way)
+      say("Not in " + CFG.PARTY_LEADER + "'s party - asking to join", "#51D2E1");
+      call(() => send_party_request(CFG.PARTY_LEADER));
+    } else if (is_leader() && CFG.PARTY_MEMBERS.length) {
+      const head = character.party || character.name;
+      if (head !== character.name && head === CFG.MERCHANT_NAME && CFG.PARTY_ACCEPT_FROM === CFG.MERCHANT_NAME) return; // the Merchant leads this party (v5 way): he sends the invites
+      for (const n of CFG.PARTY_MEMBERS.concat(CFG.PARTY_SUPPORT)) {
+        if (n === character.name || !party_gap(n)) continue;
+        say("Inviting " + n + " to the party", "#51D2E1");
+        call(() => send_party_invite(n));
+      }
+    }
+  }
+  setInterval(party_join_tick, 5000);
+  // v6: hand spare items to the Priest (not while the courier trip is under way: he carries them to the Merchant himself)
+  const { share_tick, share_give } = AL.runtime.bag_share({ CFG, S: R, say, alive, slots: () => handoff_slots(), free: () => free_slots(), gate: () => !in_trip() });
+  setInterval(share_tick, 5000);
+  function follower_tick() {
+    if (!is_follower() || now() - R.level_sent_at < CFG.STATE_EVERY_MS) return;
+    R.level_sent_at = now();
+    call(() =>
+      send_cm(
+        CFG.PARTY_LEADER,
+        Object.assign(
+          { type: "party_level", level: character.level },
+          my_status()
+        )
+      )
+    );
+  }
+  // Leader: true while any follower is still below PARTY_BEES_UNTIL_LEVEL (a follower never heard from counts for the first 3 minutes)
+  // v5: the first member (besides me) still below `limit`, or null; a member never heard from counts for the first 3 minutes, a silent one (5 min) no longer holds anyone back
+  function party_below(limit) {
+    if (!is_leader() || !CFG.PARTY_MEMBERS.length || !(limit > 0)) return null;
+    for (const n of CFG.PARTY_MEMBERS.concat(CFG.PARTY_SUPPORT)) {
+      if (n === character.name) continue;
+      const e = R.levels[n];
+      if (e ? now() - e.at < 300000 && e.level < limit : now() - R.started_at < 180000) return n;
+    }
+    return null;
+  }
+  function party_bees_only() {
+    let low = null;
+    if (
+      is_leader() &&
+      CFG.PARTY_MEMBERS.length &&
+      CFG.PARTY_BEES_UNTIL_LEVEL > 0
+    )
+      for (const n of CFG.PARTY_MEMBERS.concat(CFG.PARTY_SUPPORT)) {
+        if (n === character.name) continue;
+        const e = R.levels[n];
+        if (
+          e
+            ? now() - e.at < 300000 && e.level < CFG.PARTY_BEES_UNTIL_LEVEL // v5: a member that has been silent for 5 min (logged off) no longer holds the party back
+            : now() - R.started_at < 180000
+        ) {
+          low = n + (e ? " (level " + e.level + ")" : " (not heard from yet)");
+          break;
+        }
+      }
+    if (
+      (R.bees_only === null ? false : R.bees_only) !== !!low ||
+      R.bees_only === null
+    ) {
+      if (low)
+        say(
+          "Party farms bees only: " +
+            low +
+            " is below level " +
+            CFG.PARTY_BEES_UNTIL_LEVEL,
+          "#51D2E1"
+        );
+      else if (R.bees_only !== null)
+        say(
+          "Everyone is level " +
+            CFG.PARTY_BEES_UNTIL_LEVEL +
+            "+ - goals and hunts are back on",
+          "#5BCB5B"
+        );
+      R.bees_only = !!low;
+    }
+    return !!low;
+  }
+  // Every Ranger accepts the party invitation of the party leader (the Merchant) and nobody else's
+  globalThis.on_party_invite = function (name) {
+    if (!alive()) return;
+    if (name === CFG.PARTY_ACCEPT_FROM || (is_follower() && name === CFG.PARTY_LEADER)) {
+      say("Accepting the party invitation from " + name, "#51D2E1");
+      accept_party_invite(name);
+    }
+  };
+  // the leader lets his own members in when they ask (only while he heads the party himself)
+  globalThis.on_party_request = function (name) {
+    if (!alive() || !is_leader()) return;
+    if (CFG.PARTY_MEMBERS.indexOf(name) === -1 && CFG.PARTY_SUPPORT.indexOf(name) === -1) return;
+    if ((character.party || character.name) !== character.name) return;
+    say("Accepting the party request from " + name, "#51D2E1");
+    accept_party_request(name);
+  };
+  // Follower: true = he is on his way to the leader; false = he is close enough to fight (or has no leader news and farms alone)
+  async function follower_step() {
+    if (LEAD.held()) return; // Hold from the lead
+    const pos = leader_pos();
+    if (!pos) return false;
+    const near =
+      character.map === pos.map && d2(character, pos) <= CFG.FOLLOW_FAR_PX;
+    if (near) {
+      R.follow_fails = 0;
+      return false;
+    }
+    if (smart.moving || is_moving(character)) return true;
+    if (CFG.HUNT_DANGER_TYPES.length && now() < (R.danger_until || 0) && danger_server(pos)) {
+      if (now() - (R.danger_log || 0) > 120000) {
+        R.danger_log = now();
+        say("DANGER: the server shows a " + CFG.HUNT_DANGER_TYPES.join("/") + " near " + CFG.PARTY_LEADER + " - staying in town", "#CF575F");
+      }
+      R.follow_block_until = Math.max(R.follow_block_until, now() + 15000);
+    }
+    if (now() < R.follow_block_until || now() - R.follow_at < 3000) return true;
+    R.follow_at = now();
+    const dest = {
+      map: pos.map,
+      x: pos.x + (Math.random() - 0.5) * 120,
+      y: pos.y + (Math.random() - 0.5) * 120,
+    };
+    log_move(dest, "following " + CFG.PARTY_LEADER);
+    call(() => smart_move(dest)).then((r) => {
+      if (r && (r.failed || r.success === false)) {
+        R.follow_fails++;
+        R.follow_block_until = now() + Math.min(60000, 5000 * R.follow_fails);
+        say(
+          "Cannot reach " +
+            CFG.PARTY_LEADER +
+            " (" +
+            (r.reason || "no path") +
+            ") - retrying in " +
+            Math.round((R.follow_block_until - now()) / 1000) +
+            "s",
+          "#CF575F"
+        );
+      } else R.follow_fails = 0;
+    });
+    return true;
+  }
+
+  async function fight() {
+    const target = pick_target();
+    if (!target) return tether();
+
+    if (get_target() !== target) change_target(target);
+    if (!is_in_range(target)) {
+      // Walk toward it - but never hammer the pathfinder. One step per ~1.2s, never while a path search / walk is running,
+      // and a target we cannot get closer to (no path: "Path not found!") is ignored for 30s so he picks another one.
+      if (!is_moving(character) && !smart.moving && now() - R.xmove_at > 1200) {
+        const xl = R.xmove_last;
+        if (xl && xl.id === target.id && d2(character, xl) < 5) {
+          if (++xl.fails >= 3) {
+            R.unreach[target.id] = now() + 30000;
+            R.lock = null;
+            R.xmove_last = null;
+            say(
+              "Cannot get closer to " +
+                target.mtype +
+                " at (" +
+                Math.round(target.x) +
+                ", " +
+                Math.round(target.y) +
+                ") - ignoring it for 30s",
+              "#CF575F"
+            );
+            return;
+          }
+        } else
+          R.xmove_last = {
+            id: target.id,
+            x: character.x,
+            y: character.y,
+            fails: 0,
+          };
+        R.xmove_at = now();
+        call(() =>
+          xmove(
+            character.x + (target.x - character.x) / 2,
+            character.y + (target.y - character.y) / 2
+          )
+        );
+      }
+      return;
+    }
+    if (is_on_cooldown("attack")) return;
+    if (escort_hold(target)) return;
+    await shoot(target);
+  }
+  // the Warrior takes the first hit: while he is here (his heartbeat is fresh), has no focus yet and the monster has no target, hold fire for a few seconds
+  function escort_hold(target) {
+    const f = R.focus;
+    if (!CFG.ESCORT_WAIT_MS || !CFG.FOCUS_TARGET || !f || now() - f.at > CFG.FOCUS_MAX_AGE_MS) return false;
+    if (character.hp / character.max_hp < 0.6) return false;
+    const fe = f.id ? parent.entities[f.id] : null;
+    if (f.id ? !fe || fe.dead || fe.target : target.target) return false; // somebody already has its aggro: fire
+    if (!R.hold || R.hold.id !== target.id) R.hold = { id: target.id, since: now() };
+    return now() - R.hold.since < CFG.ESCORT_WAIT_MS;
+  }
+
+  function next_delay() {
+    const t = parent.next_skill && parent.next_skill.attack;
+    const ms = t ? +t - now() : 0;
+    return Math.min(250, Math.max(25, ms));
+  }
+
+  // ============================== PACED REQUESTS (v5) ============================
+  // start_character, send_item and send_gold go through ONE queue: one at a time, each at least a configured gap after the previous
+  // request of its kind finished (CFG.PACE_START_MS, CFG.PACE_TRANSFER_MS). Chat messages (send_cm), skills and loot are not queued.
+  const PACE = { chain: Promise.resolve(), last: { start: 0, transfer: 0 }, n: 0, held_ms: 0 };
+  function paced(kind, fn) {
+    const job = PACE.chain.then(async () => {
+      const gap = (kind === "start" ? CFG.PACE_START_MS : CFG.PACE_TRANSFER_MS) - (Date.now() - PACE.last[kind]);
+      if (gap > 0) {
+        PACE.held_ms += gap;
+        await wait(gap);
+      }
+      PACE.n++;
+      try {
+        return await fn();
+      } finally {
+        PACE.last[kind] = Date.now();
+      }
+    });
+    PACE.chain = job.catch(() => {});
+    return job;
+  }
+  const call_paced = (kind, fn) => paced(kind, () => call(fn));
+
+  // ===== v5 (Sean 2026-11-20): the support (Warrior, Priest) must be with the leader; if they are not for a minute, the leader goes to them =====
+  function escort_missing() {
+    const out = [];
+    for (const n of CFG.PARTY_SUPPORT) {
+      if (n === character.name) continue;
+      const e = R.levels[n];
+      if (!e || now() - e.at > CFG.ESCORT_FRESH_MS || e.x === undefined || e.y === undefined || !e.map) continue; // no fresh news (offline, dead): nothing to walk to
+      if (e.map === character.map && Math.hypot(e.x - character.x, e.y - character.y) <= CFG.ESCORT_NEAR_PX) continue;
+      out.push({ n, map: e.map, x: e.x, y: e.y });
+    }
+    return out;
+  }
+  const escort_off = () => !CFG.ESCORT || !is_leader() || character.rip || !!(R.ladder || R.courier || R.retreat_go || R.boss || R.trip && R.trip.self) || grinch_fight() || now() - R.started_at < 120000; // (a junk / potion trip of my own, a courier trip, a retreat, a boss event: not now)
+  function escort_due() {
+    if (escort_off()) { R.escort_since = 0; return false; }
+    const miss = escort_missing();
+    if (!miss.length) { R.escort_since = 0; R.escort_prev = null; return false; }
+    if (!R.escort_since) R.escort_since = now();
+    // they are on their way (the leader just left on a hunt / goal / boss and they follow): coming closer or changing map every few seconds = still travelling, the clock restarts
+    if (now() - (R.escort_chk || 0) >= 5000) {
+      R.escort_chk = now();
+      const cur = {};
+      for (const m of miss) cur[m.n] = { map: m.map, d: m.map === character.map ? Math.hypot(m.x - character.x, m.y - character.y) : 1e9 };
+      for (const n of Object.keys(cur)) {
+        const p0 = R.escort_prev && R.escort_prev[n];
+        if (p0 && (p0.map !== cur[n].map || cur[n].d < p0.d - 80)) R.escort_since = now();
+      }
+      R.escort_prev = cur;
+    }
+    return now() - R.escort_since >= CFG.ESCORT_AFTER_MS;
+  }
+  async function escort_step() {
+    const miss = escort_missing();
+    if (!miss.length) { R.escort_since = 0; return; }
+    const m = miss[0];
+    say("ESCORT: " + miss.map((x) => x.n).join(" and ") + " not with me for " + Math.round((now() - R.escort_since) / 1000) + " s (" + m.n + " is on " + m.map + " " + Math.round(m.x) + "," + Math.round(m.y) + ", I am on " + character.map + " " + Math.round(character.x) + "," + Math.round(character.y) + ") - going to them", "#CF575F");
+    R.escort_hist = (R.escort_hist || []).filter((t) => now() - t < 600000);
+    R.escort_hist.push(now());
+    const fm = CFG.FARM_MONSTER || (CFG.TARGET_TYPES || [])[0] || "";
+    if (R.escort_hist.length >= 2 && fm) {
+      (R.avoid = R.avoid || {})[fm] = now() + CFG.DEATH_AVOID_MS;
+      R.escort_hist = [];
+      say("ESCORT: the party keeps splitting on " + fm + " - skipping it for " + Math.round(CFG.DEATH_AVOID_MS / 60000) + " min", "#CF575F");
+      rotate_farm(true);
+    }
+    R.escort_since = now(); // give them time to settle before looking again
+    await travel({ map: m.map, x: Math.round(m.x), y: Math.round(m.y) }, 60000, "to " + m.n);
+  }
+  // ============================== STEP TABLE (v5) ============================
+  // The brain loop (`brain`) is ONE sequential loop that runs every 25-250 ms (the attack cooldown). Each pass runs these steps in
+  // this order; the first "gate" step that handles the pass ends it. The order is exactly v4's:
+  //   survive > junk destroy > courier trip > need ladder > [housekeeping: loot, party ticks, boss hand-over]
+  //   > follower: follow the leader | leader: boss event > monster hunt > farm goal > fight (fallback, always runs)
+  // kind "gate": true ends the pass at once (no pause); "gate_wait": true ends it after the usual attack-cooldown pause;
+  // "always": runs on every pass it is reached; "end": the fallback (fight).
+  // Per step v5 counts how many passes it handled and how long it took, so the status line shows what the loop is really spending
+  // its time on (for example whether a hunt or a goal keeps the party away from the bees).
+  const STEP = { ctx: {}, tick: 0, started: Date.now(), prev: null, log_at: Date.now(), cur: null, busy: null, busy_at: 0 };
+  const STEPS = [];
+  const step_add = (s) => (s.n = 0, s.ms = 0, s.err = 0, STEPS.push(s), s);
+  step_add({ name: "survive", kind: "gate", run: () => survive() });
+  // v5: a dangerous roamer (Green Jr.) close to ANY Ranger: run to town (and from another map's town back to the main map)
+  step_add({ name: "boar", kind: "gate", due: () => boar_due(), run: () => boar_step() });
+  step_add({ name: "retreat", kind: "gate", due: () => !!R.retreat_go, run: () => retreat_step() });
+  step_add({ name: "danger", kind: "gate", due: () => CFG.HUNT_DANGER_TYPES.length > 0 && now() >= (R.danger_next || 0) && !!danger_seen(), run: () => danger_step() });
+  step_add({ name: "destroy", kind: "always", run: async () => {
+    // junk set to "destroy" never needs the Merchant or a trip
+    if (CFG.JUNK_ACTION === "destroy" && now() - (R.destroy_at || 0) > 4000 && free_slots() <= CFG.CLEAN_WHEN_FREE_SLOTS && junk_slots().length >= CFG.SELL_MIN_JUNK) {
+      R.destroy_at = now();
+      const r = await dump_junk("destroy");
+      if (r.done) say("Destroyed " + r.done + " junk item(s); " + free_slots() + " slots free");
+    }
+    return false;
+  } });
+  // the leader asked us to be the courier: collect, town trip, hand everything out
+  step_add({ name: "courier", kind: "gate", due: () => !!(R.courier && R.courier.phase === "queued"), run: async () => { await run_courier(); return true; } });
+  // a need (low potions / full bag) pauses the hunt and runs the ladder
+  step_add({ name: "ladder", kind: "gate", due: () => now() >= R.ladder_next && have_need(), run: async () => { await run_ladder(); return true; } });
+  step_add({ name: "housekeeping", kind: "always", run: async () => {
+    call(() => loot()); // throttled by the game's safeties, unlike raw open_chest
+    leader_tick();
+    follower_tick();
+    await boss_dump_step();
+    return false;
+  } });
+  step_add({ name: "luck", kind: "gate", due: () => luck_due(), run: async () => { await luck_stop(); return true; } });
+  step_add({ name: "escort", kind: "gate", due: () => escort_due(), run: async () => { await escort_step(); return true; } });
+  step_add({ name: "follower", kind: "gate_wait", due: () => is_follower(), run: () => follower_step() });
+  step_add({ name: "boss", kind: "gate_wait", due: () => !is_follower(), run: () => boss_step() });
+  // (while a boss event runs and he is in view boss_step returns false so that fight() shoots him; hunts and goals must not take over then)
+  // v5: an active hunt that is not being worked on says why (at most once every 2 minutes)
+  const hunt_why = (why) => {
+    if (!hunt_state() || now() - (R.hunt_why_at || 0) < 120000) return;
+    R.hunt_why_at = now();
+    const h = hunt_state();
+    say("Monster hunt " + h.c + "x " + ((G.monsters[h.id] || {}).name || h.id) + " is active but not being worked on: " + why, "#CF575F");
+  };
+  step_add({ name: "hunt", kind: "gate_wait", due: () => {
+    const f = is_follower(), b = !!R.boss, o = !f && !b && party_bees_only();
+    STEP.ctx.hg = !f && !b && !o;
+    // v5: bees-only, but everyone has reached PARTY_HUNTS_UNTIL_LEVEL: hunts (easy ones) go on, goals stay off
+    const easy = o && CFG.PARTY_HUNTS_UNTIL_LEVEL > 0 && !party_below(CFG.PARTY_HUNTS_UNTIL_LEVEL);
+    if (!STEP.ctx.hg && !easy) hunt_why(f ? "I am a follower (the leader does the hunt)" : b ? "a boss event is running" : "party is farming bees only");
+    if (now() < (R.boar_until || 0)) return false; // (boars) 10 minutes of bees first
+    return STEP.ctx.hg || easy;
+  }, run: () => monster_hunt_step() });
+  step_add({ name: "goal", kind: "gate_wait", due: () => STEP.ctx.hg && now() >= (R.boar_until || 0), run: () => goal_step() });
+  step_add({ name: "fight", kind: "end", run: () => fight() });
+
+  const step_snapshot = () => STEPS.map((s) => [s.n, s.ms]);
+  function step_status() {
+    const prev = STEP.prev || STEPS.map(() => [0, 0]);
+    const cur = step_snapshot();
+    const total = cur.reduce((a, c, i) => a + c[0] - prev[i][0], 0) || 1;
+    const parts = STEPS.map((s, i) => {
+      const dn = cur[i][0] - prev[i][0];
+      const dms = cur[i][1] - prev[i][1];
+      return s.name + " " + Math.round((100 * dn) / total) + "% x" + dn + (dn ? " (" + Math.round(dms / dn) + "ms)" : "") + (s.err ? " [" + s.err + " errors]" : "");
+    });
+    const timers = [];
+    const t = (label, at) => {
+      if (Number.isFinite(at) && at > now()) timers.push(label + " in " + (at - now() < 60000 ? Math.round((at - now()) / 1000) + "s" : Math.round((at - now()) / 60000) + "m"));
+    };
+    t("ladder", R.ladder_next); t("courier", R.courier_next); t("hunt check", R.mh_check_at); t("goal check", R.goal_check_at);
+    t("boss check", R.boss_check_at); t("hunt danger hold", R.danger_until); t("start block", R.start_block_until); t("follow block", R.follow_block_until);
+    t("boss hand-over", R.dump_next);
+    STEP.prev = cur;
+    (PACE.n ? parts.push("paced requests " + PACE.n + " (held back " + Math.round(PACE.held_ms / 1000) + "s)") : 0), say("Loop since last status (" + total + " passes, " + Math.round((Date.now() - STEP.log_at) / 1000) + "s): " + parts.join("; ") + (STEP.busy ? " | now in " + STEP.busy.name + " for " + Math.round((Date.now() - STEP.busy_at) / 1000) + "s" : "") + (timers.length ? " | timers: " + timers.join(", ") : ""), "#8AB4D0");
+    STEP.log_at = Date.now();
+  }
+  // v5: the leader keeps telling the party where he is, also while the loop is busy with a town trip (the Warrior and the Priest need the 'trip' flag and the field position)
+  const state_always = setInterval(() => {
+    if (!alive()) return clearInterval(state_always);
+    try {
+      if (is_leader() && CFG.PARTY_MEMBERS.length && now() - R.state_sent_at >= CFG.STATE_EVERY_MS) send_party_state();
+    } catch (e) {}
+  }, 2000);
+  const force_timer = setInterval(() => {
+    if (!alive()) return clearInterval(force_timer);
+    try { force_tick(); } catch (e) {}
+  }, 1500);
+  const status_timer = setInterval(() => {
+    if (!alive()) return clearInterval(status_timer);
+    try {
+      if (String(get("ranger_status") || "") === "1") {
+        set("ranger_status", "");
+        step_status();
+      } else if (Date.now() - STEP.log_at >= CFG.RANGER_STATUS_MS) step_status();
+    } catch (e) {}
+  }, 10000);
+  // one pass of the loop; returns "now" (start the next pass at once), "wait" (pause for the attack cooldown first) or "end"
+  async function run_steps() {
+    STEP.ctx = {};
+    STEP.busy = null;
+    for (const s of STEPS) {
+      if (s.due && !s.due()) continue;
+      STEP.cur = s;
+      if (s.kind === "end") s.n++; // the fallback is counted when it starts: one fight() call can last a long time
+      const t0 = Date.now();
+      STEP.busy = s;
+      STEP.busy_at = t0;
+      const r = await s.run();
+      STEP.busy = null;
+      s.ms += Date.now() - t0;
+      if (s.kind === "always") continue;
+      if (s.kind === "end") return "end";
+      if (r) { s.n++; return s.kind === "gate" ? "now" : "wait"; }
+    }
+    return "end";
+  }
+
+  // ============================== MAIN ============================
+  async function brain() {
+    say(
+      "v5 started (lib v" +
+        AL.VERSION +
+        ") - priority: " +
+        CFG.PRIORITY_TYPES.join(",") +
+        "; otherwise difficulty <= " +
+        CFG.MAX_DIFFICULTY +
+        ", ignoring " +
+        CFG.IGNORE_NAMES.join(","),
+      "#51D2E1"
+    );
+    add_boss_buttons();
+    LEAD.add_buttons();
+    AL.reengage_button({
+      say,
+      slot: CFG.SELF_CODE_SLOT,
+      restart: AutoRangerV5,
+      stop: async () => {
+        if (R.ladder) await cancel_jobs(R.ladder);
+      },
+    });
+    // restart handshake: tell the Merchant which jobs we hold (none after a reload), so he kills any ghost job of ours
+    setTimeout(() => alive() && send_hello(), CFG.HELLO_DELAY_MS);
+    for (;;) {
+      if (!alive()) return;
+      try {
+        const out = await run_steps();
+        if (out === "now") continue;
+        if (out === "wait") {
+          await wait(next_delay());
+          continue;
+        }
+      } catch (e) {
+        if (STEP.cur) STEP.cur.err++;
+        say("ERROR: " + ((e && e.message) || e), "#CF575F");
+        await wait(1000);
+      }
+      await wait(next_delay());
+    }
+  }
+
+  brain();
+})();

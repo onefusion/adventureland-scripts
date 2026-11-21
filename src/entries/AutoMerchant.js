@@ -1,0 +1,10225 @@
+var AL; // the shared library (code slot "lib"), read once each time this script starts - require_code runs the lib module again on every call, so never call it in a loop
+try {
+  AL = require_code("lib");
+} catch (e) {
+  try {
+    game_log("[Merchant] [lib] require_code(\"lib\") failed: " + (e && e.message ? e.message : e) + ' - save "AL Libs v6.js" in a code slot named "lib" and restart', "#CF575F");
+  } catch (e2) {}
+}
+(function AutoMerchantV5() {
+  "use strict";
+  if (!AL || AL.VERSION < 4 || !AL.gear) {
+    game_log(
+      '[Merchant] shared library missing or old: save "AL Libs v6.js" (version 4+) in the code slot named "lib" and restart',
+      "#CF575F"
+    );
+    return;
+  }
+  // a newer copy of this script (re-engage / reload) makes this one stop all its loops, timers and handlers
+  const GEN = AL.new_generation();
+  const alive = () => AL.is_current(GEN);
+
+  // ============================ CONFIG ============================
+  // names, code slots and the shared item lists come from the one config file (src/lib/config.js); the CFG keys keep their v5 names
+  const C = AL.config.for_script("Merchant");
+  const CFG = {
+    RANGER_NAME: C.RANGER_NAME, // exact, case-sensitive
+    // The Merchant is the PARTY LEADER: he invites every Ranger (RANGER_NAME + TRUSTED_NAMES) who is online and not in his party yet.
+    // The Rangers accept invitations from the Merchant only.
+    PARTY_ENABLED: C.PARTY_ENABLED, // D14 (stage 4): false = the Merchant is not in the game party and never invites (roster.merchant_in_party)
+    PARTY_INVITE_MS: 20000, // how often he checks the party and re-invites missing Rangers
+    SUPPORT_NAMES: C.SUPPORT_NAMES, // (the account runs only 3 non-merchant characters: with the Priest on, one follower Ranger is logged off; an offline name is skipped) // non-Ranger party helpers (the Priest): invited to the party only - no gear, no deliveries, no courier
+    TRUSTED_NAMES: C.TRUSTED_NAMES, // the follower Rangers' names (and anyone else allowed to request deliveries). Their gear reports are tracked too: RANGER_NAME gets first call on gear, then these, in order.
+    SELF_CODE_SLOT: C.SELF_CODE_SLOT, // CODE slot (name or number) THIS script is saved in. The Re-engage button reloads the saved text from it.
+
+    // --- job queue (v4) ---
+    MAIN_SAFE_SPOT: { map: "main", x: -110, y: 15 }, // where he waits for the Ranger after travel_to_main (same spot as the Ranger's SAFE_SPOT)
+    NO_SHOW_WAIT_MS: 15000, // arrived and nobody there: wait this long, then job_failed(no_show) and go home
+    HOLD_AT_SAFE_MS: 90000, // after travel_to_main wait at the safe spot this long for the Ranger to ask again
+    MAX_QUEUE: 6, // more waiting jobs than this are refused (job_failed queue_full)
+    BUDGET_PERSIST_MS: 6 * 3600000, // scroll budgets survive a reload for this long
+    HELLO_DELAY_MS: 4000, // restart handshake: send hello this long after start
+
+    HP_POTION: "hpot1", // delivery potions for the Ranger (tier-1)
+    MP_POTION: "mpot1",
+
+    STAND_SPOT: { map: "main", x: -115, y: -5 }, // moved here by Sean (main map)
+    STAND_SPOT_RADIUS: 40, // smart_move stops ~20px short of its target
+
+    // Potions kept in the INVENTORY for deliveries to the Ranger
+    // The Merchant stays in town, so he keeps a big surplus for the courier Ranger (up to 3 x 250 per type on a full party refill).
+    STOCK_TARGET: 1000, // buy up to this many of each tier-1 delivery potion (100g each)
+    STOCK_LOW: 500, // go shopping (and withdraw gold first when short) when either tier-1 potion drops below this
+    BOSS_STOCK_TARGET: 2400, // v5: while a boss event is live (Grinch/Snowman on the server) the delivery stock is raised to this (the Rangers burn potions in a long fight; Goodies stands next to the post)
+    BOSS_STOCK_LOW: 1800, // ...and he goes shopping below this
+    POTION_BANK_CAP_PCT: 0.05, // one potion-funding withdrawal never takes more than this share of the bank's gold
+    MAX_REQUEST: 1500, // refuse absurd delivery requests
+
+    // Potions offered on the stand to other players (taken from stock above STOCK_LOW)
+    // v5: one-off private sale from the console:  set("sell_item", "firebow:4")  or  set("sell_item", "firebow:4:2500000")  (name:level[:price])
+    // He takes ONE unlocked copy of that item and level from the bag or the bank and lists it on a free stand slot (trade5 and up).
+    // Without a price: what Gabriel would pay (the game's item value x the learned Gabriel rate, see flip_factor) minus SALE_BELOW_NPC.
+    SALE_BELOW_NPC: 500000,
+    // v5: market watch - Ponty (secondhands, main town) resells what merchants put up, at a small markup. Every MARKET_EVERY_MS he asks Ponty for the list,
+    // scores every piece the Rangers can wear against what each Ranger wears now (upgradable items at their +5 potential), and counts compound sets
+    // (KEEP_FOR_COMPOUND items: ringsj, hpamulet, hpbelt) that the stock plus his own copies would complete. Everything is logged ("Market watch: ...").
+    // He only BUYS when MARKET_BUY is true. The list carries no price: the price is estimated as game item value x MARKET_MARKUP and corrected from the first real purchase.
+    // Console: set("market_check", "1") runs a check at the next chance.
+    MARKET_ENABLED: true,
+    MARKET_EVERY_MS: 3 * 3600000,
+    MARKET_NPC: "secondhands",
+    MARKET_NPC_FALLBACK: null, // { map: "main", x: 0, y: 0 } if find_npc cannot place Ponty
+    MARKET_BUY: true, // v5: ON since 2026-11-16 17:15 (Sean). The first purchase verifies the sbuy call and learns the real price; a failed buy switches it off until restart
+    MARKET_MARKUP: 2.0, // measured live 2026-11-16: Ponty charges twice the game value (paid/value = 2.00 on 3 different items), not 5%
+    MARKET_MAX_PRICE_EACH: 3000000, // never buy anything dearer (estimated)
+    MARKET_MAX_SPEND: 10000000, // per visit
+    MARKET_GOLD_FLOOR: 1000000, // gold in the bag that stays
+    MARKET_BANK_FLOOR: 15000000, // buying only takes spare gold: the bank keeps at least this much (same floor as the donations)
+    MARKET_COMPOUND_BUY: true, // v5: ON since 2026-11-16 17:15 (Sean). Also buy copies that complete a compound set (needs MARKET_BUY)
+    MARKET_COMPOUND_MAX_EACH: 500000, // per copy; Ponty charges 2x the game value, so a ringsj +2 costs about 333k
+    MARKET_COMPOUND_MAX_LEVEL: 2, // only copies up to this level are bought for compounding (three +2 make a +3; Sean 2026-11-16: compounds are worth it up to +3, dearer than that waits for a bigger gold surplus)
+    MARKET_COMPOUND_MAX_COPIES: 3,
+    MARKET_CRAFT_BUY: true, // v5: also buy the missing ingredients of a CRAFT_TARGETS item (Venom Band) at Ponty, within the limits above (needs MARKET_BUY)
+    MARKET_CRAFT_OVERBUY: 10, // ...a listing may exceed what is missing by at most this many units
+    SALE_FIRST_SLOT: 5, // trade slots 1-4 belong to the potion listings
+    STAND_LISTINGS: [
+      // tier-0 is stand-only stock now (the Ranger uses tier-1), so no delivery reserve
+      { name: "hpot0", slot: 1, qty: 50, price: 25, reserve: 0 },
+      { name: "mpot0", slot: 2, qty: 50, price: 25, reserve: 0 },
+      // tier-1 is the Ranger's delivery stock: only the spare above STOCK_LOW is listed
+      { name: "hpot1", slot: 3, qty: 50, price: 150 },
+      { name: "mpot1", slot: 4, qty: 50, price: 150 },
+    ],
+
+    // Tier-0 potions: also kept at 1,000 each (courier surplus; part of the stand listing). Bought with gold above the floor below,
+    // after the tier-1 stock, and funded by the same priced bank withdrawal.
+    STAND_STOCK: [
+      { name: "hpot0", target: 1000, low: 500 },
+      { name: "mpot0", target: 1000, low: 500 },
+    ],
+    STAND_STOCK_GOLD_FLOOR: 5000, // never spend gold below this on stand stock
+    LIST_RETRY_MS: 30000,
+
+    // Gold handling
+    GOLD_KEEP: 20000, // never bank below this (restock money)
+    BANK_THRESHOLD: 60000, // do a bank run when gold reaches this
+    BANK_MIN_DEPOSIT: 10000,
+    BANK_RETRY_MS: 120000,
+    // Too poor to refill the Ranger's potions? Fetch gold from the bank first.
+    WITHDRAW_BUFFER: 50000, // withdraw (shortfall + this) so the next few restocks need no bank trip
+    WITHDRAW_RETRY_MS: 120000, // after a failed bank withdrawal, wait this long before trying again
+    SHOP_RETRY_MS: 60000,
+
+    // drain_stand(): wait for other players' purchases before leaving
+    SALE_QUIET_MS: 2500, // no sale for this long = nothing in flight
+    CUSTOMER_RADIUS: 120, // a non-owned player this close counts as a customer
+    DRAIN_SOFT_MS: 12000, // after this long, close the stand to stop NEW purchases
+    DRAIN_MAX_MS: 30000, // never wait longer than this in total
+
+    // Delivery
+    HANDOFF_RANGE: 60, // how close to get before send_item
+    APPROACH_MAX_MS: 25000,
+    GOLD_WAIT_MS: 6000, // stay near the Ranger this long for his gold payment
+    TRAVEL_TIMEOUT_MS: 90000,
+
+    // Junk pickup from the Ranger (he sends a message when his bag is full of drops)
+    JUNK_SELLABLE: C.JUNK_SELLABLE, // only ever sells these (bag AND bank: see BANK_JUNK_SWEEP)
+    BANK_JUNK_SWEEP: true, // junk sitting in the bank is taken out and sold at Gabriel, whatever the free bank space
+    NEVER_SELL: [
+      "offeringp",
+      "offering",
+      "offeringx",
+      "ascale",
+      "pleather",
+      "cscale",
+      "bfur",
+      "orbg",
+    ], // v5 (Sean 2026-11-18): + the Orb of Beginnings ingredients (Armadillo Scale, Porcupine Leather, Croc Scale, Bee Fur) and the orb itself; // never sold, junked or dropped by any sale path: the offerings (Primling, Primordial Essence, Primordial X) that raise compound / upgrade odds
+    // Items pushed up the compound ladder on their own terms (ignores the Rangers' demand ladder and the preferred-kind rule):
+    // target = highest level, keep = copies that stay behind (0 = funnel everything), max_grade = highest scroll tier to buy,
+    // min_chance = lowest odds accepted, budget = scroll budget per round for this item (overrides the session share)
+    COMPOUND_FOCUS: {
+      /* OFF: Rangers cannot wear Books of Cheer (live). To re-enable: wbookhs: { target: 3, keep: 0, max_grade: 2, min_chance: 0.3, budget: 30000000 } */
+    },
+    COMPOUND_FOCUS_OLD: {
+      wbookhs: {
+        target: 3,
+        keep: 0,
+        max_grade: 2,
+        min_chance: 0.3,
+        budget: 30000000,
+      },
+    },
+    // v5 (Sean 2026-11-17): the Warrior's compound set. Compound these (everything funnels up to `level`) until the Warrior has `count` of each at that level
+    // (worn, handed over, or held in the bag / bank); from then on no more are compounded or bought, and every other copy is SOLD as it is, whatever its level.
+    // The Rangers get nothing from the HP items (a +3 Amulet of HP is worth 0.6 points to them against 13 for a +3 Amulet of Dexterity).
+    WARRIOR_COMPOUND: {
+      who: "SexyWexy",
+      items: {
+        strring: { count: 2, level: 3 },
+        hpamulet: { count: 1, level: 3 },
+        hpbelt: { count: 1, level: 3 },
+      },
+    }, // strring (Sean 2026-11-18): Rings of Strength from the arctic bees replace the Rings of Joy;
+    // v5 (Sean 2026-11-18 17:28): the Ranger's compound focus. Rings of Dexterity (arctic bees drop them) are pushed up the ladder on their own terms (everything funnels to `level`,
+    // ahead of the demand ladder) until `who` has `count` of them at that level or better (worn, on the way to him, or held in the bag / bank). Then the focus ends and the normal ladder takes over
+    // (nothing is sold, nothing is blocked). Empty {} turns it off.
+    RANGER_COMPOUND: {
+      who: "SexyDexy",
+      items: {
+        dexring: { count: 2, level: 3 },
+        orbg: { count: 1, level: 3 },
+        intring: { count: 2, level: 3, who: "SexyHexy" },
+      },
+    }, // intring: for the Priest (a per-item "who" overrides the Ranger default); // orbg: the Ranger wears ONE orb
+    KEEP_FOR_COMPOUND: C.KEEP_FOR_COMPOUND, // received from the Ranger but NOT sold: banked for compounding
+    // Grinch / Snowman gear drops (the Rangers hand them over: their KEEP_FOR_COMPOUND has the same keys). At level 0, not locked, worth at most
+    // SURPLUS_MAX_VALUE_EACH and NOT better than what any Ranger wears (all three gear reports fresh) they are SOLD at Gabriel;
+    // anything else is kept and banked for the gear sweep. The bank is often full, so selling is the normal way out.
+    BOSS_GEAR: C.BOSS_GEAR,
+    JUNK_SELL_NPC: "basics", // Gabriel
+    JUNK_SELL_MAX_LEVEL: C.JUNK_SELL_MAX_LEVEL, // never sells upgraded items
+    STACK_RESERVE: { poison: "full" }, // (Sean 2026-11-19) stackable loot that is SOLD above a reserve: keep this many (a number, or "full" = one full stack, the item's own `s`) in the bag and bank together and sell the rest, whole stacks only. Poison Sacks (about 1,000 gold each) are also the Venom Band ingredient
+    JUNK_STACKS: ["beewings", "snowball"], // stackable junk: the bank sweep takes whole stacks out and sells them (other stacks are never swept: they are crafting stock)
+    JUNK_ANY_LEVEL: C.JUNK_ANY_LEVEL, // ...except these: sold whatever their level (still never a locked one)
+    JUNK_RECEIVE_WAIT_MS: 20000, // after arriving, wait this long for the Ranger to hand the items over
+
+    // Safety
+    HP_USE_PCT: 0.7, // below this fraction of max HP: drink a potion (or go buy one)
+    FLEE_HP_PCT: 0.25,
+    // The Grinch (and other event mobs) can teleport to and hit the Merchant too.
+    SELF_HEAL_POTION: "hpot0", // what he buys at Ernis for himself when he has no HP potion at all
+    SELF_HEAL_BUY: 5, // how many to buy on such a trip (a few, since hits tend to come in bursts)
+
+    // --- Compounding accessories (3 identical items + a compound scroll -> 1 item one level higher) ---
+    // A failed compound destroys all three items. Every attempt is logged; see COMPOUND notes in the log.
+    COMPOUND_ENABLED: true,
+    COMPOUND_DRY_RUN: false, // true = only look: fetch triples, ask the server for the odds, log them, put everything back. Set to false to really compound
+    // Need-driven compounding ("ladder"): accessories are compounded for the Rangers, tier by tier. Every Ranger slot (2 rings, 2 earrings,
+    // 1 of each other accessory per Ranger) gets a +1 first, then the surplus is compounded to +2 for all slots, then +3, up to the target.
+    // Only the best accessory of each kind is compounded; the rest is surplus (sold when the bank is nearly full). false = old behaviour
+    // (compound every triple, lowest level first).
+    COMPOUND_NEED_DRIVEN: true,
+    COMPOUND_TARGET_LEVEL: 5, // the ladder stops here (the scroll grade limit and the session budget stop it earlier when scrolls get dear)
+    COMPOUND_MAX_INPUT_LEVEL: 2, // old behaviour only: three +2 (or lower) items are combined, so nothing above +3 is produced // only three +2 (or lower) items are ever combined, so nothing above +3 is produced
+    COMPOUND_KEEP_COPIES: 3, // a compound only runs while this many copies of the same item and level stay behind (6 held = 1 triple; a failure still leaves a full triple). 0 = old behaviour
+    COMPOUND_MIN_CHANCE: 0.4, // never attempt below this success chance (asked from the server for the exact items)
+    COMPOUND_MAX_SCROLL_GRADE: 1, // highest scroll tier to buy (0 = cscroll0 only, 1 = cscroll1 at 240k each...); higher-grade items are skipped
+    COMPOUND_SCROLL_NPC: "scrolls", // sells the scrolls (main town)
+    COMPOUND_UPGRADE_NPC: "newupgrade", // compounds are done standing next to this NPC (Cue)
+    COMPOUND_SESSION_PCT: 0.1, // scroll budget per session = this share of the bank's gold when the first round starts
+    COMPOUND_BANK_FLOOR: 5000000, // hard stop: no compounding while the bank holds less gold than this
+    COMPOUND_PACKS: [
+      "items0",
+      "items1",
+      "items2",
+      "items3",
+      "items4",
+      "items5",
+      "items6",
+      "items7",
+    ], // bank packs to take items from (v5: all 8 packs of the main Bank; a pack that is not unlocked yet has no item array and is skipped)
+    BANKFULL_SELL: true, // when the bank is nearly full, sell the low-value compoundable items to make room
+    BANKFULL_TRIGGER_FREE: 10, // "full" = fewer free slots than this in COMPOUND_PACKS
+    BANKFULL_TARGET_FREE: 12, // sell until about this many slots are free
+    BANKFULL_KEEP_GRADE: 1, // items of this grade (1 = high) or better are never auto-sold
+    BANKFULL_DRY_RUN: false, // true = only log what would be sold (independent of COMPOUND_DRY_RUN)
+    // --- Surplus: finished items (at their approved max level) in the bank that none of the Rangers needs ---
+    // When the bank is nearly full and nothing cheap is left to sell, the Merchant looks at every finished item in the bank.
+    // An item is kept if it would beat what a Ranger wears (SexyDexy first, then the others; each kept item "uses up" the slot
+    // it would fill, so a second identical ring is surplus unless a Ranger still has a weaker ring). Everything else is sold.
+    // --- Gear sweep: finished (or stuck) gear in the bag or bank that beats what a Ranger WEARS goes to that Ranger ---
+    // Upgrade rounds only hand over what they just upgraded; this also covers compounded accessories and anything already
+    // finished that sits in the bank or the Merchant's bag. Assignment: best items first, SexyDexy first, each item uses up the slot it fills.
+    GEAR_SWEEP: true,
+    GEAR_SWEEP_EVERY_MS: 600000, // while a compound round has the bank open anyway
+    GEAR_SWEEP_STANDALONE_MS: 1800000, // otherwise the Merchant makes the bank trip himself this often
+    GEAR_SWEEP_BAG_RESERVE: 6, // keep this many bag slots free when taking items out of the bank
+    // Consolidate bank and inventory (runs only when the bank has fewer than BANKFULL_TRIGGER_FREE free ITEM slots):
+    // 1) copy limit below, 2) then the bank-full seller (cheap compoundables, finished items no Ranger needs).
+    // Copy limit: at the cap level, only as many copies of one item as the Rangers can wear (1 per slot per Ranger) are kept in total
+    // (worn + bag + bank). Extra copies are sold whether or not the bank is full. Earrings and rings have two slots per Ranger.
+    // Bag tidy: the Merchant's own bag is nearly full (items he took out for rounds could not go back, junk, extra copies).
+    BAG_TIDY: true,
+    // Merchant's Luck (G.skills.mluck: level 40, 10 mana, range 320, lasts 1 h, target = a player; the buffed player's loot can drop twice for the Merchant)
+    MLUCK_ENABLED: true, // needs the skill in G.skills and the Merchant's level to reach it
+    MLUCK_RENEW_MS: 50 * 60000, // cast again this long after the last cast (the buff lasts 60 min)
+    MLUCK_CHECK_MS: 30000, // how often he looks whether a Ranger needs it
+    // v5 (Sean 2026-11-17): while the Grinch is live he buffs EVERY player character in the town area (any player, not only ours): a Merchant's Luck buffed killer can drop extra loot.
+    // One round, then a look every minute for new characters without the buff; he walks to those out of range (inside the town area only).
+    MLUCK_GRINCH: true,
+    MLUCK_TOWN_RADIUS: 450, // town area = this far from the stand (main map)
+    MLUCK_TOWN_CHECK_MS: 60000,
+    MLUCK_TOWN_MIN_LEFT_MS: 10 * 60000, // a buff with less than this left counts as missing (renewed)
+    MLUCK_PARTY: true, // v5 (Sean 2026-11-18): the leader asks (mluck_request) for Merchant's Luck on his party before a forced farm / boss and about hourly: cast on each listed player who stands in town
+    MLUCK_PARTY_WAIT_MS: 45000, // players that have not arrived yet are waited for this long
+    MLUCK_TOWN_RETRY_MS: 3 * 60000, // after a refused cast leave that player alone this long
+    MLUCK_RETRY_MS: 5 * 60000, // after a failed visit (nobody there / cast refused) leave that Ranger alone this long
+    BAG_TIDY_JUNK: 5, // also tidy (sell the junk at Gabriel) as soon as this many sellable junk items sit in the bag, however empty it is
+    BAG_TIDY_FORCE_FREE: 4, // still this few free after selling: bank every item he does not need on him (boss drops pile up)
+    BAG_TIDY_FREE: 8, // tidy when this few bag slots (or fewer) are free and he is idle
+    BAG_TIDY_EVERY_MS: 600000,
+    SURPLUS_COPIES: true,
+    KEEP_BEST_COPIES: {
+      sweaterhs: 3,
+      xmassweater: 3,
+      gcape: 3,
+      xmashat: 3,
+      xmasshoes: 3,
+    }, // Sean 2026-11-19: keep only this many of the item (the highest levels), sell every other copy at any level, also while the bank still has room. Super Sweater and Xmas Sweater: the 3 best of each; Grinch Cape, Xmas Hat, Xmas Shoes too (Sean 2026-11-19 16:02 / 16:03). The +0 ones are also on the junk list
+    SURPLUS_COPY_LEVEL: 5,
+    SURPLUS_COPIES_PER_RANGER: { earring: 2, ring: 2 }, // default 1 per Ranger
+    SURPLUS_SELL: true,
+    SURPLUS_DRY_RUN: false, // true = only log the plan (set false to really sell). Review the log lines first
+    SURPLUS_MAX_VALUE_EACH: 3000000, // an item worth more than this (expected sale price) is never sold automatically, only listed
+    SURPLUS_KEEP_SPARE: 0, // extra finished items to keep per gear slot type beyond what the Rangers can use
+    BANK_PACK_SIZE: 42,
+    BANK_SORT: true, // v5: when he leaves the bank, items inside each pack are put in order (stackables first, then by type, name, highest level first) and the free slots end up last. Packs are sorted on their own: items never change pack.
+    BANK_SORT_MAX_FAILS: 5, // v5: failed moves per session before sorting switches itself off (each failure only pins its two slots)
+    BANK_SORT_MAX_SWAPS: 30, // v5: per PACK per bank visit (every pack has its own budget; the rest follows next time)
+    BANK_SWAP_SLOT: true, // v5 (Sean 2026-11-18): the LAST slot of every pack (slot 41) stays empty: it is the transit slot of a sort swap, so a swap needs only 1 free bag slot (not 2). Nothing is deposited or routed into it; an item found there is moved out first.
+    BANK_LAYOUT: true, // v5 (Sean 2026-11-18): every kind of item has its own pack(s) (BANK_LAYOUT_PACKS). Deposits go to the item's pack; the router moves existing items there. Order inside a pack is the sort's job.
+    BANK_LAYOUT_PACKS: {
+      stack: ["items0", "items6"],
+      exchange: ["items1"],
+      upgrade: ["items2", "items4"],
+      compound: ["items3", "items5"],
+      excess: ["items7"],
+    }, // stack = stackables and crafting materials, exchange = event items (G.items e / EXCHANGE_PLAN / Xmas Box pieces), upgrade = upgradable gear, compound = compoundable gear, excess = anything else
+    BANK_FALLBACK_ORDER: [
+      "items7",
+      "items6",
+      "items5",
+      "items4",
+      "items3",
+      "items2",
+      "items1",
+      "items0",
+    ], // a deposit whose own pack(s) are full goes to the first pack in this list that has room (the last pack is the "spares" pack)
+    BANK_ROUTE: true, // v5: move existing items that sit in the wrong pack into their pack (only into packs that have room; the target pack is sorted at its own sort run)
+    BANK_ROUTE_MAX_MOVES: 20, // per bank visit
+    BANK_LAYOUT_MAX_FAILS: 3, // failed layout moves/deposits per session before the layout switches itself off (deposits then use the game's own slot choice)
+    BANK_SORT_STEP_MS: 350, // pause between two moves
+    BANK_MERGE: true, // v5: before sorting, stackables of the same kind that sit in several bank slots are joined into one stack (when the total fits the game's stack size)
+    BANK_MERGE_MAX: 40, // joins per bank visit
+    COMPOUND_SKIP: [], // item names never compounded (e.g. ["ringsj"] if you would rather sell those)
+    // Triples (3 items -> 1) per round. 8 = 24 items picked up and compounded per run, to clear a bank that is full of
+    // excess compoundable gear. Once the bank is tidy (everything compounded and sold) 3 per run is enough: set this back to 3.
+    COMPOUND_MAX_GROUPS: 8,
+    COMPOUND_EVERY_MS: 600000, // idle wait between rounds when there was nothing (more) to compound
+    COMPOUND_MAX_CHAIN_ROUNDS: 100, // safety cap on back-to-back rounds (they stop on their own when out of items or budget)
+    COMPOUND_RESULT_ACTION: "bank", // what to do with items that reach COMPOUND_SELL_AT_LEVEL: "bank" (keep) or "sell" (to Gabriel)
+    COMPOUND_SELL_AT_LEVEL: 3,
+    COMPOUND_PAUSE_MIN_ATTEMPTS: 30, // after this many real attempts, pause if results are far below the quoted odds
+    // --- Gear upgrades (1 item + an upgrade scroll -> +1). Only gear the Ranger would actually wear. ---
+    // Failed upgrades destroy the item. The Ranger reports what he wears; the Merchant upgrades items that could beat it,
+    // then walks to the Ranger and hands over anything better than what is equipped (he equips it himself).
+    UPGRADE_ENABLED: true,
+    UPGRADE_DRY_RUN: false, // true = fetch the item, ask the server for the odds, log them, put everything back. Set false to really upgrade
+    UPGRADE_MAX_LEVEL: 7, // never upgrade an item above this level
+    UPGRADE_MAX_LEVEL_BY_ITEM: { firebow: 7 }, // v5 (Sean 2026-11-18): items listed here are upgraded up to this level instead of UPGRADE_MAX_LEVEL (and count as finished only there). Fire Bow: scroll1 (40,000 g) is enough up to +7 (its grade changes at +8), so no dearer scroll is bought. Every upgrade can destroy the item: UPGRADE_MIN_COPIES still keeps a spare copy.
+    UPGRADE_MIN_CHANCE_BY_ITEM: {}, // v5: per-item success-chance floor instead of UPGRADE_MIN_CHANCE, e.g. { firebow: 0.3 }. The round logs "UPGRADE skipped (below 40%): firebow +6 -> +7 ... NN%" when the floor stops it.
+    UPGRADE_GAMBLE_NAMES: ["firebow"], // v5 (Sean 2026-11-18 14:04): for these items a copy that does NOT beat what SexyDexy wears is "fodder": it is upgraded even at a low success chance (UPGRADE_GAMBLE_MIN_CHANCE) and without a spare copy (losing it costs nothing he wears). A copy that DOES beat his worn one is SET ASIDE for him (never upgraded further, the gear sweep hands it over). Once he wears the cap level (UPGRADE_MAX_LEVEL_BY_ITEM) nothing is gambled any more.
+    UPGRADE_GAMBLE_MIN_CHANCE: 0.1, // lowest success chance a fodder copy is tried at
+    UPGRADE_MIN_COPIES: 2, // an upgrade is only tried while another copy of the same item and level sits in the bag/bank (worn gear never counts). 1 = old behaviour
+    UPGRADE_MIN_CHANCE: 0.25, // never attempt below this success chance (asked from the server for the exact item)
+    UPGRADE_MAX_SCROLL_GRADE: 2, // highest scroll tier to buy (0 = scroll0 1,000g | 1 = scroll1 40,000g | 2 = scroll2 1.6M)
+    UPGRADE_SESSION_PCT: 0.1, // separate scroll budget: this share of the bank's gold when the first upgrade round starts
+    UPGRADE_SCROLL_NPC: "scrolls",
+    UPGRADE_NPC: "newupgrade",
+    UPGRADE_PACKS: [
+      "items0",
+      "items1",
+      "items2",
+      "items3",
+      "items4",
+      "items5",
+      "items6",
+      "items7",
+    ], // (same list as COMPOUND_PACKS)
+    SUPPORT_UPGRADE_ANY: true, // (Sean 2026-11-18) the upgrade round matches ANY upgradable item against what the Warrior and the Priest wear too (not only SUPPORT_UPGRADE_NAMES); false = only the names below
+    SUPPORT_UPGRADE_NAMES: ["sweaterhs", "xmassweater", "xmaspants"], // v5 (Sean 2026-11-18): Super Sweater / Xmas Sweater / Xmas Pants ("Winter Pants") are no longer junk: stop-gap chests and legs for the Warrior (and Priest) until Heavy Armor / Rugged Coat turn up. The upgrade round also upgrades these (up to UPGRADE_MAX_LEVEL, same two-copies and scroll rules as for the Rangers) when the piece would beat what a support character wears
+    UPGRADE_MAX_ITEMS: 4, // items taken out of the bank per round
+    UPGRADE_EVERY_MS: 600000,
+    UPGRADE_PAUSE_MIN_ATTEMPTS: 30,
+    // --- Flipping: upgrade gear the Ranger does NOT need when selling it higher is worth more than the scrolls cost ---
+    // Per step he compares  chance * (best value from the next level on) - scroll price  with just selling the item now.
+    // Failed upgrades destroy the item, so the odds matter. Uses the same budget as the Ranger-gear upgrades.
+    FLIP_ENABLED: true,
+    FLIP_MAX_LEVEL: 3, // flip chains stop here (the result is sold)
+    FLIP_MIN_GAIN: 0.1, // a step must be expected to earn 10% more than selling the item as it is
+    FLIP_ASSUMED_CHANCE: [0.99, 0.95, 0.85, 0.7, 0.5], // success chance assumed for LATER steps (index = level being upgraded); the real quote replaces it for the current step
+    FLIP_SELL_FACTOR: 0.5, // starting guess: Gabriel pays this share of the game's item value. Corrected automatically from real sales
+    FLIP_RESULT_ACTION: "sell", // "sell" (Gabriel) or "bank" for the finished items
+    FLIP_KEEP_NAMES: [], // item names never flipped (e.g. gear you plan for the Priest/Warrior)
+    GEAR_CLASS: "ranger", // whose gear this is (items restricted to other classes are ignored)
+    GEAR_WEAPON_TYPES: ["bow"], // weapon kinds the Ranger can use
+    // v5 (Sean 2026-11-17): support characters that run AutoPriest v5 (or a later Warrior script) report what they wear (gear_report) and get gear handed over like the Rangers do.
+    // The sweep gives them what beats their worn slot (Rangers are served first); items they would wear are never sold. UNVERIFIED defaults: tune the weights with Sean (like the Ranger ranking).
+    // main = the class's attack stat: its weight is raised to (attack weight x weapon attack / 20) from the worn weapon, as for the Ranger's dex.
+    // weapon_types: weapon kinds she can use (an item whose class list names her class always counts). Offhand: books (source) and shields.
+    // Not covered yet for them: upgrade / compound rounds, copy limits and demand counts (those only count the Rangers).
+    SUPPORT_GEAR: {
+      // v5 (Sean 2026-11-17): the Warrior TANK: vitality, armor, resistance and max hp first (his weapon matters little). Class rules from data/classes.json: mainhand spear / short_sword / sword / fist / mace,
+      // two-handed rapier / bow / axe / scythe / basher / great_sword, offhand shield or a second one-hander (no Books). Targets and sources: warrior-priest-upgradeable-gear-targets.md.
+      // SexyWexy = the Warrior (confirmed by Sean 2026-11-17), code slot 8. Needs AutoWarrior (not written yet) so he reports gear. No report = no effect.
+      // v5 (Sean 2026-11-18): the Warrior wears the best SWORD (main hand) and the best SHIELD (off hand), both ranked by: vitality, hp, courage (the game's aggro stats: courage / pcourage / mcourage),
+      // armor, resistance, in that order. A basher stays in his BAG (never worn): Stomp needs one, and he swaps it in for the stun and back (AutoWarrior with_basher). One Wooden Basher is enough
+      // (the Merchant hands one over and never sells bashers while he has none; a Basher works too). Two-handed types (two_hand_types) replace the shield, so they are compared against sword + shield.
+      SexyWexy: {
+        cls: "warrior",
+        main: "str",
+        main_from_weapon: false,
+        skip_types: ["source"],
+        scroll: "strscroll", // Strength is now his main stat (Sean 2026-11-18); use "vitscroll" for Vitality
+        weapon_types: ["sword"],
+        two_hand_types: [
+          "rapier",
+          "bow",
+          "axe",
+          "scythe",
+          "basher",
+          "great_sword",
+        ],
+        bag_kit: ["wbasher", "basher"], // kept in his bag: the first listed is preferred
+        // Sean's order (2026-11-18): strength (hp, armor, speed), vitality (hp by level), evasion (physical attacks miss: only helps against physical monsters), armor, damage return (dreturn), lifesteal, courage (aggro). UNVERIFIED numbers.
+        weights: {
+          str: 6,
+          vit: 5.5,
+          evasion: 5,
+          armor: 0.6,
+          dreturn: 1.5,
+          lifesteal: 1,
+          courage: 0.5,
+          pcourage: 0.5,
+          mcourage: 0.5,
+          hp: 0.04,
+          resistance: 0.4,
+          attack: 0.05,
+          range: 0,
+          dex: 0.02,
+          int: 0,
+          speed: 0.05,
+          frequency: 0.1,
+          crit: 0.01,
+          reflection: 0.02,
+          manasteal: 0.01,
+          mp: 0.0002,
+        },
+      },
+      // v5 (Sean 2026-11-18): the Warrior's SECOND set for MAGICAL bosses (Grinch, Franky, Dragold, Rudolph ...): resistance first. It is a pseudo character "SexyWexy+": his gear_report lists what he
+      // carries in his bag for it (report.alt, slot -> item), the sweep fills every empty / weaker slot and hands the pieces over like the basher (they stay in his bag; AutoWarrior swaps the set in
+      // when the focus target is a big magical monster and back afterwards). No weapon (his sword stays). Needs more bank space long-term (Sean accepts). UNVERIFIED weights.
+      "SexyWexy+": {
+        cls: "warrior",
+        main: "resistance",
+        main_from_weapon: false,
+        skip_types: ["source", "weapon"],
+        scroll: "strscroll",
+        weapon_types: [],
+        weights: {
+          resistance: 4,
+          vit: 3,
+          str: 6,
+          hp: 0.08,
+          reflection: 1,
+          armor: 0.2,
+          lifesteal: 0.5,
+          courage: 0.5,
+          pcourage: 0.5,
+          mcourage: 0.5,
+          speed: 0.05,
+          mp: 0.0002,
+        },
+      },
+      // v5 (Sean 2026-11-18): the Priest wants the best MACE or STAFF (ranked: attack = damage, intelligence, MP cost per attack (mp_cost, negative = cheaper heals: the Ornament Staff has -40), max MP).
+      // Heal is based on the attack value. Game data (classes.json): staff and pmace are one-handed (a Book / shield fits the off hand); the WAND is two-handed for the Priest (frequency +40), so it
+      // is compared against weapon + off hand together (two_hand_types). UNVERIFIED weights: tune with Sean.
+      SexyHexy: {
+        cls: "priest",
+        main: "int",
+        scroll: "intscroll", // stat scroll applied to her gear before it is handed over (adds the item's "stat" value as Intelligence)
+        weapon_types: ["staff", "pmace", "wand"],
+        two_hand_types: ["wand"],
+        weights: {
+          attack: 3,
+          int: 1,
+          mp_cost: -1.2,
+          mp: 0.002,
+          mp_reduction: 0.2,
+          range: 0.3,
+          vit: 0.1,
+          str: 0.05,
+          dex: 0.1,
+          speed: 0.02,
+          crit: 0.04,
+          hp: 0.0006,
+          armor: 0.05,
+          resistance: 0.05,
+          evasion: 0.01,
+          reflection: 0.006,
+          lifesteal: 0.02,
+          manasteal: 0.02,
+          frequency: 0,
+        },
+      },
+    },
+    // --- Christmas event exchange (items turned in at their quest NPCs; each exchange gives a random reward) ---
+    // --- manual compound test (top buttons "Compound odds" / "Compound test") ---
+    OFFERING_ITEMS: ["offeringp", "offering"], // an offering / Primling in the bag is shown in the odds check and used by the real test
+    TEST_USE_OFFERING: true, // the real "Compound test" uses an offering when one is in the bag (set false to only quote with it)
+    // ---- world watch: live bosses and scheduled events, read from the server info the game publishes (read only, no actions) ----
+    WATCH_ENABLED: true,
+    WATCH_EVERY_MS: 30000,
+    WATCH_EVENT_WARN_MIN: [60, 15, 5], // log a scheduled event this many minutes before it starts
+    WATCH_REPORT_MS: 30 * 60000, // every so often: the boss table (largest first, with when each was last seen)
+    // ---- Rose's lotteries (Item Lottery ticket + Money Lottery tickets). Spare gold only, never above the daily cap. ----
+    // Switch off without editing: set("lottery_off", true) in the game console (false = on again).
+    LOTTERY_ENABLED: true,
+    LOTTERY_DAILY_CAP: 2500000, // most gold spent on tickets per UTC day (item ticket + money tickets together)
+    LOTTERY_BANK_FLOOR: 10000000, // spare gold = bank gold above this (it sits above the compound floor and the upgrade budget)
+    LOTTERY_EVERY_MS: 60 * 60000, // how often a purchase trip is considered
+    LOTTERY_ITEM: true, // buy the Item Lottery ticket
+    LOTTERY_MONEY_TICKETS: 5, // Money Lottery tickets per draw (quick pick numbers)
+    LOTTERY_NPC_FALLBACK: { map: "main", x: -341, y: 168 }, // Rose, from the game data
+    // ---- Lost and Found donations (gold -> Merchant XP; the NPC may hand something back for a big donation) ----
+    // Off by default: the first run is a small probe that logs the exact answer and the XP it gave. Switch on after reading that log.
+    // Quick switch in the game console: set("donate_off", true) stops it, false lets it run (CFG must have DONATE_ENABLED true).
+    DONATE_ENABLED: true,
+    DONATE_BANK_FLOOR: 15000000, // spare gold = bank gold above this (above the lottery floor, so tickets come first)
+    DONATE_PROBE_GOLD: 100000, // the first donation only
+    DONATE_STEP: 5000000, // gold per visit after the probe worked
+    DONATE_DAILY_CAP: 10000000, // the STARTING daily cap; with DONATE_CAP_ADAPT it is re-set once per UTC day from the gold earned
+    DONATE_CAP_ADAPT: true,
+    DONATE_EARN_SHARE: 0.3, // the day's cap aims at this share of the gold earned per 24h (earned = change in bank+bag gold + donations + lottery spending)
+    DONATE_CAP_MIN: 5000000,
+    DONATE_CAP_MAX: 50000000, // the cap moves at most one DONATE_STEP per day, inside these limits
+    DONATE_EVERY_MS: 2 * 3600000,
+    DONATE_MIN_FREE_SLOTS: 10, // anything handed back lands in the bag: no visit without this much room
+    DONATE_NPC_FALLBACK: { map: "woffice", x: -24, y: -178 }, // Lost and Found (Finders keepers), from the game data
+    // ---- crafting at Leo (the craftsman): gear the Rangers lack, made from materials in the bag and bank ----
+    CRAFT_ENABLED: true,
+    CRAFT_EVERY_MS: 20 * 60000, // how often a missing quiver is checked for
+    CRAFT_EMPTY_BACKOFF_MS: 90 * 60000, // materials are missing: look again after this long
+    CRAFT_MIN_FREE_SLOTS: 8,
+    CRAFT_MAX_PER_RUN: 3,
+    // each recipe names the NPC that makes it (quest field in the game data); none = Leo the craftsman. Quiver, w* gear, rings: Cole (mcollector)
+    CRAFT_NPC_FALLBACK: {
+      craftsman: { map: "main", x: 92, y: 670 },
+      mcollector: { map: "main", x: 81, y: -283 },
+    },
+    CRAFT_TARGETS: [
+      { item: "venomband", total: 6 },
+      { item: "orbg", total: 27 },
+    ], // orbg (Orb of Beginnings, Sean 2026-11-18 17:31): Cole makes it from 1 Armadillo Scale + 1 Porcupine Leather + 1 Croc Scale + 1 Bee Fur (no gold). total 27 = enough for ONE +3 (three of a level make one of the next); counted as 3^level copies each, and crafting stops once RANGER_COMPOUND has its +3 orb; // v5 (Sean 2026-11-17): make this item until this many exist in total (worn + bag + bank). Venom Band: 1 Ring of Dexterity +2, 1 Verdant Core, 12 Poison Sack, 4 Snake Fang, 240k gold (Leo); more Dex at +0 than a +2 Ring of Dexterity, and it compounds
+    CRAFT_ITEMS: [], // only items listed here are ever crafted; each is made until every Ranger has one (worn, in the bag or bank, or on its way)
+    EXCHANGE_ENABLED: true,
+    EXCHANGE_EVERY_MS: 30 * 60000,
+    EXCHANGE_END: "", // e.g. "2027-01-10": no runs after this date. Empty = keep going while there are items
+    EXCHANGE_MIN_FREE_SLOTS: 30, // the run only starts with this much bag space AFTER the stacks it takes from the bank: up to 30 non-stackable rewards can land in the bag at once, and a full bag breaks the run
+    EXCHANGE_EMPTY_BACKOFF_MS: 60 * 60000, // nothing to exchange in the bank/bag: look again after this long
+    // order = walking order (Jayson, then the inn, then Santa far away). times = number of exchanges; each uses
+    // G.items[item].e of the item (ornament 20, mistletoe 1, candy cane 1).
+    EXCHANGE_PLAN: [
+      { item: "ornament", npc: "ornaments", times: 1 },
+      { item: "mistletoe", npc: "mistletoe", times: 10 },
+      { item: "candycane", npc: "santa", times: 10 },
+      // v5 ROUND 2 (round: 2 = its own scheduler task, "exchange2", so a potion request or junk sale in the middle only breaks half of the exchanges):
+      // everything at Xyn. npc id "exchange" = Xyn; check with find_npc("exchange") in the console. The Xmas Box crafting (XBOX_*) runs at the start of round 2.
+      // Market Parcels (from Merrit): 10 at most once an hour (every_ms)
+      {
+        item: "marketparcel",
+        npc: "exchange",
+        times: 10,
+        every_ms: 60 * 60000,
+        round: 2,
+      },
+      // Xmas Boxes (crafted from the quantum pieces)
+      { item: "xbox", npc: "exchange", times: 3, round: 2 }, // Sean 2026-11-19: 3 per round 2 run (3 are crafted per run, XBOX_PER_RUN)
+      // Sean 2026-11-17: Raw Emerald, Armor Box and Weapon Box, 5 per round each (the whole round takes a while)
+      { item: "gem0", npc: "exchange", times: 5, round: 2 },
+      { item: "armorbox", npc: "exchange", times: 5, round: 2 },
+      { item: "weaponbox", npc: "exchange", times: 5, round: 2 },
+    ],
+    EXCHANGE2_EVERY_MS: 30 * 60000, // round 2 (Xyn)
+    XBOX_ENABLED: true, // v5: at the start of an exchange run take one of each Quantum Piece (recipe G.craft.xbox) out of the bank and craft a Xmas Box at Leo (craftsman, main map)
+    XBOX_PER_RUN: 3, // Xmas Boxes crafted per exchange run (needs a full set of pieces for each)
+    // used when find_npc cannot place the NPC (positions from the game data)
+    EXCHANGE_NPC_FALLBACK: {
+      ornaments: { map: "winterland", x: -137, y: -193 },
+      mistletoe: { map: "winter_inn", x: 94, y: -181 },
+      santa: { map: "winterland", x: 1242, y: -1631 },
+    },
+    EXCHANGE_SELL: [
+      "snowball",
+      "rednose",
+      "candycanesword",
+      "ornamentstaff",
+      "merry",
+      "snowflakes",
+    ], // rewards sold at Gabriel; gear the Ranger cannot use or that would not beat his is sold too
+    DEX_SCROLL_POTENTIAL: true, // when judging what is worth upgrading, count the Dexterity a stat scroll could add (items with a "stat" value and no scroll applied yet)
+    STAT_SCROLL_APPLY: { ranger: false, warrior: true, priest: true }, // v6 (D5, replaces DEX_SCROLL_APPLY and SUPPORT_SCROLL_APPLY): apply the character's own stat scroll (Ranger dex, Warrior str, Priest int: from his class profile) to a piece that has a "stat" value and no scroll yet, before the piece goes to him. One path for every class, one switch per class. The Ranger is OFF until a live test shows a Dexterity scroll takes (it did not on Mittens at Cue). Honors UPGRADE_DRY_RUN.
+    GEAR_TRACE: false, // v6: true = log every set credit and every stat scroll the gear scorer counts ([gear] lines); turn it on (edit here, re-upload) when a score looks wrong
+    STAT_SCROLL_MAX_GOLD: 40000, // never pay more than this for one stat scroll, any class (they cost 8,000)
+    DEX_SCROLL_NAME: "dexscroll", // the Ranger's stat scroll item (the Warrior and Priest use SUPPORT_GEAR.<name>.scroll); bought at UPGRADE_SCROLL_NPC; counts against the upgrade budget when it goes to a Ranger
+    DEX_AUTO_WEIGHT: true, // one dex point is worth (worn weapon attack / 20) attack in the game; use that when it is more than the dex weight below
+    DEX_WEIGHT_MULT: 1.3, // v5 (Sean 2026-11-18 17:22): Dexterity is the main driver of the Ranger's damage: the dex weight (the configured one or the weapon-attack/20 value, whichever is higher) is multiplied by this. 1 = as before
+    STAT_SCROLL_MULT: 1, // dex gained from a scroll = the item's "stat" value x this (unverified on this server; tune it)
+    GEAR_MARGIN: 1.05, // an item must beat what is worn by this factor to be worth upgrading / handing over
+    // How much each stat is worth when comparing two items for the Ranger (tune freely)
+    // the Ranger lives on attack: it dominates, armor and resistance barely matter
+    // Sean's order of importance (2026-11-15): weapon = attack, dex bonus, attack speed, ability, range;
+    // armor and accessories = the same five, then armor, resistance, then the other stats.
+    // Attack, dex and attack speed (the item stat "frequency") are all converted to damage; see gear_score().
+    FREQ_PCT_PER_POINT: 1.25, // v5 (Sean 2026-11-18 17:22): was 1; attack speed counts a bit more. // UNVERIFIED: how many percent faster he attacks per point of "frequency" (check character.frequency before/after equipping a glove)
+    // Ability value = weight x attr0 (the proc chance, in %) x 1% of his damage. Ranked with Sean 2026-11-15 (burn first: it deals damage).
+    // Abilities that need a cast (frenzy, power, charm, ...) are worth nothing: the Rangers never cast them.
+    ABILITY_IGNORE_ITEMS: ["test_orb"], // Sean 2026-11-19: the Orb of Testing's 50% poison proc is not worth the Orb of Beginnings' stats: its ability counts for nothing
+    ABILITY_WEIGHTS: {
+      burn: 2,
+      sunder: 1,
+      freeze: 0.5,
+      hex: 0.5,
+      weave: 0.3,
+      poison: 0.2,
+      petrify: 0.2,
+      poke: 0.1,
+      restore_mp: 0.1,
+      shatter: 0.1,
+      secondchance: 0.05,
+    },
+    GEAR_WEIGHTS: {
+      dex: 1,
+      attack: 3,
+      range: 0.5,
+      int: 0.2,
+      vit: 0.2,
+      str: 0.2,
+      speed: 0.02,
+      crit: 0.04,
+      apiercing: 0.01,
+      rpiercing: 0.01,
+      hp: 0.0006,
+      mp: 0.0002,
+      armor: 0.05,
+      resistance: 0.05,
+      evasion: 0.01,
+      reflection: 0.006,
+      lifesteal: 0.02,
+      manasteal: 0.01,
+    },
+    STAT_AS_MAIN: true, // Sean 2026-11-20: stat scrolls are cheap, so an item's stat counts as applied: Dexterity for the Ranger, Strength for the Warrior, Intelligence for the Priest
+    SET_BONUS: true, // Sean 2026-11-20: item set bonuses (G.sets, e.g. the Hunter Ranger set: dex +3 at 2 pieces, +6 and speed at 3, armor piercing at 4, resistance at 5) count in the Ranger's gear score: a piece is worth what it adds to the set bonus of the pieces already worn in the other slots
+    SET_WEIGHTS: { phresistance: 0.05, stresistance: 0.05 }, // weights for set-bonus stats that GEAR_WEIGHTS does not list (dex, speed, apiercing, resistance... use GEAR_WEIGHTS)
+    SELF_HEAL_UNTIL_PCT: 0.7, // keep drinking until at least this fraction of max HP
+    HEAL_RETRY_MS: 60000, // after a failed heal attempt (no gold, unreachable shop), wait this long
+    TICK_MS: 400,
+    SCHED_MAX_WAIT_MS: 20 * 60000, // v5: a round that was due but kept waiting behind others this long runs next, whatever its place in the order
+    // v5: the game log cannot be selected or copied and old lines scroll away, so status lines are ALSO written to the browser console (F12), where they can be copied
+    STATUS_REPORT: true, // Sean 2026-11-20: once an hour one "Hourly report" line per character (XP gained, deaths, free bag slots) plus gold and bank space; set('status_report','1') in the console for one now
+    STATUS_REPORT_MS: 3600000,
+    REPORT_URL:
+      "https://script.google.com/macros/s/AKfycbyxfAnj2R0-TZlK93Qos9jeaXNKREdADnjnt-94oP3bB6slu4LAGM8aMLTe416QXUjCag/exec", // Sean 2026-11-20: Google Apps Script web app that appends the hourly report rows to a Google Sheet (see agent/hourly-status-report-as-built.md); easier: set('report_url','https://script.google.com/macros/s/.../exec') in the Merchant's console
+    REPORT_TOKEN: "fennec", // the same token as in the Apps Script (or set('report_token','...'))
+    REPORT_HISTORY: 72, // the last N hourly reports are also kept in the game's storage: game_log(get('status_history'))
+    DROPS_SKIP: ["ornament", "mistletoe", "candycane", "x0", "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "orbofsc"], // Sean 2026-11-20: the hourly report lists what the characters looted, except these Christmas items (and anything in the game's "holidays" set, see DROPS_SKIP_HOLIDAYS)
+    DROPS_SKIP_HOLIDAYS: true,
+    STATUS_STALE_MS: 300000, // a character whose last report is older than this is marked as silent
+    CONSOLE_STATUS: true, // status, report and problem lines (red/amber) also go to console.log; CONSOLE_ALL mirrors everything
+    CONSOLE_ALL: false, // true: EVERY line this script writes to the game log also goes to console.log
+    COURIER_NOTICE_MS: 240000, // v5: after a courier's notice ("I need X potions, bringing N items") no new round starts and the potions are made ready, for at most this long
+    PACE_MS: 1500, // v5: minimum gap between two requests to the server that the game rate-limits (lottery sockets, donation, exchange). One queue for all of them.
+    SCHED_STATUS_MS: 30 * 60000, // v5: how often the schedule line (what runs when, how often rounds were deferred) is logged; set("sched_status","1") prints it now
+  };
+
+  // ============================ HELPERS ===========================
+  // shared helpers live in the "lib" code slot (AL Lib v1.js)
+  const { wait, now, d2, safe, call, unit_cost, clamp_int, at_spot } = AL;
+  const say_raw = AL.logger("Merchant");
+  // activity trail: what the Merchant is doing / has just done, so a stall can be diagnosed from the game log
+  const TRAIL = [];
+  const ACT = { label: "starting", at: Date.now(), est_s: 0, round: false };
+  // v5: copy a line to the browser console with a clock time (never lets a console problem stop the script)
+  function console_line(tag, msg) {
+    let t = "";
+    try {
+      t = new Date().toLocaleTimeString();
+    } catch (e) {}
+    try {
+      console.log(tag + " " + t + "] " + msg);
+    } catch (e) {}
+  }
+  function say(msg, color) {
+    TRAIL.push(
+      Math.round((Date.now() - ACT.at) / 1000) + "s|" + String(msg).slice(0, 60)
+    );
+    if (TRAIL.length > 6) TRAIL.shift();
+    // status and report lines, plus every problem line (red / amber colour), also go to the console where they are easy to copy
+    if (
+      CFG.CONSOLE_ALL ||
+      (CFG.CONSOLE_STATUS &&
+        (/^(Schedule: |Hourly report|Report sheet|Also due after |Upgrade round|Private sale|Market watch|Manual sell round|Manual hold|Bank excess|Sold |Bank junk sweep|Bank (sort|merge|data|layout)|Compound round|Exchange run|Craft report|Gear sweep|Surplus check|Courier notice|Waiting for the courier|Donation|Lottery|Junk pickup|Bag tidy|Copy limit|Flip|FLIP|ERROR|Dead|HP critical|Could not|Cannot)/.test(
+          String(msg)
+        ) ||
+          color === "#CF575F" ||
+          color === "#E1A951" ||
+          color === "#E0A040"))
+    )
+      console_line("[Merchant", msg);
+    return say_raw(msg, color);
+  }
+  function busy_report(why) {
+    return (
+      why +
+      " - Merchant is busy: '" +
+      ACT.label +
+      "' for " +
+      Math.round((Date.now() - ACT.at) / 1000) +
+      "s, map " +
+      character.map +
+      ", moving=" +
+      !!character.moving +
+      ", smart=" +
+      !!(typeof smart !== "undefined" && smart.moving) +
+      ", stand=" +
+      !!character.stand +
+      ". Last log: " +
+      (TRAIL.slice(-4).join(" // ") || "none")
+    );
+  }
+  const is_trusted = (name) =>
+    name === CFG.RANGER_NAME || CFG.TRUSTED_NAMES.indexOf(name) !== -1;
+
+  // An open stand makes the Merchant crawl, so EVERY move goes through travel() and travel()
+  // closes the stand first (retrying if the close does not stick).
+  async function close_stand_now() {
+    for (let attempt = 0; attempt < 3 && character.stand; attempt++) {
+      await call(() => close_stand());
+      await call(() => wait_for(() => !character.stand, 2000));
+    }
+    return !character.stand;
+  }
+  const { describe_dest, log_move, travel, abort, traveling } = AL.mover({
+    say,
+    default_ms: CFG.TRAVEL_TIMEOUT_MS,
+    before: async () => {
+      if (character.stand && !(await close_stand_now()))
+        say("Stand would not close - moving slowly", "#CF575F");
+    },
+  });
+
+  // ============================== STATE ===========================
+  const S = {
+    last_sale: 0,
+    stand_guard_at: 0,
+    jobs: [], // the job queue (see JOB QUEUE): every job from request to its final state
+    cur: null, // the job being served right now
+    finished: {}, // id -> {state, at}: lets a re-sent request be answered without doing it twice
+    idle_walk: false, // true while he is only walking home: a new job pre-empts that
+    hold_until: 0, // after travel_to_main: wait at the main safe spot until then
+    ranger_to_main_at: 0,
+    last_poor: 0,
+    last_shop_fail: 0,
+    last_bank_fail: 0,
+    last_withdraw_fail: 0,
+    last_heal_fail: 0,
+    junk_sent: {}, // request id -> number of items the Ranger says he sent
+    last_list_try: 0,
+    fled_at: 0,
+    compound_next: 0,
+    upgrade_next: 0,
+    exch_next: now() + 90000,
+    exch2_next: now() + 150000,
+    exch2_empty_until: 0,
+    craft_next: now() + 150000,
+    lottery_next: now() + 240000,
+    donate_next: now() + 300000,
+    market_next: now() + 420000,
+    craft_sig: "",
+    manual: null, // set by the top buttons: { real: bool }
+    exch_empty_until: 0,
+    gear_warn_at: now() - 510000, // first "waiting for the Ranger" notice after ~90s
+    upg_diag: null,
+    upgrade_cap: null,
+    upgrade_spent: 0,
+    upgrade_attempts: 0,
+    ranger_gear: null, // last gear_report from the leader Ranger {slots, map, x, y, at}
+    gears: {}, // name -> last gear_report of each follower Ranger
+    st: {}, // name -> hourly report data {gain, cur, last, deaths0, at}
+    rep_prev: null, // gold / bank gold at the last hourly report
+    bank_seen: null, // {gold, free, at}: the bank as last seen (character.bank only exists at the bank)
+    rep_at: 0,
+    party_at: 0, // last party check
+    gear_pending: [], // upgraded items kept in the bag for the Ranger
+    sweep_last: 0,
+    sweep_sig: "",
+    gear_next_try: 0,
+    compound_cap: null, // gold budget for scrolls this session (set at the first round)
+    compound_spent: 0,
+    compound_made: {}, // item names this session produced
+  };
+
+  // ============================ JOB QUEUE =========================
+  // ONE queue replaces v3's S.request / S.junk_req. See agent/merchant-ranger-coordination-spec.md.
+  // Core rule: he finishes his current ATOMIC action, then takes the next job. Compound/upgrade rounds stop at a
+  // group / item boundary (yield_now()); a running job (including a junk trip) is never pre-empted.
+  const P = AL.proto;
+  const IDLE_LABEL = "Merchant: open for business";
+  function act(label, est_s, round) {
+    ACT.label = label;
+    ACT.at = Date.now();
+    ACT.est_s = est_s || 0;
+    ACT.round = !!round;
+  }
+  const act_remaining_s = () =>
+    Math.max(0, (ACT.est_s || 0) - (Date.now() - ACT.at) / 1000);
+  const queued_jobs = () =>
+    S.jobs
+      .filter((j) => j.state === "QUEUED" && j !== S.cur)
+      .sort(
+        (a, b) =>
+          P.PRIORITY[a.jtype] - P.PRIORITY[b.jtype] ||
+          a.created_at - b.created_at
+      );
+  const has_jobs = () => queued_jobs().length > 0;
+  const yield_now = () => has_jobs();
+  const job_est = (j) => P.ETA_S[j.jtype + "_job"] || 60;
+
+  function walk_s(from, job) {
+    if (!Number.isFinite(job.x) || !Number.isFinite(job.y))
+      return P.WALK_S_OTHER_MAP;
+    if (from.map !== job.map) return P.WALK_S_OTHER_MAP + 10;
+    const speed = Math.max(20, Number(character.speed) || 50);
+    return Math.max(P.WALK_S_SAME_MAP_MIN, Math.round(d2(from, job) / speed));
+  }
+  // ETA = time left on the current action + queued actions ahead + walk to the Ranger's town.
+  // Fixed per-action estimates (AL.proto.ETA_S), not live measurement.
+  function eta_for(job) {
+    if (job.state === "ARRIVED" || job.state === "TRANSFERRING") return 10;
+    const shop_s =
+      job.jtype === "restock" &&
+      (quantity(CFG.HP_POTION) < job.hp || quantity(CFG.MP_POTION) < job.mp)
+        ? P.ETA_S.shop_run
+        : 0;
+    if (job === S.cur)
+      return Math.round(act_remaining_s() + walk_s(character, job));
+    let t = act_remaining_s();
+    if (ACT.round) t += P.ETA_S.round_yield_cleanup; // a yielding round still puts its items back in the bank
+    let from = character;
+    for (const a of queued_jobs()) {
+      if (a === job) break;
+      t += job_est(a);
+      from = CFG.STAND_SPOT;
+    }
+    if (S.cur) from = CFG.STAND_SPOT; // he is out on another job
+    return Math.round(t + shop_s + walk_s(from, job));
+  }
+  function send_status(job) {
+    return AL.send(job.from, {
+      type: "job_status",
+      id: job.id,
+      state: job.state,
+      eta: eta_for(job),
+      doing: ACT.label,
+    });
+  }
+  function set_state(job, state) {
+    job.state = state;
+    job.state_at = now();
+    return send_status(job);
+  }
+  // final state: DONE | CANCELLED | FAILED(job.reason)
+  function end_job(job, state) {
+    if (job.ended_at) return;
+    job.state = state;
+    job.ended_at = now();
+    S.jobs = S.jobs.filter((j) => j !== job);
+    S.finished[job.id] = {
+      state,
+      at: now(),
+      from: job.from,
+      reason: job.reason || "",
+    };
+    for (const k of Object.keys(S.finished))
+      if (now() - S.finished[k].at > 180000) delete S.finished[k];
+    if (state === "FAILED") {
+      say(
+        "Job " +
+          job.jtype +
+          " " +
+          job.id +
+          " FAILED: " +
+          (job.reason || "failed"),
+        "#CF575F"
+      );
+      AL.send(job.from, {
+        type: "job_failed",
+        id: job.id,
+        reason: job.reason || "failed",
+      });
+    } else if (state === "DONE") {
+      AL.send(
+        job.from,
+        Object.assign({ type: "job_done", id: job.id }, job.result || {})
+      );
+    }
+  }
+  function abort_walk() {
+    return abort();
+  }
+  function cancel_job(job, why) {
+    say("Job " + job.jtype + " " + job.id + " cancelled: " + why);
+    if (job === S.cur) {
+      job.cancelled = true;
+      if (job.state === "EN_ROUTE") abort_walk(); // already walking over: turn back at once
+    } else end_job(job, "CANCELLED");
+  }
+
+  function on_request(from, d) {
+    const jt = String(d.jtype || "");
+    if (jt !== "restock" && jt !== "junk" && jt !== "stack") return;
+    if (S.courier_note && S.courier_note.from === from) S.courier_note = null; // the courier has arrived: the notice is used up
+    const dup = S.jobs.find((j) => j.id === d.id);
+    if (dup) return void send_status(dup); // the Ranger re-sent it (resume after a reload): just confirm
+    const fin = S.finished[d.id];
+    if (fin) {
+      if (fin.state === "CANCELLED")
+        AL.send(from, { type: "cancel_ack", id: d.id });
+      else if (fin.state === "FAILED")
+        AL.send(from, {
+          type: "job_failed",
+          id: d.id,
+          reason: fin.reason || "failed",
+        });
+      return;
+    }
+    if (S.jobs.length >= CFG.MAX_QUEUE)
+      return void AL.send(from, {
+        type: "job_failed",
+        id: d.id,
+        reason: "queue_full",
+      });
+    const job = {
+      id: d.id,
+      jtype: jt,
+      from,
+      created_at: now(),
+      map: String(d.map || "main"),
+      x: Number(d.x),
+      y: Number(d.y),
+      state: "QUEUED",
+      state_at: now(),
+      hp: 0,
+      mp: 0,
+      count: 0,
+      names: [],
+      courier: [],
+      cancelled: false,
+      reason: "",
+      result: null,
+    };
+    // a courier trip: the order is for the whole party, and the gear waiting for the other Rangers rides along
+    if (Array.isArray(d.courier))
+      job.courier = d.courier
+        .filter(
+          (n) =>
+            typeof n === "string" &&
+            n !== from &&
+            (roster().indexOf(n) !== -1 || !!support_cfg(n))
+        )
+        .slice(0, 4);
+    if (jt === "restock") {
+      job.hp = clamp_int(d.hp, 0, CFG.MAX_REQUEST);
+      job.mp = clamp_int(d.mp, 0, CFG.MAX_REQUEST);
+      if (!job.hp && !job.mp) return;
+    } else {
+      job.count = clamp_int(d.count, 1, 42);
+      job.names = Array.isArray(d.names)
+        ? d.names
+            .slice(0, 42)
+            .filter((n) => typeof n === "string" && n.length <= 40)
+        : [];
+    }
+    // a newer request of the same kind from the same character replaces his older, still-waiting one
+    for (const old of S.jobs.filter(
+      (j) =>
+        j.from === from && j.jtype === jt && j !== S.cur && j.state === "QUEUED"
+    ))
+      end_job(old, "CANCELLED");
+    S.jobs.push(job);
+    send_status(job); // the first status is the ack: it carries the ETA
+    say(
+      "Job " +
+        jt +
+        " from " +
+        from +
+        " (" +
+        (jt === "restock"
+          ? job.hp + " HP / " + job.mp + " MP"
+          : job.count + " item(s)") +
+        "), ETA " +
+        eta_for(job) +
+        "s, " +
+        queued_jobs().length +
+        " waiting"
+    );
+    if (ACT.label !== IDLE_LABEL) say_raw(busy_report("Job queued"), "#CF575F");
+    // an idle walk (back to the stand) is not an action: drop it and go
+    if (S.idle_walk && !S.cur) abort_walk();
+  }
+  function on_cancel(from, d) {
+    AL.send(from, { type: "cancel_ack", id: d.id });
+    const job = S.jobs.find((j) => j.id === d.id && j.from === from);
+    if (job) cancel_job(job, "asked by " + from);
+  }
+  // The Ranger starts his portal trip to the main map: drop any trip toward his old town, go to the main-town safe spot and wait there
+  function on_travel_to_main(from) {
+    S.ranger_to_main_at = now();
+    let any = false;
+    for (const j of S.jobs.slice()) {
+      if (j.from !== from || j.map === "main") continue;
+      any = true;
+      AL.send(from, { type: "cancel_ack", id: j.id });
+      cancel_job(j, from + " is travelling to the main map");
+    }
+    if (any) {
+      S.hold_until = now() + CFG.HOLD_AT_SAFE_MS;
+      if (!S.cur && S.idle_walk) abort_walk(); // only a walk home is dropped; a bank / shop trip finishes
+    }
+  }
+  // Restart handshake: the other side lists the jobs it has in flight. Any of ours it does not know is a ghost: kill it.
+  function on_hello(from, d) {
+    const theirs = Array.isArray(d.jobs)
+      ? d.jobs.filter(P.id_ok).slice(0, 30)
+      : [];
+    for (const j of S.jobs.filter((x) => x.from === from))
+      if (theirs.indexOf(j.id) === -1)
+        cancel_job(j, "ghost job after " + from + " restarted");
+    if (d.want_reply)
+      AL.send(from, {
+        type: "hello",
+        jobs: S.jobs.filter((j) => j.from === from).map((j) => j.id),
+        want_reply: false,
+      });
+  }
+  function send_hello() {
+    AL.send(CFG.RANGER_NAME, {
+      type: "hello",
+      jobs: S.jobs.map((j) => j.id),
+      want_reply: true,
+    });
+  }
+
+  // ====================== MESSAGES FROM THE RANGER ================
+  function reply(to, msg) {
+    return call(() => send_cm(to, msg));
+  }
+
+  character.on("cm", function (m) {
+    if (!alive()) return;
+    try {
+      const d = AL.parse_job(m, (n) => is_trusted(n) || !!support_cfg(n)); // cm's can come from anyone - ignore strangers and malformed messages
+      if (!d) return;
+      switch (d.type) {
+        case "job_request":
+          return void on_request(m.name, d);
+        case "job_cancel":
+          return void on_cancel(m.name, d);
+        case "job_sent":
+          S.junk_sent[d.id] = clamp_int(d.count, 0, 42);
+          return;
+        case "boss_handoff": {
+          // a Ranger hands over his bag at the start of a boss event: stackables are banked, never sold (the bank tells whether they are kept already)
+          if (!Array.isArray(d.names)) return;
+          for (const n of d.names.slice(0, 20))
+            if (
+              typeof n === "string" &&
+              G.items[n] &&
+              G.items[n].s &&
+              !stack_protected(n)
+            )
+              stack_names[n] = true;
+          S.tidy_next = 0;
+          return;
+        }
+        case "courier_notice": {
+          if (
+            m.name !== CFG.RANGER_NAME &&
+            CFG.TRUSTED_NAMES.indexOf(m.name) === -1
+          )
+            return;
+          S.courier_note = {
+            from: m.name,
+            hp: clamp_int(d.hp, 0, 5000),
+            mp: clamp_int(d.mp, 0, 5000),
+            items: clamp_int(d.items, 0, 500),
+            until: now() + CFG.COURIER_NOTICE_MS,
+          };
+          say(
+            "Courier notice from " +
+              m.name +
+              ": " +
+              S.courier_note.hp +
+              " " +
+              CFG.HP_POTION +
+              " + " +
+              S.courier_note.mp +
+              " " +
+              CFG.MP_POTION +
+              " to pick up, " +
+              S.courier_note.items +
+              " item(s) to sort (I have " +
+              quantity(CFG.HP_POTION) +
+              "/" +
+              quantity(CFG.MP_POTION) +
+              ")",
+            "#51D2E1"
+          );
+          return;
+        }
+        case "travel_to_main":
+          return void on_travel_to_main(m.name);
+        case "hello":
+          return void on_hello(m.name, d);
+        case "mluck_request": {
+          if (
+            m.name !== CFG.RANGER_NAME &&
+            CFG.TRUSTED_NAMES.indexOf(m.name) === -1
+          )
+            return;
+          const names = (Array.isArray(d.names) ? d.names : [])
+            .slice(0, 12)
+            .filter((n) => typeof n === "string" && n.length <= 30);
+          const id = String(d.id || "").slice(0, 30);
+          const def = mluck_def();
+          if (
+            !CFG.MLUCK_PARTY ||
+            !def ||
+            character.level < (Number(def.level) || 0)
+          ) {
+            say(
+              "Merchant's Luck request from " +
+                m.name +
+                " refused (" +
+                (!CFG.MLUCK_PARTY
+                  ? "switched off"
+                  : "skill not available at level " + character.level) +
+                ")",
+              "#CF575F"
+            );
+            return void reply(m.name, {
+              type: "mluck_done",
+              id,
+              cast: [],
+              failed: names,
+              off: true,
+            });
+          }
+          S.mluck_req = { id, from: m.name, names, at: now() };
+          say(
+            "Merchant's Luck request from " +
+              m.name +
+              " for " +
+              names.join(", "),
+            "#51D2E1"
+          );
+          return;
+        }
+        case "need_basher": {
+          // Sean 2026-11-20: the Warrior has no basher (Stomp is the stun that keeps him alive): fetch one from the bank and hand it over in town, now
+          if (!support_cfg(m.name) || !kit_names(m.name).length) return;
+          S.kit_call = { who: m.name, at: now() };
+          say("Basher call from " + m.name + " - fetching one from the bank and bringing it to him in town", "#E0A040");
+          return;
+        }
+        case "gear_report": {
+          if (!d.slots || typeof d.slots !== "object") return;
+          if (
+            m.name !== CFG.RANGER_NAME &&
+            CFG.TRUSTED_NAMES.indexOf(m.name) === -1 &&
+            !support_cfg(m.name)
+          )
+            return;
+          const slots = {};
+          for (const k of Object.keys(d.slots).slice(0, 20)) {
+            const w = d.slots[k];
+            if (w && typeof w.name === "string" && w.name.length <= 40)
+              slots[k] = { name: w.name, level: clamp_int(w.level, 0, 20) };
+            if (typeof w.stat_type === "string" && w.stat_type.length <= 12)
+              slots[k].stat_type = w.stat_type;
+          }
+          if (!gear_of(m.name))
+            say(
+              "Got " +
+                m.name +
+                "'s gear report: " +
+                Object.keys(slots).length +
+                " worn item(s)"
+            );
+          const bag = {};
+          if (d.bag && typeof d.bag === "object")
+            for (const k of Object.keys(d.bag).slice(0, 10))
+              if (k.length <= 40) bag[k] = clamp_int(d.bag[k], 0, 99);
+          const rep_ = {
+            slots,
+            bag,
+            map: String(d.map || "main"),
+            x: Number(d.x),
+            y: Number(d.y),
+            at: now(),
+          };
+          stat_note(m.name, d.stat);
+          if (m.name === CFG.RANGER_NAME) S.ranger_gear = rep_;
+          else S.gears[m.name] = rep_;
+          if (support_cfg(m.name + "+")) {
+            const alt = {};
+            if (d.alt && typeof d.alt === "object")
+              for (const k of Object.keys(d.alt).slice(0, 20)) {
+                const w = d.alt[k];
+                if (w && typeof w.name === "string" && w.name.length <= 40)
+                  alt[k] = { name: w.name, level: clamp_int(w.level, 0, 20) };
+              }
+            S.gears[m.name + "+"] = {
+              slots: alt,
+              bag: {},
+              map: rep_.map,
+              x: rep_.x,
+              y: rep_.y,
+              at: now(),
+            };
+          }
+          return;
+        }
+        case "gear_replaced":
+          if (m.name === CFG.RANGER_NAME) return void on_gear_replaced(d);
+          return;
+      }
+    } catch (e) {
+      say("bad cm ignored: " + ((e && e.message) || e));
+    }
+  });
+
+  // Fires once for every completed purchase from OUR stand
+  game.on("sale", function (d) {
+    S.last_sale = now();
+    say(
+      "Sold " +
+        (d && d.num) +
+        "x " +
+        (d && d.item && (d.item.name || d.item)) +
+        " to " +
+        (d && d.buyer)
+    );
+  });
+
+  // ============================ SAFETY ============================
+  // Runs on its own timer so it still works while a long trip is awaited.
+  // Which HP potion to drink: the cheap stand-stock one first. The Ranger's delivery potions
+  // are only touched as a last resort (critical HP), so a hit does not eat his restock.
+  function pick_hp_potion(pct) {
+    const order = [CFG.SELF_HEAL_POTION];
+    if (CFG.HP_POTION !== CFG.SELF_HEAL_POTION && pct < CFG.FLEE_HP_PCT)
+      order.push(CFG.HP_POTION);
+    for (const n of order) if (quantity(n) > 0) return n;
+    return null;
+  }
+  function drink_hp(pct) {
+    const name = pick_hp_potion(pct);
+    if (!name || is_on_cooldown("use_hp")) return null;
+    call(() => equip(locate_item(name))); // by name - use_skill("use_hp") would pick one for us
+    return name;
+  }
+
+  function emergency_tick() {
+    if (!alive() || character.rip) return;
+    // safety net: an open stand makes him crawl, so if he is ever walking with it open, close it
+    if (
+      character.stand &&
+      (smart.moving || is_moving(character)) &&
+      now() - S.stand_guard_at > 3000
+    ) {
+      S.stand_guard_at = now();
+      say("Stand was open while moving - closing it", "#CF575F");
+      call(() => close_stand());
+    }
+    const pct = character.hp / character.max_hp;
+    if (pct < CFG.HP_USE_PCT) drink_hp(pct);
+    if (pct < CFG.FLEE_HP_PCT && now() - S.fled_at > 20000) {
+      S.fled_at = now();
+      say("HP critical - teleporting to town", "#CF575F");
+      if (character.stand) call(() => close_stand());
+      call(() => town());
+    }
+  }
+  setInterval(emergency_tick, 1000);
+
+  // ====================== PARTY LEADER ======================
+  function party_tick() {
+    if (!alive() || !CFG.PARTY_ENABLED || character.rip) return;
+    if (now() - S.party_at < CFG.PARTY_INVITE_MS) return;
+    S.party_at = now();
+    let members = {};
+    try {
+      members = get_party() || {};
+    } catch (e) {}
+    let active = null;
+    try {
+      active = get_active_characters();
+    } catch (e) {}
+    for (const n of roster().concat(CFG.SUPPORT_NAMES || [])) {
+      if (n === character.name || members[n]) continue;
+      if (active && !active[n]) continue; // not running: nothing to invite
+      say("Inviting " + n + " to the party");
+      call(() => send_party_invite(n));
+    }
+  }
+  setInterval(party_tick, 5000);
+
+  async function survive() {
+    if (!character.rip) return false;
+    say("Dead - respawning", "#CF575F");
+    await wait(2500);
+    await call(() => respawn());
+    await wait(1500);
+    return true;
+  }
+
+  // ===================== STAND: DRAIN / OPEN / LIST ===============
+  function customers_near() {
+    const out = [];
+    for (const id in parent.entities) {
+      const e = parent.entities[id];
+      if (
+        !e ||
+        e.type !== "character" ||
+        e.npc ||
+        e.rip ||
+        e.name === character.name
+      )
+        continue;
+      if (is_trusted(e.name) || support_cfg(e.name)) continue; // our own characters are not customers
+      if (d2(character, e) <= CFG.CUSTOMER_RADIUS) out.push(e);
+    }
+    return out;
+  }
+
+  // Wait until nobody is mid-purchase, then close the stand. Call before leaving.
+  //   1. stay open while a sale landed recently or a customer is next to the stand
+  //   2. after DRAIN_SOFT_MS close the stand (stops NEW purchases), then wait out
+  //      the quiet window so anything already in flight still lands
+  //   3. never wait longer than DRAIN_MAX_MS
+  async function drain_stand(reason) {
+    const started = now();
+    let closed = !character.stand;
+    let announced = false;
+    for (;;) {
+      if (!character.stand) closed = true;
+      const waited = now() - started;
+      const quiet = now() - S.last_sale >= CFG.SALE_QUIET_MS;
+      const customers = customers_near().length;
+
+      if (quiet && (closed || customers === 0)) break;
+      if (waited >= CFG.DRAIN_MAX_MS) {
+        say(
+          "Stand drain timed out (" + reason + ") - leaving anyway",
+          "#CF575F"
+        );
+        break;
+      }
+      if (!announced) {
+        announced = true;
+        say("Waiting for the stand to go quiet before " + reason + "...");
+      }
+      if (!closed && waited >= CFG.DRAIN_SOFT_MS) {
+        say("Closing the stand to stop new purchases");
+        await call(() => close_stand());
+        closed = true;
+      }
+      await wait(250);
+    }
+    if (character.stand) await call(() => close_stand());
+    await call(() => wait_for(() => !character.stand, 3000));
+    return { waited: now() - started };
+  }
+
+  function listed_qty(name) {
+    let q = 0;
+    const slots = character.slots || {};
+    for (const k in slots)
+      if (k.indexOf("trade") === 0 && slots[k] && slots[k].name === name)
+        q += slots[k].q || 1;
+    return q;
+  }
+
+  // Puts potions on the stand and keeps the slots topped up as new stock arrives.
+  // - empty slot: list the spare stock (everything above the delivery reserve)
+  // - partly sold slot: take it back and relist the larger amount (only while no sale is in flight)
+  async function ensure_listings() {
+    if (now() - S.last_list_try < CFG.LIST_RETRY_MS) return;
+    const quiet = () =>
+      now() - S.last_sale >= CFG.SALE_QUIET_MS && customers_near().length === 0;
+    const spare_of = (L) =>
+      quantity(L.name) - (L.reserve !== undefined ? L.reserve : stock_low_at()); // delivery stock is never listed
+
+    let busy = false;
+    for (const L of CFG.STAND_LISTINGS) {
+      const slot = "trade" + L.slot;
+      let cur = character.slots && character.slots[slot];
+
+      if (cur && cur.name && cur.name !== L.name) {
+        say(
+          slot + " holds " + cur.name + ", not " + L.name + " - leaving it",
+          "#CF575F"
+        );
+        continue;
+      }
+      if (cur && cur.name) {
+        // already listed: top up when a useful amount of new stock is waiting
+        const room = L.qty - (cur.q || 1);
+        const add = Math.min(room, spare_of(L));
+        if (add < Math.max(5, Math.ceil(L.qty * 0.2))) continue;
+        if (!quiet()) {
+          busy = true; // a sale is in flight - try again shortly instead of waiting out the full retry period
+          continue;
+        }
+        S.last_list_try = now();
+        say(
+          "Topping up " +
+            L.name +
+            " on the stand (" +
+            (cur.q || 1) +
+            " listed, " +
+            add +
+            " more available)"
+        );
+        await call(() => unequip(slot));
+        await call(() =>
+          wait_for(
+            () => !(character.slots[slot] && character.slots[slot].name),
+            3000
+          )
+        );
+        cur = character.slots && character.slots[slot];
+        if (cur && cur.name) {
+          say("Could not take " + slot + " back to top it up", "#CF575F");
+          continue;
+        }
+      }
+
+      const idx = locate_item(L.name);
+      const spare = spare_of(L);
+      if (idx < 0 || spare <= 0) {
+        if (!cur)
+          say(
+            "Nothing spare to list for " +
+              L.name +
+              " (have " +
+              quantity(L.name) +
+              ", keeping " +
+              (L.reserve !== undefined ? L.reserve : stock_low_at()) +
+              ")"
+          );
+        continue;
+      }
+      const q = Math.min(L.qty, spare, character.items[idx].q || 1);
+      S.last_list_try = now();
+      const res = await call(() => trade(idx, L.slot, L.price, q));
+      if (res.failed)
+        say("Listing " + L.name + " failed: " + res.reason, "#CF575F");
+      else say("Listed " + q + "x " + L.name + " @ " + L.price);
+    }
+    if (busy) S.last_list_try = now() - CFG.LIST_RETRY_MS + 2000; // retry in ~2s
+  }
+
+  async function ensure_stand() {
+    if (!at_spot(CFG.STAND_SPOT, CFG.STAND_SPOT_RADIUS)) {
+      if (!is_moving(character)) {
+        S.idle_walk = true; // not an action: a new job pre-empts the walk home
+        let r;
+        try {
+          r = await travel(CFG.STAND_SPOT, 0, "returning to the stand spot");
+        } finally {
+          S.idle_walk = false;
+        }
+        if (r.failed && r.reason !== "aborted") await wait(3000);
+      }
+      return;
+    }
+    if (is_moving(character)) return;
+    if (!character.stand) {
+      await call(() => open_stand()); // no argument: finds the stand item itself
+      await wait(500);
+    }
+    if (character.stand) await ensure_listings();
+  }
+
+  // back to the stand - skipped when a job is already waiting, and pre-empted by one that arrives on the way
+  // ---- v5: bank sorting ----
+  // The game has no direct "move inside the pack" call (the raw "swap"/"move" socket operations were refused live). Exchanging two bank slots a and b uses
+  // the same calls merging uses: bank_retrieve(pack, slot) for each occupied slot, then bank_store(bag_slot, pack, other_slot) into the other slot.
+  // Every step is checked; if one is not as expected, what is in the bag goes back into the bank and sorting switches itself off until the next restart.
+  const BSORT = { off: false, last_msg: 0, bad: {}, fails: 0, next: 0 }; // bad: "pack:slot" -> true, slots the game would not move (left where they are from then on)
+  const bank_key = (it) => {
+    if (!it) return "\uffff";
+    const def = G.items[it.name] || {};
+    return (
+      (def.s ? "0" : "1") +
+      (def.type || "~") +
+      "|" +
+      it.name +
+      "|" +
+      String(99 - (it.level || 0)).padStart(2, "0") +
+      "|" +
+      (it.q || 1) +
+      (it.l ? "L" : "")
+    );
+  };
+  // pins: slot numbers that stay where they are (stackables the bag already holds - a retrieve would merge them into the bag stack - and slots the game refused to move)
+  const bank_cap = () => CFG.BANK_PACK_SIZE - (CFG.BANK_SWAP_SLOT ? 1 : 0); // usable slots per pack
+  const swap_slot = () => (CFG.BANK_SWAP_SLOT ? CFG.BANK_PACK_SIZE - 1 : -1);
+  function bank_sort_plan(arr, pins) {
+    const idx = [];
+    for (let i = 0; i < bank_cap(); i++) if (!(pins && pins[i])) idx.push(i);
+    const cur = idx.map((i) => arr[i] || null);
+    const want = cur
+      .slice()
+      .sort((x, y) =>
+        bank_key(x) < bank_key(y) ? -1 : bank_key(x) > bank_key(y) ? 1 : 0
+      );
+    const swaps = [];
+    for (let pos = 0; pos < cur.length; pos++) {
+      if (bank_key(cur[pos]) === bank_key(want[pos])) continue;
+      let j = -1;
+      for (let k = pos + 1; k < cur.length; k++)
+        if (bank_key(cur[k]) === bank_key(want[pos])) {
+          j = k;
+          break;
+        }
+      if (j < 0) continue;
+      swaps.push([idx[pos], idx[j]]);
+      const t = cur[pos];
+      cur[pos] = cur[j];
+      cur[j] = t;
+    }
+    return swaps;
+  }
+  function bank_sort_pins(pack, arr) {
+    const pins = {};
+    arr.forEach((it, i) => {
+      if (!it) return;
+      const def = G.items[it.name] || {};
+      if (BSORT.bad[pack + ":" + i] || it.l || (def.s && quantity(it.name) > 0))
+        pins[i] = true;
+    });
+    return pins;
+  }
+  // Joins split stacks: the smaller stack is taken into the bag, then stored onto the bigger one (bank_store with the target slot). Checked every time:
+  // if the game does not put it onto the stack, merging switches itself off. Items the Merchant uses himself, or already holds in his bag, are left alone.
+  const BMERGE = { off: false };
+  async function bank_merge_here() {
+    if (
+      !CFG.BANK_MERGE ||
+      BMERGE.off ||
+      character.map !== "bank" ||
+      !character.bank
+    )
+      return;
+    const by = {};
+    for (const pack of CFG.COMPOUND_PACKS) {
+      const arr = character.bank[pack];
+      if (!Array.isArray(arr)) continue;
+      arr.forEach((it, i) => {
+        const def = it && G.items[it.name];
+        if (
+          !it ||
+          it.l ||
+          !def ||
+          !def.s ||
+          !(it.q >= 1) ||
+          merge_protected(it.name)
+        )
+          return;
+        if (quantity(it.name) > 0) {
+          // a retrieve would merge into the bag stack: left alone, but say so (at most every 30 min per item)
+          if (!BMERGE.said) BMERGE.said = {};
+          if (now() - (BMERGE.said[it.name] || 0) > 30 * 60000) {
+            BMERGE.said[it.name] = now();
+            say(
+              "Bank merge: " +
+                it.name +
+                " stacks are not joined while the bag holds " +
+                quantity(it.name) +
+                " of it",
+              "#E1A951"
+            );
+          }
+          return;
+        }
+        (by[it.name] = by[it.name] || []).push({ pack, i, q: it.q });
+      });
+    }
+    let joined = 0;
+    const names = [];
+    for (const name of Object.keys(by)) {
+      const stacks = by[name].sort((x, y) => y.q - x.q);
+      if (stacks.length < 2) continue;
+      const cap = typeof G.items[name].s === "number" ? G.items[name].s : 9999;
+      for (let si = stacks.length - 1; si >= 1; si--) {
+        // v5: the smallest stack joins the BIGGEST stack that it still fits onto (first fit); a stack that would push every other one past the stack size stays split (no partial joins)
+        const s = stacks[si];
+        if (s.gone) continue;
+        const target = stacks.find(
+          (t, ti) => ti < si && !t.gone && t.q + s.q <= cap
+        );
+        if (!target) continue;
+        if (
+          joined >= CFG.BANK_MERGE_MAX ||
+          has_jobs() ||
+          !alive() ||
+          free_slots() < 1
+        )
+          return finish();
+        const before = quantity(name);
+        const got = await call(() => bank_retrieve(s.pack, s.i));
+        const ok1 = got.failed
+          ? got
+          : await call(() =>
+              wait_for(() => quantity(name) >= before + s.q, 3000)
+            );
+        if (ok1.failed) {
+          BMERGE.off = true;
+          say(
+            "Bank merge: could not take " +
+              name +
+              " out of " +
+              s.pack +
+              " - merging is switched off until the next restart",
+            "#CF575F"
+          );
+          return finish();
+        }
+        const bag_i = locate_item(name);
+        const sum_before = target.q;
+        await call(() => bank_store(bag_i, target.pack)); // v5: pack only (a slot-addressed store onto an occupied slot timed out live)
+        const ok2 = await call(() =>
+          wait_for(() => quantity(name) === 0, 3000)
+        );
+        const now_q = (character.bank[target.pack][target.i] || {}).q || 0;
+        if (ok2.failed || now_q !== sum_before + s.q) {
+          BMERGE.off = true;
+          say(
+            "Bank merge: " +
+              name +
+              " was not added onto the stack in " +
+              target.pack +
+              " slot " +
+              target.i +
+              " - merging is switched off until the next restart (check the bank)",
+            "#CF575F"
+          );
+          return finish();
+        }
+        target.q = now_q;
+        s.gone = true;
+        joined++;
+        if (names.indexOf(name) === -1) names.push(name);
+        await wait(CFG.BANK_SORT_STEP_MS);
+      }
+    }
+    return finish();
+    function finish() {
+      if (joined)
+        say(
+          "Bank merge: " +
+            joined +
+            " split stack(s) joined (" +
+            names.join(", ") +
+            ")",
+          "#8AB4D0"
+        );
+    }
+  }
+  // ---- v5 bank layout: which pack an item belongs in ----
+  const BLAY = { off: false, fails: 0, last: "", sets: null };
+  function layout_sets() {
+    if (BLAY.sets) return BLAY.sets;
+    const exch = {};
+    const craft = {};
+    for (const e of CFG.EXCHANGE_PLAN) exch[e.item] = true;
+    const rec = G.craft || {};
+    if (rec.xbox) for (const row of rec.xbox.items || []) exch[row[1]] = true; // the Quantum Pieces
+    for (const t of CFG.CRAFT_TARGETS.map((x) => x.item).concat(
+      CFG.CRAFT_ITEMS
+    ))
+      if (rec[t]) for (const row of rec[t].items || []) craft[row[1]] = true;
+    return (BLAY.sets = { exch, craft });
+  }
+  function bank_class(it) {
+    const def = G.items[it.name];
+    const sets = layout_sets();
+    if (sets.exch[it.name] || (def && def.e)) return "exchange";
+    if (!def) return "excess";
+    if (def.compound) return "compound";
+    if (def.upgrade) return "upgrade";
+    if (def.s || sets.craft[it.name]) return "stack";
+    return "excess";
+  }
+  const bank_pack_exists = (pack) =>
+    !!(character.bank && Array.isArray(character.bank[pack]));
+  function bank_free_slot(pack, taken) {
+    const arr = character.bank[pack];
+    for (let i = 0; i < bank_cap(); i++)
+      if (!arr[i] && !(taken && taken[pack + ":" + i])) return i;
+    return -1;
+  }
+  // where a deposit goes: the item's own pack(s), then the fallback order (last pack first). null = let the game choose.
+  function bank_spot(it, taken) {
+    if (!CFG.BANK_LAYOUT || BLAY.off || !character.bank) return null;
+    const order = [];
+    for (const p of (CFG.BANK_LAYOUT_PACKS[bank_class(it)] || []).concat(
+      CFG.BANK_FALLBACK_ORDER,
+      CFG.COMPOUND_PACKS
+    ))
+      if (bank_pack_exists(p) && order.indexOf(p) === -1) order.push(p);
+    // v5: a stackable is stored ONTO the fullest stack of the same kind that still has room for it (not as a new single stack); only if none has room does it take an empty slot
+    const def = G.items[it.name];
+    if (def && def.s && !it.l && !merge_protected(it.name)) {
+      const cap = typeof def.s === "number" ? def.s : 9999;
+      let best = null;
+      for (const pack of order)
+        character.bank[pack].forEach((x, i) => {
+          if (!x || x.l || x.name !== it.name || !(x.q >= 1)) return;
+          const have = x.q + ((taken && taken[pack + ":" + i + ":q"]) || 0);
+          if (have + (it.q || 1) <= cap && (!best || have > best.have))
+            best = { pack, slot: i, have, onto: true };
+        });
+      if (best) return best;
+    }
+    for (const pack of order) {
+      const slot = bank_free_slot(pack, taken);
+      if (slot >= 0) return { pack, slot };
+    }
+    return null;
+  }
+  function layout_failed(what) {
+    BLAY.fails++;
+    if (BLAY.fails >= CFG.BANK_LAYOUT_MAX_FAILS) BLAY.off = true;
+    say(
+      "Bank layout: " +
+        what +
+        (BLAY.off
+          ? " - " +
+            BLAY.fails +
+            " failures: the bank layout is switched off until the next restart"
+          : ""),
+      "#E1A951"
+    );
+  }
+  // Moves ONE bank item through the bag: bank_retrieve, then bank_store into a named slot. Every step is checked.
+  // Returns { ok:true } or { fail: "text", stale: bool, bi: bag slot of an item left in the bag or undefined }.
+  async function bank_move_one(from_pack, from, to_pack, to) {
+    const it = character.bank[from_pack][from];
+    if (!it) return { ok: true };
+    const key = bank_key(it);
+    const had = {};
+    for (let i = 0; i < character.isize; i++)
+      if (character.items[i]) had[i] = true;
+    const got = await call(() => bank_retrieve(from_pack, from));
+    const ok = got.failed
+      ? got
+      : await call(() =>
+          wait_for(
+            () =>
+              !character.bank[from_pack][from] &&
+              Object.keys(character.items).some(
+                (i) => character.items[i] && !had[i]
+              ),
+            3000
+          )
+        );
+    if (ok.failed) {
+      const now_bag = [];
+      for (let i = 0; i < character.isize; i++)
+        if (character.items[i] && !had[i])
+          now_bag.push(i + ":" + character.items[i].name);
+      const stale = !!(
+        got.failed && /no_item/i.test(String(got.reason || JSON.stringify(got)))
+      );
+      return {
+        fail:
+          "taking it out of " +
+          from_pack +
+          " slot " +
+          from +
+          " [" +
+          (got.failed
+            ? "bank_retrieve refused: " + (got.reason || JSON.stringify(got))
+            : "bank_retrieve was accepted but within 3s the bank slot still shows " +
+              JSON.stringify(character.bank[from_pack][from] || null) +
+              " and the new bag items are [" +
+              now_bag.join(",") +
+              "]") +
+          "]",
+        stale,
+      };
+    }
+    let bi = -1;
+    for (let i = 0; i < character.isize; i++)
+      if (character.items[i] && !had[i]) bi = i;
+    await wait(CFG.BANK_SORT_STEP_MS);
+    await call(() => bank_store(bi, to_pack, to));
+    const ok2 = await call(() =>
+      wait_for(
+        () =>
+          !character.items[bi] && bank_key(character.bank[to_pack][to]) === key,
+        3000
+      )
+    );
+    if (ok2.failed)
+      return {
+        fail:
+          "storing it into " +
+          to_pack +
+          " slot " +
+          to +
+          " (bag slot " +
+          bi +
+          ")",
+        bi,
+      };
+    await wait(CFG.BANK_SORT_STEP_MS);
+    return { ok: true };
+  }
+  // Exchanges two slots of one pack. With one slot empty it is a single move; with both occupied the transit slot (the last slot, or any other empty one) holds the first item, so the bag
+  // never holds more than ONE item at a time.
+  async function bank_swap(pack, a, b) {
+    const arr = character.bank[pack];
+    if (!arr[a] && !arr[b]) return { ok: true };
+    if (!arr[a] || !arr[b])
+      return await bank_move_one(pack, arr[a] ? a : b, pack, arr[a] ? b : a);
+    let buf = swap_slot();
+    if (buf < 0 || arr[buf] || buf === a || buf === b) {
+      buf = -1;
+      for (let i = bank_cap() - 1; i >= 0; i--)
+        if (!arr[i] && i !== a && i !== b) {
+          buf = i;
+          break;
+        }
+    }
+    if (buf < 0)
+      return { fail: "there is no empty slot in " + pack + " to swap through" };
+    let r = await bank_move_one(pack, a, pack, buf);
+    if (!r.ok) return r;
+    r = await bank_move_one(pack, b, pack, a);
+    if (!r.ok) {
+      if (r.bi !== undefined && character.items[r.bi])
+        await call(() => bank_store(r.bi));
+      await bank_move_one(pack, buf, pack, a); // best effort: the first item goes back to where it was
+      return r;
+    }
+    return await bank_move_one(pack, buf, pack, b);
+  }
+  // Moves the items that sit in the wrong pack into their own pack (only into packs that have room). The target pack is NOT sorted here: its own sort run does that.
+  async function bank_route_here() {
+    if (
+      !CFG.BANK_LAYOUT ||
+      !CFG.BANK_ROUTE ||
+      BLAY.off ||
+      character.map !== "bank" ||
+      !character.bank
+    )
+      return;
+    const todo = [];
+    const taken = {};
+    const stuck = {};
+    for (const pack of CFG.COMPOUND_PACKS) {
+      const arr = character.bank[pack];
+      if (!Array.isArray(arr)) continue;
+      const pins = bank_sort_pins(pack, arr);
+      for (let i = 0; i < CFG.BANK_PACK_SIZE; i++) {
+        const it = arr[i];
+        if (!it || pins[i] || it.l) continue;
+        const cls = bank_class(it);
+        const home = (CFG.BANK_LAYOUT_PACKS[cls] || []).filter(
+          bank_pack_exists
+        );
+        if (!home.length || home.indexOf(pack) !== -1) continue;
+        let dst = null;
+        for (const p of home) {
+          const slot = bank_free_slot(p, taken);
+          if (slot >= 0) {
+            dst = { pack: p, slot };
+            break;
+          }
+        }
+        if (!dst) {
+          stuck[cls] = (stuck[cls] || 0) + 1;
+          continue;
+        }
+        taken[dst.pack + ":" + dst.slot] = true;
+        todo.push({ from: pack, i, cls, dst, name: it.name });
+      }
+    }
+    let moved = 0;
+    const by = {};
+    for (const m of todo) {
+      if (moved >= CFG.BANK_ROUTE_MAX_MOVES || has_jobs() || !alive()) break;
+      if (free_slots() < 1) {
+        say(
+          "Bank layout: needs 1 empty bag slot to move items with - next visit",
+          "#E1A951"
+        );
+        break;
+      }
+      const cur = character.bank[m.from][m.i];
+      if (!cur || cur.name !== m.name) continue; // changed meanwhile
+      const r = await bank_move_one(m.from, m.i, m.dst.pack, m.dst.slot);
+      if (!r.ok) {
+        if (r.bi !== undefined && character.items[r.bi])
+          await call(() => bank_store(r.bi));
+        await wait(1000);
+        if (r.stale) {
+          BSORT.bad[m.from + ":" + m.i] = true;
+          say(
+            "Bank layout: " +
+              r.fail +
+              " - the game's bank differs from my copy (out of date); stopping for this visit",
+            "#E1A951"
+          );
+        } else
+          layout_failed(
+            "could not move " +
+              m.name +
+              " from " +
+              m.from +
+              " to " +
+              m.dst.pack +
+              " (" +
+              r.fail +
+              ")"
+          );
+        break;
+      }
+      moved++;
+      by[m.cls] = (by[m.cls] || 0) + 1;
+    }
+    const left = todo.length - moved;
+    const text =
+      (moved
+        ? moved +
+          " item(s) moved to their pack (" +
+          Object.keys(by)
+            .map((k) => k + " " + by[k])
+            .join(", ") +
+          ")"
+        : "") +
+      (left > 0 && moved >= CFG.BANK_ROUTE_MAX_MOVES
+        ? ", " + left + " more next visit"
+        : "") +
+      (Object.keys(stuck).length
+        ? "; no room in the pack(s) of: " +
+          Object.keys(stuck)
+            .map((k) => k + " " + stuck[k])
+            .join(", ")
+        : "");
+    if (text && text !== BLAY.last)
+      say("Bank layout: " + text.replace(/^, /, ""), "#8AB4D0");
+    if (text) BLAY.last = text;
+  }
+  async function bank_sort_here() {
+    await bank_merge_here();
+    await bank_route_here();
+    if (
+      !CFG.BANK_SORT ||
+      BSORT.off ||
+      character.map !== "bank" ||
+      !character.bank ||
+      !parent.socket
+    )
+      return;
+    const packs = CFG.COMPOUND_PACKS.filter((p) =>
+      Array.isArray(character.bank[p])
+    );
+    if (!packs.length) return;
+    // every pack has its own swap budget; the visit starts at BSORT.next (a pack that was cut short or failed last time makes the next visit start at the following pack) so later packs get their turn too
+    const start = BSORT.next % packs.length;
+    const order = packs.slice(start).concat(packs.slice(0, start));
+    let done = 0;
+    let left = 0;
+    let next = 0;
+    let stop = false;
+    for (const pack of order) {
+      if (stop) break;
+      const pi = packs.indexOf(pack);
+      const arr = character.bank[pack];
+      const buf = swap_slot();
+      if (buf >= 0 && arr[buf]) {
+        // the transit slot must be empty: move whatever sits there into a free slot of the pack
+        const free = bank_free_slot(pack);
+        if (free < 0) {
+          say(
+            "Bank sort: " +
+              pack +
+              " has no free slot to move the item in its last slot out of - the pack is skipped (make some room)",
+            "#E1A951"
+          );
+          continue;
+        }
+        if (has_jobs() || !alive()) {
+          stop = true;
+          next = pi;
+          break;
+        }
+        const r0 = await bank_move_one(pack, buf, pack, free);
+        if (!r0.ok) {
+          if (r0.bi !== undefined && character.items[r0.bi])
+            await call(() => bank_store(r0.bi));
+          layout_failed(
+            "could not empty the last slot of " + pack + " (" + r0.fail + ")"
+          );
+          continue;
+        }
+      }
+      const swaps = bank_sort_plan(arr, bank_sort_pins(pack, arr));
+      let done_p = 0;
+      for (let n = 0; n < swaps.length; n++) {
+        if (has_jobs() || !alive()) {
+          left += swaps.length - n;
+          stop = true;
+          next = pi;
+          break;
+        }
+        if (done_p >= CFG.BANK_SORT_MAX_SWAPS) {
+          left += swaps.length - n;
+          break;
+        }
+        if (free_slots() < 1) {
+          say(
+            "Bank sort: needs 1 empty bag slot to sort with - next visit",
+            "#E1A951"
+          );
+          stop = true;
+          next = (pi + 1) % packs.length;
+          break;
+        }
+        const [a, b] = swaps[n];
+        const r = await bank_swap(pack, a, b);
+        if (r.ok) {
+          done++;
+          done_p++;
+          continue;
+        }
+        const fail = r.fail;
+        if (r.bi !== undefined && character.items[r.bi])
+          await call(() => bank_store(r.bi)); // whatever is still in the bag goes back into the bank (any free slot)
+        await wait(1000);
+        if (r.stale) {
+          // "no_item": the game says that slot is empty while my copy of the bank said it was not - my copy was out of date (not a refused call). Stop for this visit; the next visit starts from the fresh bank.
+          // v5: those two slots are left alone from now on (without counting as a failure), so a slot whose copy keeps being wrong cannot stop every visit at the same place
+          BSORT.bad[pack + ":" + a] = true;
+          BSORT.bad[pack + ":" + b] = true;
+          say(
+            "Bank sort: " +
+              fail +
+              " - the game's bank differs from my copy (out of date); stopping for this visit (slots " +
+              a +
+              " and " +
+              b +
+              " of " +
+              pack +
+              " are skipped from now on), the next one plans again from the fresh bank",
+            "#E1A951"
+          );
+          stop = true;
+          next = (pi + 1) % packs.length;
+          break;
+        }
+        BSORT.bad[pack + ":" + a] = true; // these two slots stay where they are from now on; the rest of the bank is still sorted
+        BSORT.bad[pack + ":" + b] = true;
+        BSORT.fails++;
+        if (BSORT.fails >= CFG.BANK_SORT_MAX_FAILS) BSORT.off = true;
+        say(
+          "Bank sort: the game did not do the move " +
+            a +
+            " <-> " +
+            b +
+            " in " +
+            pack +
+            " (failed " +
+            fail +
+            ") - those two slots are left alone" +
+            (BSORT.off
+              ? "; " +
+                BSORT.fails +
+                " failures: bank sorting is switched off until the next restart"
+              : ", the rest of the bank is still sorted") +
+            ". If an item is in your bag that should be in the bank, it is a leftover of this",
+          "#CF575F"
+        );
+        next = (pi + 1) % packs.length; // this pack's plan is out of date now; the next visit plans it again, starting at the following pack
+        break;
+      }
+    }
+    BSORT.next = next;
+    if (done || left)
+      say(
+        "Bank sort: " +
+          done +
+          " move(s) made" +
+          (left ? ", " + left + " more next visit" : ", the bank is in order"),
+        "#8AB4D0"
+      );
+  }
+  const go_home = async () => {
+    if (has_jobs()) return {};
+    try {
+      await bank_sort_here();
+    } catch (e) {
+      say("Bank sort failed: " + ((e && e.message) || e), "#CF575F");
+    }
+    S.idle_walk = true;
+    try {
+      return await travel(CFG.STAND_SPOT, 0, "back to the stand");
+    } finally {
+      S.idle_walk = false;
+    }
+  };
+
+  // =========================== SHOPPING ===========================
+  // inventory + what is already on the stand, so listing a batch never triggers a re-buy
+  const held = (name) => quantity(name) + listed_qty(name);
+  const stand_stock_low = () =>
+    CFG.STAND_STOCK.some(
+      (x) =>
+        held(x.name) < x.low &&
+        character.gold - CFG.STAND_STOCK_GOLD_FLOOR >= 10 * unit_cost(x.name) // can afford a useful batch
+    );
+  // v5: the delivery stock goes up while a boss event is live on the server (the Rangers grab potions from him at the post)
+  function boss_live() {
+    try {
+      const Sv = parent.S;
+      return !!(Sv && ["grinch", "snowman"].some((k) => Sv[k] && Sv[k].live));
+    } catch (e) {
+      return false;
+    }
+  }
+  function stock_target() {
+    return boss_live()
+      ? Math.max(CFG.BOSS_STOCK_TARGET, CFG.STOCK_TARGET)
+      : CFG.STOCK_TARGET;
+  }
+  function stock_low_at() {
+    return boss_live()
+      ? Math.max(CFG.BOSS_STOCK_LOW, CFG.STOCK_LOW)
+      : CFG.STOCK_LOW;
+  }
+  // v5: a courier's notice names what he will ask for: have it in the bag before he arrives
+  const courier_note_live = () =>
+    !!S.courier_note && now() < S.courier_note.until;
+  const stock_low = () =>
+    quantity(CFG.HP_POTION) < stock_low_at() ||
+    quantity(CFG.MP_POTION) < stock_low_at() ||
+    (courier_note_live() &&
+      (quantity(CFG.HP_POTION) < S.courier_note.hp ||
+        quantity(CFG.MP_POTION) < S.courier_note.mp)) ||
+    stand_stock_low();
+
+  async function shop() {
+    await drain_stand("shopping");
+    const npc = find_npc("fancypots");
+    if (!npc) {
+      say("Cannot locate the potion NPC", "#CF575F");
+      S.last_shop_fail = now();
+      return false;
+    }
+    const r = await travel(
+      { map: npc.map, x: npc.x, y: npc.y },
+      0,
+      "restocking potions at Ernis (fancypots)"
+    );
+    if (r.failed) {
+      say("Could not reach the potion NPC: " + r.reason, "#CF575F");
+      S.last_shop_fail = now();
+      return false;
+    }
+    let ok = true;
+    for (const name of [CFG.HP_POTION, CFG.MP_POTION]) {
+      const have = quantity(name);
+      const want = stock_target() - have;
+      if (want <= 0) continue;
+      const n = Math.min(want, Math.floor(character.gold / unit_cost(name)));
+      if (n <= 0) {
+        say(
+          "Not enough gold for " + name + " (have " + character.gold + ")",
+          "#CF575F"
+        );
+        S.last_poor = now();
+        ok = false;
+        continue;
+      }
+      const res = await call(() => buy_with_gold(name, n));
+      const got = await call(() =>
+        wait_for(() => quantity(name) >= have + n, 6000)
+      );
+      if (res.failed || got.failed) {
+        say(
+          "Buying " +
+            name +
+            " failed or incomplete: " +
+            (res.reason || got.reason),
+          "#CF575F"
+        );
+        ok = false;
+      } else say("Bought " + n + "x " + name);
+    }
+    // stand-only stock: never more than `target` on hand, only with gold above the floor
+    for (const x of CFG.STAND_STOCK) {
+      const have = held(x.name);
+      if (have >= x.low) continue;
+      const budget = character.gold - CFG.STAND_STOCK_GOLD_FLOOR;
+      const n = Math.min(
+        x.target - have,
+        Math.floor(budget / unit_cost(x.name))
+      );
+      if (n <= 0) continue;
+      const res = await call(() => buy_with_gold(x.name, n));
+      const got = await call(() =>
+        wait_for(() => held(x.name) >= have + n, 6000)
+      );
+      if (res.failed || got.failed) {
+        say(
+          "Buying " +
+            x.name +
+            " failed or incomplete: " +
+            (res.reason || got.reason),
+          "#CF575F"
+        );
+        ok = false;
+      } else say("Bought " + n + "x " + x.name + " for the stand");
+    }
+    if (!ok) S.last_shop_fail = now();
+    S.last_list_try = 0; // new stock: list it as soon as the stand is open again
+    return ok;
+  }
+
+  // ======================= HEALING =================================
+  const hp_pct = () => character.hp / character.max_hp;
+  const needs_heal = () =>
+    !character.rip &&
+    hp_pct() < CFG.HP_USE_PCT &&
+    now() - S.last_heal_fail > CFG.HEAL_RETRY_MS;
+
+  async function drink_until_healed() {
+    for (let i = 0; i < 25 && hp_pct() < CFG.SELF_HEAL_UNTIL_PCT; i++) {
+      const name = pick_hp_potion(hp_pct());
+      if (!name) return false; // nothing to drink
+      if (is_on_cooldown("use_hp")) {
+        await wait(300);
+        continue;
+      }
+      const before = quantity(name);
+      await call(() => equip(locate_item(name)));
+      await call(() => wait_for(() => quantity(name) < before, 2500));
+      await wait(200);
+    }
+    return true;
+  }
+
+  async function heal_up() {
+    // 1) drink what he is carrying (stand stays open, he does not move)
+    if (pick_hp_potion(hp_pct())) {
+      say("HP at " + Math.round(hp_pct() * 100) + "% - drinking a potion");
+      await drink_until_healed();
+      if (hp_pct() >= CFG.HP_USE_PCT) return;
+    }
+    // 2) none left: buy some from Ernis, drink, then go back to open the stand
+    say(
+      "HP at " +
+        Math.round(hp_pct() * 100) +
+        "% and no HP potion - buying " +
+        CFG.SELF_HEAL_BUY +
+        "x " +
+        CFG.SELF_HEAL_POTION +
+        " at Ernis",
+      "#CF575F"
+    );
+    await drain_stand("healing");
+    const npc = find_npc("fancypots");
+    const r = npc
+      ? await travel(
+          { map: npc.map, x: npc.x, y: npc.y },
+          0,
+          "buying a healing potion at Ernis (fancypots)"
+        )
+      : { failed: true, reason: "npc_unknown" };
+    if (r.failed) {
+      say("Could not reach Ernis to heal: " + r.reason, "#CF575F");
+      S.last_heal_fail = now();
+      return go_home();
+    }
+    const n = Math.min(
+      CFG.SELF_HEAL_BUY,
+      Math.floor(character.gold / unit_cost(CFG.SELF_HEAL_POTION))
+    );
+    if (n <= 0) {
+      say("No gold for a healing potion", "#CF575F");
+      S.last_heal_fail = now();
+      return go_home();
+    }
+    const have = quantity(CFG.SELF_HEAL_POTION);
+    const res = await call(() => buy_with_gold(CFG.SELF_HEAL_POTION, n));
+    const got = await call(() =>
+      wait_for(() => quantity(CFG.SELF_HEAL_POTION) >= have + n, 6000)
+    );
+    if (res.failed || got.failed) {
+      say(
+        "Buying a healing potion failed: " + (res.reason || got.reason),
+        "#CF575F"
+      );
+      S.last_heal_fail = now();
+      return go_home();
+    }
+    say("Bought " + n + "x " + CFG.SELF_HEAL_POTION + " for myself");
+    S.last_list_try = 0;
+    await drink_until_healed();
+    return go_home(); // main loop reopens the stand
+  }
+
+  // ============== WITHDRAW WHEN TOO POOR TO RESTOCK ==============
+  // Gold needed to bring both delivery potions up to STOCK_TARGET.
+  // Priced at the real NPC prices: tier-1 up to STOCK_TARGET, tier-0 up to its target, plus the stand-gold floor kept back
+  const restock_cost = () =>
+    [CFG.HP_POTION, CFG.MP_POTION].reduce(
+      (sum, n) =>
+        sum + Math.max(0, stock_target() - quantity(n)) * unit_cost(n),
+      0
+    ) +
+    CFG.STAND_STOCK.reduce(
+      (sum, x) =>
+        sum + Math.max(0, x.target - held(x.name)) * unit_cost(x.name),
+      0
+    ) +
+    CFG.STAND_STOCK_GOLD_FLOOR;
+  const delivery_low = () =>
+    quantity(CFG.HP_POTION) < stock_low_at() ||
+    quantity(CFG.MP_POTION) < stock_low_at() ||
+    CFG.STAND_STOCK.some((x) => held(x.name) < x.low);
+  const too_poor_to_restock = () =>
+    delivery_low() &&
+    character.gold < restock_cost() &&
+    now() - S.last_withdraw_fail > CFG.WITHDRAW_RETRY_MS;
+
+  async function withdraw_and_shop() {
+    await drain_stand("a bank withdrawal");
+    const cost = restock_cost();
+    const r = await travel(
+      "bank",
+      0,
+      "withdrawing gold for potions (need " + cost + ")"
+    );
+    if (r.failed || character.map !== "bank") {
+      say("Could not reach the bank: " + (r.reason || "wrong map"), "#CF575F");
+      S.last_withdraw_fail = now();
+      return go_home();
+    }
+    const ready = await call(() => wait_for(() => character.bank, 8000));
+    if (ready.failed) {
+      say("Bank data never loaded", "#CF575F");
+      S.last_withdraw_fail = now();
+      return go_home();
+    }
+    const shortfall = Math.max(0, cost - character.gold);
+    const avail = Number(character.bank && character.bank.gold);
+    // exactly what the potions cost on top of the gold he has, never more than POTION_BANK_CAP_PCT of the bank in one visit
+    const cap = isFinite(avail)
+      ? Math.floor(avail * CFG.POTION_BANK_CAP_PCT)
+      : shortfall;
+    const want = Math.min(shortfall, cap);
+    const amount = Math.floor(isFinite(avail) ? Math.min(want, avail) : want);
+    if (shortfall > cap)
+      say(
+        "Potion funding is capped at " +
+          Math.round(CFG.POTION_BANK_CAP_PCT * 100) +
+          "% of the bank (" +
+          cap +
+          " of " +
+          shortfall +
+          " needed): tier-1 first, the rest next round",
+        "#51D2E1"
+      );
+    if (!(amount > 0)) {
+      say(
+        "Nothing to withdraw from the bank (balance " + avail + ")",
+        "#CF575F"
+      );
+      S.last_withdraw_fail = now();
+      return go_home();
+    }
+    if (amount < shortfall && isFinite(avail) && avail < shortfall)
+      say(
+        "Bank only holds " +
+          amount +
+          " but " +
+          shortfall +
+          " is needed - buying what I can",
+        "#CF575F"
+      );
+    const before = character.gold;
+    const wd = await call(() => bank_withdraw(amount));
+    const done = await call(() =>
+      wait_for(() => character.gold >= before + amount - 1, 5000)
+    );
+    if (wd.failed || done.failed) {
+      say("Withdrawal failed: " + (wd.reason || done.reason), "#CF575F");
+      S.last_withdraw_fail = now();
+      return go_home();
+    }
+    say(
+      "Withdrew " +
+        amount +
+        " gold (potions short by " +
+        shortfall +
+        "); now " +
+        character.gold
+    );
+    await shop(); // walks to Ernis and buys with the fresh gold
+    return go_home();
+  }
+
+  // ============================= BANKING ==========================
+  // never deposit down below the withdrawal buffer, or a withdrawal would be undone on the next bank run
+  const keep_gold = () => Math.max(CFG.GOLD_KEEP, CFG.WITHDRAW_BUFFER);
+  const needs_bank = () =>
+    character.gold >= CFG.BANK_THRESHOLD &&
+    character.gold - keep_gold() >= CFG.BANK_MIN_DEPOSIT &&
+    now() - S.last_bank_fail > CFG.BANK_RETRY_MS;
+
+  async function bank_run() {
+    await drain_stand("banking");
+    const r =
+      character.map === "bank" ? {} : await travel("bank", 0, "banking gold");
+    if (r.failed || character.map !== "bank") {
+      say("Could not reach the bank: " + (r.reason || "wrong map"), "#CF575F");
+      S.last_bank_fail = now();
+      return go_home();
+    }
+    const ready = await call(() => wait_for(() => character.bank, 8000));
+    if (ready.failed) {
+      say("Bank data never loaded", "#CF575F");
+      S.last_bank_fail = now();
+      return go_home();
+    }
+    const amount = Math.floor(character.gold - keep_gold());
+    if (amount > 0) {
+      const before = character.gold;
+      const dep = await call(() => bank_deposit(amount));
+      const done = await call(() =>
+        wait_for(() => character.gold <= before - amount + 1, 5000)
+      );
+      if (dep.failed || done.failed) {
+        say("Deposit failed: " + (dep.reason || done.reason), "#CF575F");
+        S.last_bank_fail = now();
+      } else say("Deposited " + amount + " gold (kept " + character.gold + ")");
+    }
+    return go_home();
+  }
+
+  // ============================= DELIVERY =========================
+  // Walks to the meeting point the Ranger gave (his retreat spot in town) and waits for him there.
+  // Sets req.fail_reason: no_show (nobody there after NO_SHOW_WAIT_MS) | unreachable | ranger_not_in_reach.
+  async function go_to_ranger(req, why) {
+    if (!Number.isFinite(req.x) || !Number.isFinite(req.y)) {
+      req.fail_reason = "bad_position";
+      return false;
+    }
+    const r = await travel(
+      { map: req.map, x: req.x, y: req.y },
+      0,
+      why || "delivering potions to " + req.from
+    );
+    if (req.cancelled) return false; // cancel / travel_to_main turned us back
+    if (r.failed) {
+      say("Could not reach the Ranger: " + r.reason, "#CF575F");
+      req.fail_reason = "unreachable";
+      return false;
+    }
+    const t0 = now();
+    let seen = false;
+    for (;;) {
+      if (!alive() || character.rip || req.cancelled) return false;
+      const p = get_player(req.from);
+      if (p) {
+        seen = true;
+        if (d2(character, p) <= CFG.HANDOFF_RANGE) return true;
+        await call(() => xmove(p.x, p.y)); // he moves while fighting - close the gap
+      }
+      // nobody there: wait only NO_SHOW_WAIT_MS; once he has been seen the normal approach limit applies
+      if (now() - t0 > (seen ? CFG.APPROACH_MAX_MS : CFG.NO_SHOW_WAIT_MS))
+        break;
+      await wait(300);
+    }
+    req.fail_reason = seen ? "ranger_not_in_reach" : "no_show";
+    say(
+      seen
+        ? "Ranger not within reach after " + CFG.APPROACH_MAX_MS + "ms"
+        : "No-show: nobody at the meeting point after " +
+            CFG.NO_SHOW_WAIT_MS +
+            "ms - going home",
+      "#CF575F"
+    );
+    return false;
+  }
+
+  async function handoff(req) {
+    const sent = { hp: 0, mp: 0 };
+    for (const [key, name, want] of [
+      ["hp", CFG.HP_POTION, req.hp],
+      ["mp", CFG.MP_POTION, req.mp],
+    ]) {
+      let remaining = Math.min(want, quantity(name));
+      while (remaining > 0) {
+        const idx = locate_item(name);
+        if (idx < 0) break;
+        const q = Math.min(remaining, character.items[idx].q || 1);
+        const before = quantity(name);
+        const res = await call(() => send_item(req.from, idx, q));
+        if (res.failed) {
+          say("send_item failed: " + res.reason, "#CF575F");
+          break;
+        }
+        const ok = await call(() =>
+          wait_for(() => quantity(name) <= before - q, 3000)
+        );
+        if (ok.failed) {
+          say(
+            "Inventory did not change after send_item (" + name + ")",
+            "#CF575F"
+          );
+          break;
+        }
+        sent[key] += q;
+        remaining -= q;
+        await wait(150);
+      }
+    }
+    return sent;
+  }
+
+  // Hand-me-downs: the leader tells us what he just replaced. If a follower Ranger would gain from it, the leader is told to pass it on
+  // (they stand next to each other, so no trip for the Merchant).
+  function on_gear_replaced(d) {
+    const name =
+      typeof d.name === "string" && d.name.length <= 40 ? d.name : "";
+    const level = clamp_int(d.level, 0, 20);
+    const def = G.items[name];
+    if (!def || !SLOT_OF_TYPE[def.type]) return;
+    const it = {
+      name,
+      level,
+      stat_type:
+        typeof d.stat_type === "string" && d.stat_type.length <= 12
+          ? d.stat_type
+          : undefined,
+    };
+    if (!gear_wearable(it)) return;
+    const score = gear_score(name, level, { stat_type: it.stat_type });
+    const tg = score > 0 ? best_target(it, score, true) : null;
+    if (!tg) return;
+    say(
+      "Hand-me-down: " +
+        name +
+        " +" +
+        level +
+        " goes from " +
+        CFG.RANGER_NAME +
+        " to " +
+        tg.who +
+        " (" +
+        tg.f.slot +
+        ")",
+      "#5BCB5B"
+    );
+    reply(CFG.RANGER_NAME, {
+      type: "gear_pass",
+      to: tg.who,
+      name,
+      level,
+      slot: tg.f.slot,
+    });
+  }
+
+  // Gear waits for the next exchange with the Ranger (a normal town meeting). He is never hunted down in the field.
+  async function give_pending_gear(to, via) {
+    via = via || to; // who physically receives the item (the courier carries it for `to`)
+    const g = gear_of(to);
+    if (!S.gear_pending.length || !g || now() - g.at > 10 * 60000) return;
+    for (const p of S.gear_pending.filter(
+      (q) => (q.for || CFG.RANGER_NAME) === to
+    )) {
+      const idx = bag_list(
+        (x) => x.name === p.name && (x.level || 0) === p.level
+      )[0];
+      if (idx === undefined) {
+        S.gear_pending = S.gear_pending.filter((q) => q !== p);
+        continue;
+      }
+      const it = character.items[idx];
+      if (
+        p.alt
+          ? !beats_worn(it, p.level, to + "+")
+          : p.kit
+          ? !kit_missing(to)
+          : !beats_worn(it, p.level, to)
+      ) {
+        S.gear_pending = S.gear_pending.filter((q) => q !== p); // he wears something as good by now
+        continue;
+      }
+      const slot = p.alt
+        ? "alt:" + p.slot
+        : p.kit
+        ? "bag"
+        : worn_floor(it, to).slot;
+      // tell him first so he is already waiting for the item when it lands
+      await reply(via, {
+        type: "gear_give",
+        name: p.name,
+        level: p.level,
+        slot,
+        ...(via !== to ? { to } : {}),
+      });
+      const res = await call(() => send_item(via, idx, 1));
+      const gone = await call(() =>
+        wait_for(
+          () =>
+            !character.items[idx] ||
+            character.items[idx].name !== p.name ||
+            (character.items[idx].level || 0) !== p.level,
+          3000
+        )
+      );
+      if (res.failed || gone.failed) {
+        say(
+          "Could not hand over " +
+            p.name +
+            " +" +
+            p.level +
+            ": " +
+            (res.reason || gone.reason),
+          "#CF575F"
+        );
+        break;
+      }
+      S.gear_pending = S.gear_pending.filter((q) => q !== p);
+      say(
+        "Gave " +
+          p.name +
+          " +" +
+          p.level +
+          " to " +
+          via +
+          (via !== to ? " to carry to " + to : "") +
+          " for the " +
+          slot,
+        "#5BCB5B"
+      );
+      await wait(500);
+    }
+  }
+  // courier meeting: the courier also takes whatever is waiting for the other Rangers
+  async function give_courier_gear(req) {
+    for (const n of req.courier || []) await give_pending_gear(n, req.from);
+  }
+
+  async function serve_request(req) {
+    // 1) make sure we can actually fill the order (this may leave the stand): one shop run
+    if (quantity(CFG.HP_POTION) < req.hp || quantity(CFG.MP_POTION) < req.mp)
+      await shop();
+    if (req.cancelled) return end_job(req, "CANCELLED");
+    if (quantity(CFG.HP_POTION) + quantity(CFG.MP_POTION) === 0) {
+      req.reason = "no_stock";
+      return end_job(req, "FAILED");
+    }
+    // 2) don't walk out on a customer
+    await drain_stand("delivery");
+    if (req.cancelled) return end_job(req, "CANCELLED");
+    set_state(req, "EN_ROUTE");
+    // 3) go to him and hand the potions over
+    const ok = await go_to_ranger(req);
+    if (req.cancelled) return end_job(req, "CANCELLED");
+    if (!ok) {
+      req.reason = req.fail_reason || "unreachable";
+      return end_job(req, "FAILED");
+    }
+    set_state(req, "ARRIVED");
+    set_state(req, "TRANSFERRING");
+    const gold_before = character.gold;
+    const sent = await handoff(req);
+    await give_pending_gear(req.from);
+    await give_courier_gear(req);
+    req.result = { hp: sent.hp, mp: sent.mp, got: sent.hp + sent.mp };
+    end_job(req, "DONE");
+    say(
+      "Delivered " + sent.hp + " HP / " + sent.mp + " MP potions to " + req.from
+    );
+    // He pays from his side and needs us nearby - stay briefly
+    await call(() =>
+      wait_for(() => character.gold > gold_before, CFG.GOLD_WAIT_MS)
+    );
+  }
+
+  // ====================== JUNK PICKUP + SELL ======================
+  function free_slots() {
+    let n = 0;
+    for (let i = 0; i < character.isize; i++) if (!character.items[i]) n++;
+    return n;
+  }
+  // ---- stackable loot above its reserve (CFG.STACK_RESERVE) ----
+  const reserve_of = (name) => {
+    const r = CFG.STACK_RESERVE && CFG.STACK_RESERVE[name];
+    return r === "full" ? Number((G.items[name] || {}).s) || 0 : Number(r) || 0;
+  };
+  function stack_total(name) {
+    let n = 0;
+    for (let i = 0; i < character.isize; i++) {
+      const it = character.items[i];
+      if (it && it.name === name) n += it.q || 1;
+    }
+    for (const pack of CFG.UPGRADE_PACKS) {
+      const arr = character.bank && character.bank[pack];
+      if (Array.isArray(arr))
+        arr.forEach((it) => {
+          if (it && it.name === name) n += it.q || 1;
+        });
+    }
+    return n;
+  }
+  // entries {name, q, ref}: the ones that can be sold, whole stack by whole stack, keeping the reserve (largest stacks first would keep the reserve in as few slots as possible, so smallest first here)
+  function reserve_pick(entries) {
+    const left = {};
+    const out = [];
+    for (const e of entries.slice().sort((a, b) => a.q - b.q)) {
+      if (!(e.name in left)) left[e.name] = stack_total(e.name);
+      if (left[e.name] - e.q >= reserve_of(e.name)) {
+        left[e.name] -= e.q;
+        out.push(e);
+      }
+    }
+    return out;
+  }
+  function sellable_slots() {
+    const out = [];
+    const rs = [];
+    for (let i = 0; i < character.isize; i++) {
+      const it = character.items[i];
+      if (!it || never_sell(it)) continue;
+      if (
+        CFG.STACK_RESERVE &&
+        CFG.STACK_RESERVE[it.name] !== undefined &&
+        !it.l &&
+        reserve_of(it.name) > 0
+      ) {
+        rs.push({ name: it.name, q: it.q || 1, ref: i });
+        continue;
+      }
+      if (wc_surplus(it)) {
+        out.push(i);
+        continue;
+      }
+      if (CFG.JUNK_SELLABLE.indexOf(it.name) === -1 && !boss_gear_sellable(it))
+        continue;
+      if (
+        it.l ||
+        ((it.level || 0) > CFG.JUNK_SELL_MAX_LEVEL &&
+          CFG.JUNK_ANY_LEVEL.indexOf(it.name) === -1)
+      )
+        continue;
+      out.push(i);
+    }
+    for (const e of reserve_pick(rs)) out.push(e.ref);
+    return out;
+  }
+
+  // boss gear nobody needs: sellable. Needs fresh gear reports from every Ranger and the game's value function (no guessing).
+  function boss_gear_sellable(it) {
+    try {
+      if (
+        !it ||
+        it.l ||
+        it.p ||
+        (it.q || 1) > 1 ||
+        (it.level || 0) > 0 ||
+        never_sell(it)
+      )
+        return false;
+      if (CFG.BOSS_GEAR.indexOf(it.name) === -1 || !G.items[it.name])
+        return false;
+      if (!value_fn() || !roster().every(gear_fresh_for)) return false;
+      if (sell_value(it.name, 0) > CFG.SURPLUS_MAX_VALUE_EACH) return false;
+      return !roster().some((w) => beats_worn(it, 0, w));
+    } catch (e) {
+      return false;
+    }
+  }
+  const is_boss_keeper = (it) =>
+    !!it &&
+    !it.l &&
+    CFG.BOSS_GEAR.indexOf(it.name) !== -1 &&
+    !boss_gear_sellable(it);
+  const is_keeper = (it) =>
+    !!it &&
+    !it.l &&
+    (CFG.KEEP_FOR_COMPOUND.indexOf(it.name) !== -1 || is_boss_keeper(it));
+  // Stackable loot handed over by the Ranger (named in his request): banked, never sold. Anything the Merchant
+  // uses himself (potions, scrolls, stand stock) is protected.
+  const stack_names = {};
+  const stack_protected = (n) =>
+    ["hpot", "mpot", "elixir", "scroll", "cscroll", "xscroll", "uscroll"].some(
+      (p) => n.indexOf(p) === 0
+    ) ||
+    n === CFG.HP_POTION ||
+    n === CFG.MP_POTION ||
+    n === CFG.SELF_HEAL_POTION ||
+    CFG.STAND_STOCK.some((x) => x.name === n);
+  // (Sean 2026-11-19) scrolls are "protected" from sale / banking-as-loot, but split scroll stacks in the bank must still join: merge and bank_spot use this instead
+  const merge_protected = (n) =>
+    stack_protected(n) &&
+    !["scroll", "cscroll", "uscroll", "xscroll"].some(
+      (p) => n.indexOf(p) === 0
+    );
+  // (Sean 2026-11-18) the stackable items of the exchange plan (Raw Emerald, Market Parcels, Armor / Weapon Boxes, ...) are banked by the bag tidy whatever the Rangers' last request named: the exchange rounds take them out of the bank themselves
+  const exch_stack = (n) =>
+    !!G.items[n] &&
+    !!G.items[n].s &&
+    !stack_protected(n) &&
+    CFG.EXCHANGE_PLAN.some((e) => e.item === n);
+  const is_stack = (it) =>
+    !!it && !it.l && (!!stack_names[it.name] || exch_stack(it.name));
+  // v5: spare equipment the Rangers hand over (the Fire Bows): never sold, kept for the upgrade rounds and the gear sweep. Named in the Ranger's request.
+  const gear_names = {};
+  const is_gear_in = (it) => !!it && !it.l && !!gear_names[it.name];
+  const received_slots = () =>
+    sellable_slots().concat(
+      bag_list(is_keeper),
+      bag_list(is_stack),
+      bag_list(is_gear_in)
+    );
+
+  async function sell_junk_here(slots_fn) {
+    let sold = 0;
+    for (const i of (slots_fn || sellable_slots)()) {
+      const it = character.items[i];
+      if (!it || never_sell(it)) continue; // the one guard every sale goes through
+      const name = it.name;
+      const gold_before = character.gold;
+      const raw = (it.q || 1) === 1 ? raw_value(name, it.level || 0) : 0;
+      const res = await call(() => sell(i, it.q || 1));
+      const gone = await call(() =>
+        wait_for(
+          () => !character.items[i] || character.items[i].name !== name,
+          2500
+        )
+      );
+      if (!res.failed && !gone.failed && raw >= 1000) {
+        // learn what Gabriel really pays compared with the game's item value
+        await wait(200);
+        const got = character.gold - gold_before;
+        if (got > 0) {
+          const ratio = got / raw;
+          try {
+            set("flip_factor", String(ratio));
+          } catch (e) {}
+          say(
+            "Sale check: " +
+              name +
+              " +" +
+              (it.level || 0) +
+              " fetched " +
+              got +
+              "g, item value " +
+              Math.round(raw) +
+              " -> sell factor " +
+              ratio.toFixed(3)
+          );
+        }
+      }
+      if (res.failed || gone.failed) {
+        say(
+          "Could not sell " +
+            name +
+            ": " +
+            (res.reason || gone.reason || "slot unchanged"),
+          "#CF575F"
+        );
+        return { sold, ok: false };
+      }
+      sold++;
+      say(
+        "Sold " +
+          name +
+          " (+" +
+          Math.max(0, character.gold - gold_before) +
+          "g)"
+      );
+      await wait(150);
+    }
+    return { sold, ok: true };
+  }
+
+  // Free bag slots by banking/selling what he does not need: compound material, leftover stackable loot, shop junk.
+  async function make_space(need) {
+    if (free_slots() >= need) return true;
+    say(
+      "Want " +
+        need +
+        " free slots for the pickup, have " +
+        free_slots() +
+        " - tidying the bag first"
+    );
+    const spare = (it) =>
+      !!it &&
+      !it.l &&
+      !!G.items[it.name] &&
+      (CFG.KEEP_FOR_COMPOUND.indexOf(it.name) !== -1 ||
+        !!G.items[it.name].compound ||
+        (!!G.items[it.name].s && !stack_protected(it.name)));
+    if (bag_list(spare).length && (await open_bank_for_compound())) {
+      await put_back_in_bank(spare);
+      if (bag_list(spare).length) {
+        await free_bank_space();
+        if (character.map === "bank" || (await open_bank_for_compound()))
+          await put_back_in_bank(spare);
+      }
+    }
+    if (free_slots() < need && sellable_slots().length) {
+      const npc = find_npc(CFG.JUNK_SELL_NPC);
+      const r =
+        npc &&
+        (await travel(
+          { map: npc.map, x: npc.x, y: npc.y },
+          0,
+          "selling shop junk to make room"
+        ));
+      if (npc && !r.failed) await sell_junk_here();
+    }
+    return free_slots() >= need;
+  }
+
+  async function serve_junk(req) {
+    await make_space(req.count);
+    if (req.cancelled) return end_job(req, "CANCELLED");
+    // take what fits; the Ranger asks again for the rest
+    const room = free_slots();
+    if (room < 1) {
+      say("Junk pickup refused: no free slot at all", "#CF575F");
+      req.reason = "no_space";
+      return end_job(req, "FAILED");
+    }
+    const cap = Math.min(req.count, room);
+    if (cap < req.count)
+      say(
+        "Only " +
+          room +
+          " free slots: taking " +
+          cap +
+          " of " +
+          req.count +
+          " items now, the rest on the next pickup"
+      );
+    for (const k of Object.keys(stack_names)) delete stack_names[k];
+    for (const n of req.names || [])
+      if (G.items[n] && G.items[n].s && !stack_protected(n))
+        stack_names[n] = true;
+    for (const k of Object.keys(gear_names)) delete gear_names[k];
+    for (const n of req.names || []) {
+      const def = G.items[n];
+      if (
+        def &&
+        !def.s &&
+        !stack_protected(n) &&
+        CFG.KEEP_FOR_COMPOUND.indexOf(n) === -1 &&
+        CFG.JUNK_SELLABLE.indexOf(n) === -1
+      )
+        gear_names[n] = true;
+    }
+    try {
+      await drain_stand("collecting junk");
+      if (req.cancelled) return end_job(req, "CANCELLED");
+      set_state(req, "EN_ROUTE");
+      if (!(await go_to_ranger(req, "collecting junk from " + req.from))) {
+        if (req.cancelled) return end_job(req, "CANCELLED");
+        req.reason = req.fail_reason || "unreachable";
+        return end_job(req, "FAILED");
+      }
+      set_state(req, "ARRIVED");
+      // tell him we are next to him; he sends the items, then a job_sent message with the count
+      const before = received_slots().length;
+      await reply(req.from, { type: "job_ready", id: req.id, cap });
+      set_state(req, "TRANSFERRING");
+      const sent_msg = await call(() =>
+        wait_for(
+          () => S.junk_sent[req.id] !== undefined,
+          CFG.JUNK_RECEIVE_WAIT_MS
+        )
+      );
+      if (!sent_msg.failed) {
+        // message arrived: give the items a moment to land (they are sent one by one)
+        const want = before + S.junk_sent[req.id];
+        await call(() => wait_for(() => received_slots().length >= want, 4000));
+      } else if (received_slots().length <= before) {
+        say("The Ranger never handed over any junk", "#CF575F");
+        req.reason = "nothing_received";
+        return end_job(req, "FAILED");
+      }
+      await wait(500);
+      const have = received_slots().length;
+      await give_pending_gear(req.from); // gear for him rides along at this meeting
+      await give_courier_gear(req);
+      req.result = { got: have };
+      end_job(req, "DONE"); // he is free to go back to work; selling / banking continues here
+      say("Collected " + have + " junk item(s) from " + req.from);
+      if (!have) return;
+
+      // sell to Gabriel (skipped when everything received is compound material)
+      if (sellable_slots().length) {
+        let npc = null;
+        try {
+          npc = find_npc(CFG.JUNK_SELL_NPC);
+        } catch (e) {}
+        if (!npc) npc = { map: "main", x: -89, y: -165 };
+        const r = await travel(
+          { map: npc.map || npc.in, x: npc.x, y: npc.y },
+          0,
+          "selling the Ranger's junk to Gabriel"
+        );
+        if (r.failed) say("Could not reach Gabriel: " + r.reason, "#CF575F");
+        else {
+          const res = await sell_junk_here();
+          say(
+            "Sold " + res.sold + " junk item(s); gold is now " + character.gold
+          );
+        }
+      }
+      // compound material goes to the bank, not to the shop - unless the bank is nearly full:
+      // then normal-grade items below +3 are sold instead, high grade and +3 still get a slot
+      if (bag_list(is_keeper).length) {
+        if (await open_bank_for_compound()) {
+          const free = bank_free_slots();
+          const cheap = (it) =>
+            is_keeper(it) &&
+            scroll_grade(it) < CFG.BANKFULL_KEEP_GRADE &&
+            (it.level || 0) < CFG.COMPOUND_SELL_AT_LEVEL;
+          if (
+            CFG.BANKFULL_SELL &&
+            free < CFG.BANKFULL_TRIGGER_FREE &&
+            bag_list(cheap).length
+          ) {
+            const nb = await put_back_in_bank(
+              (it) => is_keeper(it) && !cheap(it)
+            );
+            if (nb) say("Banked " + nb + " accessory item(s) for compounding");
+            say(
+              "Bank is nearly full (" +
+                free +
+                " free) - selling " +
+                bag_list(cheap).length +
+                " normal-grade accessory item(s) instead of banking them"
+            );
+            let npc2 = null;
+            try {
+              npc2 = find_npc(CFG.JUNK_SELL_NPC);
+            } catch (e) {}
+            if (!npc2) npc2 = { map: "main", x: -89, y: -165 };
+            const r2 = await travel(
+              { map: npc2.map || npc2.in, x: npc2.x, y: npc2.y },
+              0,
+              "selling accessories the bank has no room for"
+            );
+            if (r2.failed)
+              say("Could not reach Gabriel: " + r2.reason, "#CF575F");
+            else {
+              const res2 = await sell_junk_here(() => bag_list(cheap));
+              say(
+                "Sold " +
+                  res2.sold +
+                  " accessory item(s); gold is now " +
+                  character.gold
+              );
+            }
+          } else {
+            const nb = await put_back_in_bank(is_keeper);
+            say("Banked " + nb + " accessory item(s) for compounding");
+          }
+        }
+      }
+      // stackable loot goes to the bank too; if the bank is full, make room (sell cheap accessories) and try again
+      if (bag_list(is_stack).length) {
+        if (await open_bank_for_compound()) {
+          let left = bag_list(is_stack).length;
+          const nb = await put_back_in_bank(is_stack);
+          left = bag_list(is_stack).length;
+          if (nb) say("Banked " + nb + " stackable item(s)");
+          if (left) {
+            say(
+              "Bank is full - making room before storing " +
+                left +
+                " stackable item(s)",
+              "#CF575F"
+            );
+            await free_bank_space();
+            if (character.map === "bank" || (await open_bank_for_compound())) {
+              const nb2 = await put_back_in_bank(is_stack);
+              if (nb2)
+                say("Banked " + nb2 + " stackable item(s) after making room");
+            }
+            if (bag_list(is_stack).length)
+              say(
+                "Still no room in the bank: " +
+                  bag_list(is_stack).length +
+                  " stackable item(s) stay in my bag",
+                "#CF575F"
+              );
+          }
+        }
+      }
+      // bank whatever is above the threshold on the way home
+      if (needs_bank()) {
+        await bank_run(); // ends at the stand
+      }
+    } finally {
+      await go_home();
+    }
+  }
+
+  // ============================== MAIN ============================
+  // ===================== COMPOUNDING (accessories) ================
+  // Round: bank (take triples + gold) -> scroll NPC (buy) -> upgrade NPC (odds check, then compound)
+  //        -> [Gabriel if selling results] -> bank (put everything back) -> stand.
+  // Switches in the game: set("compound_paused", true) stops it, false resumes. Stats: get("compound_stats").
+  const is_paused = () => {
+    try {
+      const v = get("compound_paused");
+      return v === true || v === "true";
+    } catch (e) {
+      return false;
+    }
+  };
+  function load_stats() {
+    try {
+      const st = JSON.parse(get("compound_stats") || "null");
+      if (st && typeof st.n === "number") return st;
+    } catch (e) {}
+    return { n: 0, wins: 0, exp: 0, var: 0 };
+  }
+  // Compare real wins with the sum of the quoted chances; pause when clearly worse (about 2.5 standard deviations).
+  function check_odds_honesty(st) {
+    if (st.n < CFG.COMPOUND_PAUSE_MIN_ATTEMPTS) return;
+    const sd = Math.sqrt(st.var);
+    if (st.wins < st.exp - 2.5 * sd) {
+      try {
+        set("compound_paused", true);
+      } catch (e) {}
+      say(
+        "COMPOUND PAUSED: " +
+          st.wins +
+          " wins in " +
+          st.n +
+          " tries but the server quoted ~" +
+          st.exp.toFixed(1) +
+          ". The quoted odds look wrong. Resume with set('compound_paused', false)",
+        "#CF575F"
+      );
+    }
+  }
+  const focus_of = (name) =>
+    (CFG.COMPOUND_FOCUS && CFG.COMPOUND_FOCUS[name]) ||
+    wc_focus(name) ||
+    rc_focus(name);
+  // ---- the Warrior's compound set (CFG.WARRIOR_COMPOUND) ----
+  const wc_cfg = (name) =>
+    (CFG.WARRIOR_COMPOUND &&
+      CFG.WARRIOR_COMPOUND.items &&
+      CFG.WARRIOR_COMPOUND.items[name]) ||
+    null;
+  const WC_CACHE = {};
+  function wc_info(name) {
+    const c = WC_CACHE[name];
+    if (c && now() - c.at < 700) return c;
+    const cfg = wc_cfg(name);
+    const who = CFG.WARRIOR_COMPOUND && CFG.WARRIOR_COMPOUND.who;
+    let have = 0; // worn by the Warrior or on its way to him
+    const rep_ = who && S.gears[who];
+    for (const sl in (rep_ && rep_.slots) || {}) {
+      const w = rep_.slots[sl];
+      if (w && w.name === name && (w.level || 0) >= cfg.level) have++;
+    }
+    for (const pd of S.gear_pending)
+      if (pd.name === name && pd.for === who && (pd.level || 0) >= cfg.level)
+        have++;
+    const copies = [];
+    const add = (it) => {
+      if (it && it.name === name && (it.level || 0) >= cfg.level)
+        copies.push(it);
+    };
+    for (let i = 0; i < character.isize; i++) add(character.items[i]);
+    for (const pack of CFG.COMPOUND_PACKS) {
+      const arr = character.bank && character.bank[pack];
+      if (Array.isArray(arr)) arr.forEach(add);
+    }
+    copies.sort((a, b) => (a.level || 0) - (b.level || 0)); // the lowest qualifying copies are the ones kept, the better ones can go
+    const need = Math.max(0, cfg.count - have);
+    const keep = new Set(copies.slice(0, need));
+    const out = { at: now(), done: have + copies.length >= cfg.count, keep };
+    WC_CACHE[name] = out;
+    return out;
+  }
+  // ---- the Ranger's compound focus (CFG.RANGER_COMPOUND): same counting as the Warrior's set, but only a focus that ends when the pieces are there ----
+  const rc_cfg = (name) =>
+    (CFG.RANGER_COMPOUND &&
+      CFG.RANGER_COMPOUND.items &&
+      CFG.RANGER_COMPOUND.items[name]) ||
+    null;
+  const RC_CACHE = {};
+  function rc_done(name) {
+    const cfg = rc_cfg(name);
+    if (!cfg) return true;
+    const c = RC_CACHE[name];
+    if (c && now() - c.at < 700) return c.done;
+    const who = cfg.who || CFG.RANGER_COMPOUND.who;
+    let have = 0;
+    const rep_ = who === CFG.RANGER_NAME ? S.ranger_gear : S.gears[who];
+    for (const sl in (rep_ && rep_.slots) || {}) {
+      const w = rep_.slots[sl];
+      if (w && w.name === name && (w.level || 0) >= cfg.level) have++;
+    }
+    for (const pd of S.gear_pending)
+      if (pd.name === name && pd.for === who && (pd.level || 0) >= cfg.level)
+        have++;
+    const add = (it) => {
+      if (it && it.name === name && (it.level || 0) >= cfg.level) have++;
+    };
+    for (let i = 0; i < character.isize; i++) add(character.items[i]);
+    for (const pack of CFG.COMPOUND_PACKS) {
+      const arr = character.bank && character.bank[pack];
+      if (Array.isArray(arr)) arr.forEach(add);
+    }
+    const done = have >= cfg.count;
+    RC_CACHE[name] = { at: now(), done };
+    return done;
+  }
+  function rc_focus(name) {
+    const cfg = rc_cfg(name);
+    if (!cfg || rc_done(name)) return null;
+    return {
+      target: cfg.level,
+      keep: 0,
+      max_grade: CFG.COMPOUND_MAX_SCROLL_GRADE,
+      min_chance: CFG.COMPOUND_MIN_CHANCE,
+      budget: 0,
+    };
+  }
+  const wc_done = (name) => !!wc_cfg(name) && wc_info(name).done;
+  // every copy except the ones that make up the Warrior's set: sold as it is, whatever its level (only once the set is complete)
+  const wc_surplus = (it) =>
+    !!it &&
+    !it.l &&
+    !it.p &&
+    !!wc_cfg(it.name) &&
+    wc_info(it.name).done &&
+    !wc_info(it.name).keep.has(it);
+  function wc_focus(name) {
+    const cfg = wc_cfg(name);
+    if (!cfg || wc_done(name)) return null;
+    return {
+      target: cfg.level,
+      keep: 0,
+      max_grade: CFG.COMPOUND_MAX_SCROLL_GRADE,
+      min_chance: CFG.COMPOUND_MIN_CHANCE,
+      budget: 0,
+    };
+  }
+  const never_sell = (it) =>
+    !!it && (CFG.NEVER_SELL.indexOf(it.name) !== -1 || support_wants(it));
+  const target_of = (name) =>
+    focus_of(name) ? focus_of(name).target : CFG.COMPOUND_TARGET_LEVEL;
+  const keep_of = (name) =>
+    focus_of(name) ? focus_of(name).keep : CFG.COMPOUND_KEEP_COPIES;
+  const max_grade_of = (name) =>
+    focus_of(name) ? focus_of(name).max_grade : CFG.COMPOUND_MAX_SCROLL_GRADE;
+  const min_chance_of = (name) =>
+    focus_of(name) ? focus_of(name).min_chance : CFG.COMPOUND_MIN_CHANCE;
+  const comp_max_input = (name) =>
+    CFG.COMPOUND_NEED_DRIVEN || focus_of(name)
+      ? target_of(name) - 1
+      : CFG.COMPOUND_MAX_INPUT_LEVEL;
+  const comp_ok = (it) =>
+    !!it &&
+    !it.l &&
+    !(it.q > 1) &&
+    !!G.items[it.name] &&
+    !!G.items[it.name].compound &&
+    (it.level || 0) <= comp_max_input(it.name) &&
+    CFG.COMPOUND_SKIP.indexOf(it.name) === -1 &&
+    !(wc_cfg(it.name) && wc_done(it.name)); // the Warrior's set is complete: no more of it
+  const comp_key = (it) => it.name + "|" + (it.level || 0) + "|" + (it.p || "");
+  const comp_label = (it) => it.name + " +" + (it.level || 0);
+  function bag_list(pred) {
+    const out = [];
+    for (let i = 0; i < character.isize; i++) {
+      const it = character.items[i];
+      if (it && pred(it)) out.push(i);
+    }
+    return out;
+  }
+  function bank_list() {
+    const out = [];
+    for (const pack of CFG.COMPOUND_PACKS) {
+      const arr = character.bank && character.bank[pack];
+      if (!Array.isArray(arr)) continue;
+      arr.forEach((it, i) => {
+        if (comp_ok(it)) out.push({ pack, i, it });
+      });
+    }
+    return out;
+  }
+  // Groups of 3+ identical items across bag and bank, lowest level first (best odds, cheapest)
+  // The compound scroll tier follows the item's grade (cscroll0 / cscroll1 / cscroll2), not a fixed name
+  const upg_max = (name) =>
+    Math.max(
+      CFG.UPGRADE_MAX_LEVEL,
+      (CFG.UPGRADE_MAX_LEVEL_BY_ITEM && CFG.UPGRADE_MAX_LEVEL_BY_ITEM[name]) ||
+        0
+    );
+  const upg_min_chance = (name, it) => {
+    const base =
+      CFG.UPGRADE_MIN_CHANCE_BY_ITEM &&
+      CFG.UPGRADE_MIN_CHANCE_BY_ITEM[name] !== undefined
+        ? CFG.UPGRADE_MIN_CHANCE_BY_ITEM[name]
+        : CFG.UPGRADE_MIN_CHANCE;
+    return it && gamble_mode(it) === "fodder"
+      ? Math.min(base, CFG.UPGRADE_GAMBLE_MIN_CHANCE)
+      : base;
+  };
+  function scroll_grade(it) {
+    try {
+      if (typeof item_grade === "function") {
+        const g = item_grade(it);
+        if (g >= 0) return g;
+      }
+    } catch (e) {}
+    const grades = (G.items[it.name] && G.items[it.name].grades) || [];
+    let g = 0;
+    for (let i = 0; i < grades.length; i++)
+      if ((it.level || 0) >= grades[i]) g = i + 1;
+    return g;
+  }
+  const scroll_for = (it) => "cscroll" + scroll_grade(it);
+  // ---- compound ladder: what the Rangers still lack, per accessory ----
+  // held(name, t) = copies at +t or better that the Rangers wear or the Merchant holds (bag + bank); demand D = Rangers x slots.
+  function comp_state() {
+    const who_list = roster();
+    const target = CFG.COMPOUND_TARGET_LEVEL;
+    const levels = {};
+    const add = (it) => {
+      if (!it || it.l || !it.name) return;
+      const def = G.items[it.name];
+      if (
+        !def ||
+        !def.compound ||
+        (!focus_of(it.name) && !gear_wearable({ name: it.name }))
+      )
+        return;
+      (levels[it.name] = levels[it.name] || []).push(it.level || 0);
+    };
+    for (const who of who_list) {
+      const g = gear_of(who);
+      for (const sl in (g && g.slots) || {}) add(g.slots[sl]);
+    }
+    for (let i = 0; i < character.isize; i++) add(character.items[i]);
+    for (const pack of CFG.COMPOUND_PACKS) {
+      const arr = character.bank && character.bank[pack];
+      if (Array.isArray(arr)) arr.forEach(add);
+    }
+    const demand = (name) =>
+      who_list.length *
+      (CFG.SURPLUS_COPIES_PER_RANGER[G.items[name].type] || 1);
+    const held = (name, t) => (levels[name] || []).filter((l) => l >= t).length;
+    // the preferred item of each kind: the best score at the target level
+    const best = {};
+    for (const name in levels) {
+      const type = G.items[name].type;
+      const sc = gear_score(name, target, {});
+      if (sc > 0 && (!best[type] || sc > best[type].sc))
+        best[type] = { name, sc };
+    }
+    const preferred = (name) =>
+      !!G.items[name] &&
+      !!best[G.items[name].type] &&
+      best[G.items[name].type].name === name;
+    // may a triple of `name` at level L be compounded now?
+    const ladder_ok = (name, L) => {
+      if (focus_of(name)) return L + 1 <= focus_of(name).target; // focus items: funnel everything up to the target
+      if (!preferred(name)) return false;
+      const R = L + 1;
+      if (R > target) return false;
+      const D = demand(name);
+      let open = false;
+      for (let t = R; t <= target; t++) if (held(name, t) < D) open = true;
+      if (!open) return false;
+      for (let t = 1; t <= L; t++) if (held(name, t) - 2 < D) return false; // lower tiers must stay covered
+      return true;
+    };
+    // is this item still useful as compound material or as a worn piece?
+    const useful = (it) => {
+      const name = it.name;
+      const L = it.level || 0;
+      if (!G.items[name] || !G.items[name].compound) return false;
+      if (focus_of(name)) return true; // books are never dead stock
+      if (roster().some((w) => gear_fresh_for(w) && beats_worn(it, L, w)))
+        return true; // a Ranger would wear it
+      if (!preferred(name)) return false;
+      for (let t = L + 1; t <= target; t++)
+        if (held(name, t) < demand(name)) return true;
+      return false;
+    };
+    const report = () =>
+      Object.keys(levels)
+        .filter(preferred)
+        .map((n) => {
+          const D = demand(n);
+          const row = [];
+          for (let t = 1; t <= target; t++)
+            row.push("+" + t + " " + Math.min(held(n, t), D) + "/" + D);
+          return n + ": " + row.join(", ");
+        })
+        .join(" | ");
+    // plan up to `avail` triples at level L: each one consumes three copies and adds one at L+1, so later triples see the new state
+    const take_triples = (name, L, avail) => {
+      let k = 0;
+      const arr = levels[name] || [];
+      while (k < avail && ladder_ok(name, L)) {
+        for (let i = 0; i < 3; i++) {
+          const idx = arr.indexOf(L);
+          if (idx >= 0) arr.splice(idx, 1);
+        }
+        arr.push(L + 1);
+        k++;
+      }
+      return k;
+    };
+    return {
+      levels,
+      demand,
+      held,
+      preferred,
+      ladder_ok,
+      take_triples,
+      useful,
+      report,
+    };
+  }
+
+  function plan_groups() {
+    let ladder_cs = null;
+    const by = {};
+    for (const i of bag_list(comp_ok)) {
+      const k = comp_key(character.items[i]);
+      (by[k] = by[k] || { key: k, item: character.items[i], bag: 0, bank: [] })
+        .bag++;
+    }
+    for (const b of bank_list()) {
+      const k = comp_key(b.it);
+      (by[k] = by[k] || { key: k, item: b.it, bag: 0, bank: [] }).bank.push(b);
+    }
+    return Object.values(by)
+      .filter((g) => g.bag + g.bank.length >= 3 + keep_of(g.item.name))
+      .map((g) =>
+        Object.assign(g, {
+          scroll: scroll_for(g.item),
+          grade: scroll_grade(g.item),
+        })
+      )
+      .filter((g) => {
+        if (g.grade <= max_grade_of(g.item.name)) return true;
+        say(
+          "Compound: " +
+            comp_label(g.item) +
+            " needs " +
+            g.scroll +
+            ", above the allowed tier (COMPOUND_MAX_SCROLL_GRADE " +
+            max_grade_of(g.item.name) +
+            ") - skipped"
+        );
+        return false;
+      })
+      .sort((a, b) => (a.item.level || 0) - (b.item.level || 0))
+      .filter((g) => {
+        // never use the last copies: a failed compound destroys all three, so a full triple stays behind
+        const spare = Math.floor(
+          (g.bag + g.bank.length - keep_of(g.item.name)) / 3
+        );
+        if (!CFG.COMPOUND_NEED_DRIVEN && !focus_of(g.item.name)) {
+          g.max_triples = spare;
+          return spare > 0;
+        }
+        if (!ladder_cs) ladder_cs = comp_state();
+        // lowest level first; every planned triple changes what the next one sees
+        g.max_triples = ladder_cs.take_triples(
+          g.item.name,
+          g.item.level || 0,
+          spare
+        );
+        return g.max_triples > 0;
+      });
+  }
+  const comp_due = () =>
+    CFG.COMPOUND_ENABLED &&
+    !is_paused() &&
+    !has_jobs() &&
+    now() >= S.compound_next;
+
+  async function open_bank_for_compound() {
+    const r =
+      character.map === "bank"
+        ? {}
+        : await travel("bank", 0, "compound round: bank");
+    if (r.failed || character.map !== "bank") {
+      say(
+        "Compound round: could not reach the bank: " +
+          (r.reason || "wrong map"),
+        "#CF575F"
+      );
+      return false;
+    }
+    const ready = await call(() => wait_for(() => character.bank, 8000));
+    if (ready.failed) {
+      say("Compound round: bank data never loaded", "#CF575F");
+      return false;
+    }
+    return true;
+  }
+  async function put_back_in_bank(pred) {
+    let n = 0;
+    // gear waiting for a Ranger stays in the bag (one pending entry protects one item)
+    const pend = S.gear_pending.slice();
+    const waiting = (x) => {
+      const k = pend.findIndex(
+        (g) => g.name === x.name && g.level === (x.level || 0)
+      );
+      if (k < 0) return false;
+      pend.splice(k, 1);
+      return true;
+    };
+    const pred0 = pred;
+    pred = (x) => !!pred0(x) && !waiting(x);
+    const taken = {}; // v5: bank slots used by this call (the game's bank copy may lag behind)
+    for (const i of bag_list(pred)) {
+      const it = character.items[i];
+      if (!it) continue;
+      const name = it.name;
+      let res = {};
+      let gone = {};
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const spot = attempt === 0 ? bank_spot(it, taken) : null; // v5: the item's own pack; the second try lets the game choose
+        res = await call(() =>
+          spot
+            ? spot.onto
+              ? bank_store(i, spot.pack)
+              : bank_store(i, spot.pack, spot.slot)
+            : bank_store(i)
+        ); // v5: live the game timed out on a slot-addressed store ONTO an occupied slot: a stack deposit names only the pack
+        gone = await call(() =>
+          wait_for(
+            () => !character.items[i] || character.items[i].name !== name,
+            3000
+          )
+        );
+        if (spot && !res.failed && !gone.failed) {
+          if (spot.onto)
+            taken[spot.pack + ":" + spot.slot + ":q"] =
+              (taken[spot.pack + ":" + spot.slot + ":q"] || 0) + (it.q || 1);
+          else taken[spot.pack + ":" + spot.slot] = true;
+          const there = spot.onto
+            ? {}
+            : await call(() =>
+                wait_for(
+                  () =>
+                    !!character.bank[spot.pack][spot.slot] &&
+                    character.bank[spot.pack][spot.slot].name === name,
+                  3000
+                )
+              ); // a stack deposit is not checked slot by slot (the game picks the stack)
+          if (there.failed)
+            layout_failed(
+              name +
+                " was stored but is not (or not added) in " +
+                spot.pack +
+                " slot " +
+                spot.slot
+            );
+        }
+        if (!res.failed && !gone.failed) break;
+        if (!spot) break;
+        layout_failed(
+          "storing " +
+            name +
+            " into " +
+            spot.pack +
+            " slot " +
+            spot.slot +
+            " failed (" +
+            (res.reason || gone.reason) +
+            "), trying the game's own slot choice"
+        );
+      }
+      if (res.failed || gone.failed) {
+        say(
+          "Could not store " +
+            name +
+            " in the bank: " +
+            (res.reason || gone.reason),
+          "#CF575F"
+        );
+        break;
+      }
+      n++;
+    }
+    return n;
+  }
+
+  // Bank nearly full: take the cheapest compoundables (normal grade, below +3) out and sell them. High grade and +3 stay.
+  function bank_free_slots() {
+    let free = 0;
+    for (const pack of CFG.COMPOUND_PACKS) {
+      const arr = character.bank && character.bank[pack];
+      if (!Array.isArray(arr)) continue;
+      let used = 0;
+      for (const it of arr) if (it) used++;
+      free += Math.max(0, bank_cap() - used);
+    }
+    return free;
+  }
+  // Junk (JUNK_SELLABLE) sitting in the bank: take it out, sell it at Gabriel, whatever the free space. Returns true if it acted.
+  const is_bank_junk = (it) =>
+    !!it &&
+    !it.l &&
+    !it.p &&
+    (!(it.q > 1) || CFG.JUNK_STACKS.indexOf(it.name) !== -1) &&
+    !never_sell(it) &&
+    (wc_surplus(it) ||
+      (CFG.JUNK_SELLABLE.indexOf(it.name) !== -1 &&
+        ((it.level || 0) <= CFG.JUNK_SELL_MAX_LEVEL ||
+          CFG.JUNK_ANY_LEVEL.indexOf(it.name) !== -1)));
+  function bank_junk_list() {
+    const out = [];
+    const bank = character.bank || {};
+    for (const pack in bank) {
+      const arr = bank[pack];
+      if (!Array.isArray(arr)) continue;
+      arr.forEach((it, i) => {
+        if (is_bank_junk(it)) out.push({ pack, i, it });
+      });
+    }
+    // stackable loot above its reserve (Poison Sacks): whole bank stacks, keeping the reserve in the bag + bank
+    const rs = [];
+    for (const pack in bank) {
+      const arr = bank[pack];
+      if (!Array.isArray(arr)) continue;
+      arr.forEach((it, i) => {
+        if (
+          it &&
+          !it.l &&
+          CFG.STACK_RESERVE &&
+          CFG.STACK_RESERVE[it.name] !== undefined &&
+          reserve_of(it.name) > 0 &&
+          !never_sell(it)
+        )
+          rs.push({ name: it.name, q: it.q || 1, ref: { pack, i, it } });
+      });
+    }
+    S.reserve_sell = {};
+    for (const e of reserve_pick(rs)) {
+      out.push(e.ref);
+      S.reserve_sell[e.name] = (S.reserve_sell[e.name] || 0) + e.q;
+    }
+    return out;
+  }
+  // the Poison Sack stacks just taken out of the bank for sale (never more than the sweep planned)
+  function reserve_bag_slots() {
+    const allow = Object.assign({}, S.reserve_sell || {});
+    const out = [];
+    for (const i of bag_list(
+      (x) =>
+        !x.l &&
+        !!allow[x.name] &&
+        CFG.STACK_RESERVE &&
+        CFG.STACK_RESERVE[x.name] !== undefined
+    ).sort(
+      (a, b) => (character.items[a].q || 1) - (character.items[b].q || 1)
+    )) {
+      const q = character.items[i].q || 1;
+      if (allow[character.items[i].name] >= q) {
+        allow[character.items[i].name] -= q;
+        out.push(i);
+      }
+    }
+    return out;
+  }
+  async function sweep_bank_junk() {
+    if (!CFG.BANK_JUNK_SWEEP || character.map !== "bank") return false;
+    if (S.junk_sweep_block && now() < S.junk_sweep_block) return false;
+    const junk = bank_junk_list();
+    if (!junk.length) return false;
+    // v5 (Sean 2026-11-17): bag AND bank full: first sell what is already sellable in the bag (Books of Cheer ...), that makes the room to take the bank junk out
+    if (
+      free_slots() - 3 < Math.min(junk.length, 6) &&
+      sellable_slots().length
+    ) {
+      const gn = find_npc(CFG.JUNK_SELL_NPC);
+      const gr =
+        gn &&
+        (await travel(
+          { map: gn.map, x: gn.x, y: gn.y },
+          0,
+          "selling the bag junk first (the bag is full)"
+        ));
+      if (gn && !gr.failed) {
+        const sres = await sell_junk_here();
+        say(
+          "Bank junk sweep: the bag is nearly full - sold " +
+            sres.sold +
+            " junk item(s) from the bag first; gold is now " +
+            character.gold
+        );
+      }
+      if (!(await open_bank_for_compound())) return true;
+    }
+    const room = Math.max(0, free_slots() - 3);
+    const pick = junk.slice(0, room);
+    if (!pick.length) {
+      if (now() - (S.junk_room_warn || 0) > 30 * 60000) {
+        S.junk_room_warn = now();
+        say(
+          "Bank junk sweep: " +
+            junk.length +
+            " junk item(s) in the bank but the bag has " +
+            free_slots() +
+            " free slots and nothing sellable in it",
+          "#CF575F"
+        );
+      }
+      return false;
+    }
+    say(
+      "Bank junk sweep: " +
+        junk.length +
+        " junk item(s) in the bank (" +
+        pick.map((b) => b.it.name).join(", ") +
+        ") - selling " +
+        pick.length
+    );
+    // slots shift as items leave a pack: highest index first within a pack
+    pick.sort((a, b) =>
+      a.pack < b.pack ? -1 : a.pack > b.pack ? 1 : b.i - a.i
+    );
+    let took = 0;
+    for (const b of pick) {
+      const have = () =>
+        bag_list((x) => x.name === b.it.name).reduce(
+          (n, k) => n + (character.items[k].q || 1),
+          0
+        ); // (a stack may merge into one the bag already holds: count the quantity)
+      const before = have();
+      const res = await call(() => bank_retrieve(b.pack, b.i));
+      const got = await call(() => wait_for(() => have() > before, 4000));
+      if (res.failed || got.failed) {
+        say(
+          "Could not take " +
+            b.it.name +
+            " out of the bank: " +
+            (res.reason || got.reason),
+          "#CF575F"
+        );
+        break;
+      }
+      took++;
+    }
+    if (!took) {
+      S.junk_sweep_block = now() + 1800000;
+      return false;
+    }
+    const npc = find_npc(CFG.JUNK_SELL_NPC);
+    const r =
+      npc &&
+      (await travel(
+        { map: npc.map, x: npc.x, y: npc.y },
+        0,
+        "selling bank junk"
+      ));
+    if (npc && !r.failed) {
+      const res = await sell_junk_here(() =>
+        bag_list(is_bank_junk).concat(reserve_bag_slots())
+      );
+      say(
+        "Sold " +
+          res.sold +
+          " junk item(s) from the bank; gold is now " +
+          character.gold
+      );
+    } else {
+      say("Could not reach the seller; putting the junk back", "#CF575F");
+      S.junk_sweep_block = now() + 1800000;
+    }
+    if (bag_list(is_bank_junk).length + reserve_bag_slots().length) {
+      S.junk_sweep_block = now() + 1800000;
+      if (await open_bank_for_compound())
+        await put_back_in_bank(
+          (x) =>
+            is_bank_junk(x) ||
+            reserve_bag_slots().some((k) => character.items[k] === x)
+        );
+    } else if (character.map !== "bank") {
+      await open_bank_for_compound();
+    }
+    return true;
+  }
+  async function free_bank_space() {
+    if (await sweep_bank_junk()) return;
+    if (!CFG.BANKFULL_SELL) return;
+    const free = bank_free_slots();
+    if (free >= CFG.BANKFULL_TRIGGER_FREE) return;
+    const cs = CFG.COMPOUND_NEED_DRIVEN ? comp_state() : null;
+    const cheap = (it) =>
+      !!it &&
+      !it.l &&
+      !never_sell(it) &&
+      !focus_of(it.name) &&
+      !(it.q > 1) &&
+      !!G.items[it.name] &&
+      !!G.items[it.name].compound &&
+      scroll_grade(it) < CFG.BANKFULL_KEEP_GRADE &&
+      (cs
+        ? (it.level || 0) < CFG.COMPOUND_TARGET_LEVEL && !cs.useful(it) // not needed by a Ranger or by the ladder
+        : (it.level || 0) < CFG.COMPOUND_SELL_AT_LEVEL);
+    const counts = {};
+    const all = bank_list();
+    for (const b of all)
+      counts[comp_key(b.it)] = (counts[comp_key(b.it)] || 0) + 1;
+    for (const i of bag_list(comp_ok))
+      counts[comp_key(character.items[i])] =
+        (counts[comp_key(character.items[i])] || 0) + 1;
+    const loose_first = (a, b) =>
+      (counts[comp_key(a.it)] >= 3 ? 1 : 0) -
+        (counts[comp_key(b.it)] >= 3 ? 1 : 0) ||
+      (a.it.level || 0) - (b.it.level || 0);
+    // 1) what he is already carrying has nowhere to go: sell it (complete triples are left for compounding)
+    const bag_sell = bag_list(cheap)
+      .map((i) => ({ i, it: character.items[i] }))
+      .filter((x) => cs || counts[comp_key(x.it)] < 3); // need-driven: "cheap" already means no Ranger and no ladder step needs it
+    // 2) then bank items until about BANKFULL_TARGET_FREE slots are free
+    const victims = all.filter((b) => cheap(b.it)).sort(loose_first);
+    const want = Math.max(
+      0,
+      Math.min(
+        victims.length,
+        CFG.BANKFULL_TARGET_FREE - free,
+        free_slots() - 3 - bag_sell.length
+      )
+    );
+    const pick = victims.slice(0, want);
+    if (!bag_sell.length && !pick.length) {
+      if (CFG.SURPLUS_SELL && (await sell_surplus(free))) return;
+      if (S.bankfull_warned) return;
+      S.bankfull_warned = true;
+      say(
+        "Bank is nearly full (" +
+          free +
+          " free) but nothing is eligible to sell (high grade and +" +
+          CFG.COMPOUND_SELL_AT_LEVEL +
+          " are kept)",
+        "#CF575F"
+      );
+      return;
+    }
+    const total = bag_sell.length + pick.length;
+    if (CFG.BANKFULL_DRY_RUN) {
+      say(
+        "Bank is nearly full (" +
+          free +
+          " free) - dry run, would sell " +
+          total +
+          ": " +
+          bag_sell
+            .map((x) => comp_label(x.it) + " (bag)")
+            .concat(pick.map((b) => comp_label(b.it)))
+            .join(", ")
+      );
+      return;
+    }
+    say(
+      "Bank is nearly full (" +
+        free +
+        " free) - selling " +
+        total +
+        " normal-grade accessory item(s) (" +
+        bag_sell.length +
+        " from the bag, " +
+        pick.length +
+        " from the bank)"
+    );
+    const names = {};
+    for (const x of bag_sell) names[comp_key(x.it)] = true;
+    // slots shift as items leave a pack, so take them highest index first within a pack
+    pick.sort((a, b) =>
+      a.pack < b.pack ? -1 : a.pack > b.pack ? 1 : b.i - a.i
+    );
+    for (const b of pick) {
+      const before = bag_list((x) => x.name === b.it.name).length;
+      const res = await call(() => bank_retrieve(b.pack, b.i));
+      const got = await call(() =>
+        wait_for(
+          () => bag_list((x) => x.name === b.it.name).length > before,
+          4000
+        )
+      );
+      if (res.failed || got.failed) {
+        say(
+          "Could not take " +
+            comp_label(b.it) +
+            " out of the bank: " +
+            (res.reason || got.reason),
+          "#CF575F"
+        );
+        break;
+      }
+      names[comp_key(b.it)] = true;
+    }
+    // only keys that are not part of a complete triple, so compounding material is never sold by mistake
+    const mine = (x) => cheap(x) && !!names[comp_key(x)];
+    const npc = find_npc(CFG.JUNK_SELL_NPC);
+    const r =
+      npc &&
+      (await travel(
+        { map: npc.map, x: npc.x, y: npc.y },
+        0,
+        "selling bank overflow"
+      ));
+    if (npc && !r.failed) {
+      const res = await sell_junk_here(() => bag_list(mine));
+      say(
+        "Sold " +
+          res.sold +
+          " accessory item(s) to free bank space; gold is now " +
+          character.gold
+      );
+    } else {
+      say("Could not reach the seller; putting the items back", "#CF575F");
+    }
+    if (await open_bank_for_compound()) await put_back_in_bank(mine);
+  }
+
+  // ---- surplus finished items in the bank ----
+  // Which finished bank items does no Ranger need? Returns {sell:[{pack,i,it,value}], held:[{it,value,why}], kept, why}
+  function surplus_plan(with_bag) {
+    const out = { sell: [], held: [], kept: 0, why: "" };
+    const who_list = roster();
+    for (const who of who_list)
+      if (!gear_fresh_for(who)) {
+        out.why =
+          "no fresh gear report from " +
+          who +
+          " (nothing is sold until all Rangers have reported)";
+        return out;
+      }
+    if (!value_fn()) {
+      out.why = "the game's item value function is not available";
+      return out;
+    }
+    // what each Ranger wears per slot, as a score; kept items raise the virtual floor of the slot they would take
+    const virt = {};
+    for (const who of who_list) {
+      virt[who] = {};
+      const g = gear_of(who);
+      for (const sl in (g && g.slots) || {}) {
+        const w = g.slots[sl];
+        virt[who][sl] = w
+          ? gear_score(w.name, w.level, { stat_type: w.stat_type })
+          : 0;
+      }
+    }
+    const cands = [];
+    const consider = (it, where) => {
+      const def = it && G.items[it.name];
+      if (!def || it.l || it.q > 1 || never_sell(it)) return;
+      if (!def.compound && !def.upgrade) return;
+      const cap = def.compound
+        ? CFG.COMPOUND_NEED_DRIVEN
+          ? CFG.COMPOUND_TARGET_LEVEL
+          : CFG.COMPOUND_SELL_AT_LEVEL
+        : upg_max(it.name);
+      if ((it.level || 0) < cap) return; // not finished: compounding / upgrading may still use it
+      const score = gear_wearable(it)
+        ? gear_score(it.name, it.level || 0, { stat_type: it.stat_type })
+        : 0;
+      cands.push(Object.assign({ it, score }, where));
+    };
+    for (const pack of CFG.COMPOUND_PACKS) {
+      const arr = character.bank && character.bank[pack];
+      if (Array.isArray(arr)) arr.forEach((it, i) => consider(it, { pack, i }));
+    }
+    if (with_bag) {
+      const pend = S.gear_pending.slice();
+      for (let i = 0; i < character.isize; i++) {
+        const it = character.items[i];
+        if (!it) continue;
+        const k = pend.findIndex(
+          (g) => g.name === it.name && g.level === (it.level || 0)
+        );
+        if (k >= 0) {
+          pend.splice(k, 1); // waiting for a Ranger: not surplus
+          continue;
+        }
+        consider(it, { bag: i });
+      }
+    }
+    cands.sort((a, b) => b.score - a.score);
+    const spare = {};
+    for (const c of cands) {
+      const def = G.items[c.it.name];
+      let keep = false;
+      if (c.score > 0) {
+        const slots = SLOT_OF_TYPE[def.type] || [];
+        for (const who of who_list) {
+          let low = null;
+          for (const sl of slots) {
+            const v = virt[who][sl] || 0;
+            if (!low || v < low.v) low = { sl, v };
+          }
+          if (low && c.score > low.v * CFG.GEAR_MARGIN) {
+            virt[who][low.sl] = c.score;
+            keep = true;
+            break;
+          }
+        }
+      }
+      if (!keep && CFG.SURPLUS_KEEP_SPARE > 0) {
+        spare[def.type] = (spare[def.type] || 0) + 1;
+        if (spare[def.type] <= CFG.SURPLUS_KEEP_SPARE) keep = true;
+      }
+      if (keep) {
+        out.kept++;
+        continue;
+      }
+      c.value = Math.round(sell_value(c.it.name, c.it.level || 0));
+      if (c.it.p)
+        out.held.push({
+          it: c.it,
+          value: c.value,
+          why: "special (" + c.it.p + ")",
+        });
+      else if (c.value > CFG.SURPLUS_MAX_VALUE_EACH)
+        out.held.push({
+          it: c.it,
+          value: c.value,
+          why: "worth more than SURPLUS_MAX_VALUE_EACH",
+        });
+      else out.sell.push(c);
+    }
+    out.sell.sort((a, b) => b.value - a.value); // the most valuable first: biggest step towards the next bank slot
+    return out;
+  }
+  // true = it handled the situation (sold, or logged a dry run); false = nothing to do
+  async function sell_surplus(free) {
+    const plan = surplus_plan();
+    const sig =
+      plan.why +
+      "|" +
+      plan.sell.map((c) => c.pack + c.i + c.it.name).join(",") +
+      "|" +
+      plan.held.length;
+    if (plan.why) {
+      if (S.surplus_sig !== sig)
+        say("Surplus check skipped: " + plan.why, "#CF575F");
+      S.surplus_sig = sig;
+      return false;
+    }
+    const want = Math.max(
+      0,
+      Math.min(
+        plan.sell.length,
+        CFG.BANKFULL_TARGET_FREE - free,
+        free_slots() - 3
+      )
+    );
+    const pick = plan.sell.slice(0, want);
+    if (S.surplus_sig !== sig) {
+      S.surplus_sig = sig;
+      say(
+        "Surplus check: " +
+          plan.kept +
+          " finished item(s) kept for the Rangers, " +
+          plan.sell.length +
+          " surplus (" +
+          plan.sell.reduce((a, c) => a + c.value, 0) +
+          "g expected), " +
+          plan.held.length +
+          " held back"
+      );
+      for (const h of plan.held)
+        say(
+          "  held back: " +
+            comp_label(h.it) +
+            " ~" +
+            h.value +
+            "g - " +
+            h.why +
+            " (sell it yourself if you agree)"
+        );
+    }
+    if (!pick.length) return false;
+    if (CFG.SURPLUS_DRY_RUN) {
+      say(
+        "Bank nearly full (" +
+          free +
+          " free) - dry run, would sell " +
+          pick.length +
+          " surplus item(s): " +
+          pick.map((c) => comp_label(c.it) + " ~" + c.value + "g").join(", ")
+      );
+      return true;
+    }
+    say(
+      "Bank nearly full (" +
+        free +
+        " free) - selling " +
+        pick.length +
+        " surplus finished item(s) no Ranger needs"
+    );
+    pick.sort((a, b) =>
+      a.pack < b.pack ? -1 : a.pack > b.pack ? 1 : b.i - a.i
+    ); // highest slot first within a pack
+    const mine = []; // bag slots holding what we took out
+    const keys = {};
+    for (const c of pick) {
+      const before = {};
+      for (const i of bag_list(
+        (x) => x.name === c.it.name && (x.level || 0) === (c.it.level || 0)
+      ))
+        before[i] = true;
+      const res = await call(() => bank_retrieve(c.pack, c.i));
+      const got = await call(() =>
+        wait_for(
+          () =>
+            bag_list(
+              (x) =>
+                x.name === c.it.name && (x.level || 0) === (c.it.level || 0)
+            ).some((i) => !before[i]),
+          4000
+        )
+      );
+      if (res.failed || got.failed) {
+        say(
+          "Could not take " +
+            comp_label(c.it) +
+            " out of the bank: " +
+            (res.reason || got.reason),
+          "#CF575F"
+        );
+        break;
+      }
+      const slot = bag_list(
+        (x) => x.name === c.it.name && (x.level || 0) === (c.it.level || 0)
+      ).find((i) => !before[i]);
+      mine.push({ slot, name: c.it.name });
+      keys[comp_key(c.it)] = true;
+    }
+    if (!mine.length) return true;
+    const still = () =>
+      mine
+        .filter(
+          (m) =>
+            character.items[m.slot] && character.items[m.slot].name === m.name
+        )
+        .map((m) => m.slot);
+    const npc = find_npc(CFG.JUNK_SELL_NPC);
+    const r =
+      npc &&
+      (await travel(
+        { map: npc.map, x: npc.x, y: npc.y },
+        0,
+        "selling surplus bank items"
+      ));
+    if (npc && !r.failed) {
+      const g0 = character.gold;
+      const res = await sell_junk_here(still);
+      say(
+        "Sold " +
+          res.sold +
+          " surplus item(s); gold is now " +
+          character.gold +
+          " (+" +
+          Math.max(0, character.gold - g0) +
+          ")"
+      );
+    } else say("Could not reach the seller; putting the items back", "#CF575F");
+    // always go back to the bank: the compound round that called this goes on there
+    if (await open_bank_for_compound()) {
+      if (still().length)
+        await put_back_in_bank((x) => !!keys[comp_key(x)] && !x.l);
+    }
+    return true;
+  }
+
+  // ---- copy limit: never more copies of one finished item than the Rangers can wear ----
+  function copies_plan() {
+    const out = { sell: [], held: [], kept: 0, why: "" };
+    const who_list = roster();
+    for (const who of who_list)
+      if (!gear_fresh_for(who)) {
+        out.why = "no fresh gear report from " + who;
+        return out;
+      }
+    if (!value_fn()) {
+      out.why = "the game's item value function is not available";
+      return out;
+    }
+    const L = CFG.SURPLUS_COPY_LEVEL;
+    const by = {}; // item name -> { worn, owned: [] }
+    const grp = (n) => (by[n] = by[n] || { worn: 0, owned: [] });
+    for (const who of who_list) {
+      const g = gear_of(who);
+      for (const sl in (g && g.slots) || {}) {
+        const w = g.slots[sl];
+        if (w && w.name && (w.level || 0) >= L) grp(w.name).worn++;
+      }
+    }
+    const pend = S.gear_pending.slice();
+    const add = (it, where) => {
+      const def = it && G.items[it.name];
+      if (!def || it.l || it.q > 1 || (!def.upgrade && !def.compound)) return;
+      const kb = !!CFG.KEEP_BEST_COPIES[it.name];
+      if (!kb && (!gear_wearable(it) || (it.level || 0) < L)) return;
+      const k = pend.findIndex(
+        (g) => g.name === it.name && g.level === (it.level || 0)
+      );
+      let waiting = false;
+      if (k >= 0 && where.bag !== undefined) {
+        pend.splice(k, 1);
+        waiting = true;
+      }
+      grp(it.name).owned.push(Object.assign({ it, waiting, kb }, where));
+    };
+    for (let i = 0; i < character.isize; i++)
+      add(character.items[i], { bag: i });
+    for (const pack of CFG.UPGRADE_PACKS) {
+      const arr = character.bank && character.bank[pack];
+      if (Array.isArray(arr)) arr.forEach((it, i) => add(it, { pack, i }));
+    }
+    for (const name in by) {
+      const def = G.items[name];
+      const per = CFG.SURPLUS_COPIES_PER_RANGER[def.type] || 1;
+      const allow =
+        CFG.KEEP_BEST_COPIES[name] !== undefined
+          ? CFG.KEEP_BEST_COPIES[name]
+          : Math.max(0, per * who_list.length - by[name].worn);
+      // keep: items waiting for a Ranger first, then the highest level, then the ones with a Dexterity scroll on them
+      const ranked = by[name].owned.sort(
+        (a, b) =>
+          (b.waiting ? 1 : 0) - (a.waiting ? 1 : 0) ||
+          (b.it.level || 0) - (a.it.level || 0) ||
+          (b.it.stat_type ? 1 : 0) - (a.it.stat_type ? 1 : 0)
+      );
+      ranked.forEach((c, n) => {
+        if (n < allow) return void out.kept++;
+        c.value = Math.round(sell_value(c.it.name, c.it.level || 0));
+        if (c.it.p)
+          out.held.push({
+            it: c.it,
+            value: c.value,
+            why: "special (" + c.it.p + ")",
+          });
+        else if (c.value > CFG.SURPLUS_MAX_VALUE_EACH)
+          out.held.push({
+            it: c.it,
+            value: c.value,
+            why: "worth more than SURPLUS_MAX_VALUE_EACH",
+          });
+        else out.sell.push(c);
+      });
+    }
+    out.sell.sort((a, b) => b.value - a.value);
+    return out;
+  }
+  // The bank must be open. Sells the extra copies (dry run only logs). Leaves the Merchant at the bank.
+  async function sell_copies() {
+    S.copies_last = now();
+    // "Consolidate bank and inventory": only when the bank is running out of ITEM slots (not packs: a pack holds 42)
+    const free_items = bank_free_slots();
+    const pressure = free_items < CFG.BANKFULL_TRIGGER_FREE; // without it only the KEEP_BEST_COPIES surplus is sold
+    if (!pressure && !Object.keys(CFG.KEEP_BEST_COPIES).length) return;
+    if (pressure && S.consol_logged !== true) {
+      S.consol_logged = true;
+      say(
+        "Consolidating bank and inventory: only " +
+          free_items +
+          " free bank item slots (limit " +
+          CFG.BANKFULL_TRIGGER_FREE +
+          ")"
+      );
+    }
+    const plan = copies_plan();
+    if (!pressure) plan.sell = plan.sell.filter((c) => c.kb);
+    const sig =
+      plan.why +
+      "|" +
+      plan.sell
+        .map(
+          (c) =>
+            (c.pack || "bag") + (c.i !== undefined ? c.i : c.bag) + c.it.name
+        )
+        .join(",") +
+      "|" +
+      plan.held.length;
+    if (plan.why) {
+      if (S.copies_sig !== sig)
+        say("Copy limit check skipped: " + plan.why, "#CF575F");
+      S.copies_sig = sig;
+      return;
+    }
+    if (S.copies_sig !== sig) {
+      S.copies_sig = sig;
+      if (plan.sell.length || plan.held.length)
+        say(
+          "Copy limit: " +
+            plan.kept +
+            " copies kept, " +
+            plan.sell.length +
+            " extra (" +
+            plan.sell.reduce((a, c) => a + c.value, 0) +
+            "g expected), " +
+            plan.held.length +
+            " held back"
+        );
+      for (const h of plan.held)
+        say(
+          "  held back: " +
+            comp_label(h.it) +
+            " ~" +
+            h.value +
+            "g - " +
+            h.why +
+            " (sell it yourself if you agree)"
+        );
+    }
+    if (!plan.sell.length) return;
+    if (CFG.SURPLUS_DRY_RUN) {
+      say(
+        "Copy limit - dry run, would sell " +
+          plan.sell.length +
+          " extra copie(s): " +
+          plan.sell
+            .map((c) => comp_label(c.it) + " ~" + c.value + "g")
+            .join(", ")
+      );
+      return;
+    }
+    // bag items first (no bank trip needed), then as many bank items as the bag has room for
+    const room = Math.max(0, free_slots() - 3);
+    const pick = plan.sell
+      .filter((c) => c.bag !== undefined)
+      .concat(plan.sell.filter((c) => c.pack !== undefined).slice(0, room));
+    say(
+      "Copy limit - selling " +
+        pick.length +
+        " extra copie(s) beyond what the Rangers can wear"
+    );
+    const bank_picks = pick
+      .filter((c) => c.pack !== undefined)
+      .sort((a, b) => (a.pack < b.pack ? -1 : a.pack > b.pack ? 1 : b.i - a.i));
+    const mine = pick
+      .filter((c) => c.bag !== undefined)
+      .map((c) => ({ slot: c.bag, name: c.it.name }));
+    const keys = {};
+    for (const c of pick) keys[comp_key(c.it)] = true;
+    for (const c of bank_picks) {
+      const same = (x) =>
+        x.name === c.it.name && (x.level || 0) === (c.it.level || 0);
+      const before = {};
+      for (const i of bag_list(same)) before[i] = true;
+      const res = await call(() => bank_retrieve(c.pack, c.i));
+      const got = await call(() =>
+        wait_for(() => bag_list(same).some((i) => !before[i]), 4000)
+      );
+      if (res.failed || got.failed) {
+        say(
+          "Could not take " +
+            comp_label(c.it) +
+            " out of the bank: " +
+            (res.reason || got.reason),
+          "#CF575F"
+        );
+        break;
+      }
+      mine.push({
+        slot: bag_list(same).find((i) => !before[i]),
+        name: c.it.name,
+      });
+    }
+    if (!mine.length) return;
+    const still = () =>
+      mine
+        .filter(
+          (m) =>
+            character.items[m.slot] && character.items[m.slot].name === m.name
+        )
+        .map((m) => m.slot);
+    const npc = find_npc(CFG.JUNK_SELL_NPC);
+    const r =
+      npc &&
+      (await travel(
+        { map: npc.map, x: npc.x, y: npc.y },
+        0,
+        "selling extra copies"
+      ));
+    if (npc && !r.failed) {
+      const g0 = character.gold;
+      const res = await sell_junk_here(still);
+      say(
+        "Sold " +
+          res.sold +
+          " extra copie(s); gold is now " +
+          character.gold +
+          " (+" +
+          Math.max(0, character.gold - g0) +
+          ")"
+      );
+    } else say("Could not reach the seller; putting the items back", "#CF575F");
+    if (await open_bank_for_compound()) {
+      if (still().length)
+        await put_back_in_bank((x) => !!keys[comp_key(x)] && !x.l);
+    }
+  }
+
+  // ---- gear sweep ----
+  // Gear that is finished (max level) or stuck (cannot be taken further by us) and would beat a Ranger's worn slot.
+  function sweep_plan() {
+    const out = { give: [], why: "" };
+    // v5: only characters with a fresh gear report are served, so an offline Ranger no longer blocks the sweep (the leader must have reported).
+    // Selling decisions (surplus, copy limit) still wait for every Ranger: an offline one might need the item.
+    if (!roster().some(gear_fresh_for)) {
+      out.why = "no fresh gear report from " + roster().join(", ");
+      return out;
+    }
+    const who_list = roster().filter(gear_fresh_for);
+    const sup_list = support_names().filter(gear_fresh_for); // v5: support characters with a fresh report are served after the Rangers
+    const items = [];
+    const counts = {};
+    const cs = CFG.COMPOUND_NEED_DRIVEN ? comp_state() : null;
+    const add = (it, where) => {
+      if (
+        !it ||
+        it.l ||
+        it.q > 1 ||
+        !(gear_wearable(it) || sup_list.some((w) => gear_wearable(it, w)))
+      )
+        return;
+      const def = G.items[it.name];
+      if (!def || (!def.upgrade && !def.compound)) return;
+      items.push(Object.assign({ it }, where));
+      counts[comp_key(it)] = (counts[comp_key(it)] || 0) + 1;
+    };
+    for (let i = 0; i < character.isize; i++)
+      add(character.items[i], { bag: i });
+    for (const pack of CFG.UPGRADE_PACKS) {
+      const arr = character.bank && character.bank[pack];
+      if (Array.isArray(arr)) arr.forEach((it, i) => add(it, { pack, i }));
+    }
+    const finished = (c) => {
+      const def = G.items[c.it.name];
+      const lv = c.it.level || 0;
+      if (def.compound && CFG.COMPOUND_NEED_DRIVEN) {
+        if (lv >= target_of(c.it.name)) return true;
+        const compoundable =
+          counts[comp_key(c.it)] >= 3 + keep_of(c.it.name) &&
+          comp_ok(c.it) &&
+          scroll_grade(c.it) <= max_grade_of(c.it.name) &&
+          cs.ladder_ok(c.it.name, lv);
+        return !compoundable; // waiting for a triple, or the ladder has no use for it: a Ranger may wear it now
+      }
+      if (def.compound && lv >= CFG.COMPOUND_SELL_AT_LEVEL) return true;
+      if (def.upgrade && lv >= upg_max(c.it.name)) return true;
+      if (def.upgrade && !def.compound)
+        return !(upg_ok(c.it) && upg_has_spare(c.it)); // the upgrade rounds will not take it further
+      if (def.compound) return counts[comp_key(c.it)] < 3; // no triple to compound it with
+      return false;
+    };
+    const virt = {};
+    for (const who of who_list.concat(sup_list)) {
+      virt[who] = {};
+      const g = gear_of(who);
+      for (const sl in (g && g.slots) || {}) {
+        const w = g.slots[sl];
+        virt[who][sl] = w
+          ? gear_score(w.name, w.level, { stat_type: w.stat_type, who })
+          : 0;
+      }
+    }
+    // score of an item for one character (null when he cannot wear it): Rangers as before, support characters with their own weights
+    const score_for = (c, who) =>
+      support_cfg(who)
+        ? gear_wearable(c.it, who)
+          ? gear_score(c.it.name, c.it.level || 0, {
+              stat_type: c.it.stat_type,
+              who,
+            })
+          : null
+        : gear_wearable(c.it)
+        ? gear_score(c.it.name, c.it.level || 0, { stat_type: c.it.stat_type })
+        : null;
+    const cands = items
+      .filter(finished)
+      .map((c) =>
+        Object.assign(c, {
+          score: Math.max(
+            0,
+            ...who_list.concat(sup_list).map((w) => score_for(c, w) || 0)
+          ),
+        })
+      )
+      .sort((a, b) => b.score - a.score);
+    for (const c of cands) {
+      if (c.score <= 0) continue;
+      for (const who of who_list.concat(sup_list)) {
+        const sc = score_for(c, who);
+        if (!sc || sc <= 0) continue;
+        if (two_hand(who, c.it)) {
+          const cur = (virt[who].mainhand || 0) + (virt[who].offhand || 0);
+          if (sc > cur * CFG.GEAR_MARGIN) {
+            virt[who].mainhand = sc;
+            virt[who].offhand = 0;
+            out.give.push({ c, who, slot: "mainhand" });
+            break;
+          }
+          continue;
+        }
+        const slots = slots_of(G.items[c.it.name].type, who) || [];
+        let low = null;
+        for (const sl of slots) {
+          const v = virt[who][sl] || 0;
+          if (!low || v < low.v) low = { sl, v };
+        }
+        if (low && sc > low.v * CFG.GEAR_MARGIN) {
+          virt[who][low.sl] = sc;
+          out.give.push({ c, who, slot: low.sl });
+          break;
+        }
+      }
+    }
+    // v5: the Warrior's basher (kept in his bag, never worn): one from the bag or the bank when his report shows none
+    for (const who of sup_list) {
+      if (!kit_missing(who)) continue;
+      let found = null;
+      for (const nm of kit_names(who)) {
+        for (let i = 0; i < character.isize && !found; i++) {
+          const it = character.items[i];
+          if (it && it.name === nm && !it.l && !(it.q > 1))
+            found = { it, bag: i };
+        }
+        for (const pack of CFG.UPGRADE_PACKS) {
+          const arr = character.bank && character.bank[pack];
+          if (Array.isArray(arr) && !found)
+            arr.forEach((it, i) => {
+              if (!found && it && it.name === nm && !it.l && !(it.q > 1))
+                found = { it, pack, i };
+            });
+        }
+        if (found) break;
+      }
+      if (found) out.give.push({ c: found, who, slot: "bag" });
+      else out.no_kit = (out.no_kit || []).concat(who);
+    }
+    return out;
+  }
+  // The bank must be open. Takes what is needed into the bag, marks it as waiting for its Ranger, tells the leader.
+  async function gear_sweep_here() {
+    S.sweep_last = now();
+    const plan = sweep_plan();
+    if (plan.why) {
+      if (S.sweep_sig !== plan.why)
+        say("Gear sweep skipped: " + plan.why, "#CF575F");
+      S.sweep_sig = plan.why;
+      return;
+    }
+    if (
+      plan.no_kit &&
+      plan.no_kit.length &&
+      now() - (S.kit_hint_at || 0) > 3600000
+    ) {
+      S.kit_hint_at = now();
+      say(
+        plan.no_kit.join(", ") +
+          " has no basher in his bag (Stomp needs one) and I have none: buy a Wooden Basher from Gabriel (about 4,900 g) and put it in my bag or the bank",
+        "#CF575F"
+      );
+    }
+    // what is already waiting (one entry per item) counts first
+    const claimed = {};
+    for (const p of S.gear_pending) {
+      const k =
+        p.name + "|" + p.level + "|" + p.for + (p.alt ? "+" + p.slot : "");
+      claimed[k] = (claimed[k] || 0) + 1;
+    }
+    const todo = [];
+    for (const g of plan.give) {
+      const k =
+        g.c.it.name +
+        "|" +
+        (g.c.it.level || 0) +
+        "|" +
+        g.who +
+        (/\+$/.test(g.who) ? g.slot : "");
+      if (claimed[k] > 0) {
+        claimed[k]--;
+        continue;
+      }
+      todo.push(g);
+    }
+    const from_bank = todo.filter((g) => g.c.pack !== undefined);
+    const room = Math.max(0, free_slots() - CFG.GEAR_SWEEP_BAG_RESERVE);
+    const take = from_bank.slice(0, room);
+    take.sort((a, b) =>
+      a.c.pack < b.c.pack ? -1 : a.c.pack > b.c.pack ? 1 : b.c.i - a.c.i
+    ); // highest slot first within a pack
+    const got = [];
+    for (const g of take) {
+      const it = g.c.it;
+      const before = bag_list(
+        (x) => x.name === it.name && (x.level || 0) === (it.level || 0)
+      ).length;
+      const res = await call(() => bank_retrieve(g.c.pack, g.c.i));
+      const ok = await call(() =>
+        wait_for(
+          () =>
+            bag_list(
+              (x) => x.name === it.name && (x.level || 0) === (it.level || 0)
+            ).length > before,
+          4000
+        )
+      );
+      if (res.failed || ok.failed) {
+        say(
+          "Could not take " +
+            comp_label(it) +
+            " out of the bank: " +
+            (res.reason || ok.reason),
+          "#CF575F"
+        );
+        break;
+      }
+      got.push(g);
+    }
+    const mine = todo.filter((g) => g.c.bag !== undefined).concat(got);
+    for (const g of mine) {
+      const it = g.c.it;
+      S.gear_pending.push({
+        name: it.name,
+        level: it.level || 0,
+        for: g.who.replace(/\+$/, ""),
+        kit: g.slot === "bag",
+        alt: /\+$/.test(g.who),
+        slot: g.slot,
+      });
+      say(
+        "Gear sweep: " +
+          comp_label(it) +
+          " for " +
+          g.who +
+          " (better than his " +
+          g.slot +
+          ")",
+        "#5BCB5B"
+      );
+    }
+    if (from_bank.length > take.length)
+      say(
+        "Gear sweep: " +
+          (from_bank.length - take.length) +
+          " more item(s) wait in the bank (bag is nearly full)"
+      );
+    // the leader decides when the courier fetches it: tell him gear is waiting
+    const waiting = [...new Set(S.gear_pending.map((p) => p.for))];
+    if (waiting.length)
+      await reply(CFG.RANGER_NAME, { type: "gear_ready", names: waiting });
+  }
+  // ===== stat scrolls: ONE path for every character class (decision D5, 2026-11-20) =====
+  // The class decides which scroll and stat (Ranger: CFG.DEX_SCROLL_NAME = dex; Warrior / Priest: the scroll in his SUPPORT_GEAR profile = str / int) and
+  // CFG.STAT_SCROLL_APPLY switches each class on or off. The process is the same for all: find the piece, check the price, buy the scroll (taking gold
+  // from the bank if needed), walk to the upgrade NPC, apply it, verify the item now carries the stat, log what happened (with the full evidence on a failure).
+  const stat_scroll_class = (who) => {
+    const sup = support_cfg(who);
+    return sup ? sup.cls : "ranger";
+  };
+  const stat_scroll_on = (who) =>
+    !!(CFG.STAT_SCROLL_APPLY && CFG.STAT_SCROLL_APPLY[stat_scroll_class(who)]) &&
+    !CFG.UPGRADE_DRY_RUN;
+  // { name, stat } of the scroll this character uses, or null
+  function stat_scroll_of(who) {
+    const sup = support_cfg(who);
+    const name = sup ? sup.scroll : CFG.DEX_SCROLL_NAME;
+    return name && G.items[name]
+      ? { name, stat: G.items[name].stat || (sup ? sup.main : "dex") } // the scroll item names its stat (dex / str / int ...); the class's main stat is the fallback
+      : null;
+  }
+  // job: { name, level, who, scroll, stat, budgeted }; returns "done", "skip" (nothing to do for this piece) or "fail" (something is off: the caller stops buying scrolls)
+  async function apply_stat_scroll(j, scrollNpc, upNpc) {
+    const where = () =>
+      bag_list(
+        (x) =>
+          x.name === j.name &&
+          (x.level || 0) === j.level &&
+          !x.stat_type &&
+          !x.l
+      )[0];
+    if (where() === undefined) return "skip";
+    const price = unit_cost(j.scroll);
+    if (price > CFG.STAT_SCROLL_MAX_GOLD) {
+      say(
+        "No " +
+          j.scroll +
+          " for " +
+          j.name +
+          ": it costs " +
+          price +
+          " (limit " +
+          CFG.STAT_SCROLL_MAX_GOLD +
+          ")",
+        "#CF575F"
+      );
+      return "skip";
+    }
+    if (j.budgeted && S.upgrade_spent + price > S.upgrade_cap) {
+      say(
+        "No " + j.scroll + " for " + j.name + ": upgrade budget used up"
+      );
+      return "skip";
+    }
+    if (quantity(j.scroll) < 1) {
+      if (character.gold < price) {
+        if (!(await open_bank_for_compound())) return "fail";
+        const bg = Number(character.bank && character.bank.gold);
+        if (bg - price < CFG.COMPOUND_BANK_FLOOR) {
+          say(
+            "No " +
+              j.scroll +
+              ": buying one would take the bank below its floor",
+            "#CF575F"
+          );
+          return "fail";
+        }
+        const before = character.gold;
+        await call(() => bank_withdraw(price));
+        await call(() =>
+          wait_for(() => character.gold >= before + price - 1, 5000)
+        );
+      }
+      if (scrollNpc)
+        await travel(
+          { map: scrollNpc.map, x: scrollNpc.x, y: scrollNpc.y },
+          0,
+          "buying " + j.scroll
+        );
+      const had = quantity(j.scroll);
+      const res = await call(() => buy_with_gold(j.scroll, 1));
+      const got = await call(() =>
+        wait_for(() => quantity(j.scroll) > had, 6000)
+      );
+      if (res.failed || got.failed) {
+        say(
+          "Buying " + j.scroll + " failed: " + (res.reason || got.reason),
+          "#CF575F"
+        );
+        return "fail";
+      }
+      if (j.budgeted) S.upgrade_spent += price;
+    }
+    if (upNpc)
+      await travel(
+        { map: upNpc.map, x: upNpc.x, y: upNpc.y },
+        0,
+        "applying a " + j.scroll
+      );
+    const idx = where();
+    const si = locate_item(j.scroll);
+    if (idx === undefined || si < 0) return "skip";
+    const it = character.items[idx];
+    act(
+      j.scroll + " on " + j.name + " for " + j.who,
+      P.ETA_S.upgrade_item,
+      true
+    );
+    const res = await call(() => upgrade(idx, si));
+    await call(() =>
+      wait_for(
+        () =>
+          !!character.items[idx] && character.items[idx].stat_type === j.stat,
+        6000
+      )
+    );
+    await wait(300);
+    const done =
+      !!character.items[idx] && character.items[idx].stat_type === j.stat;
+    say(
+      "STAT SCROLL " +
+        (done
+          ? "applied to "
+          : res.failed
+          ? "FAILED (" + res.reason + ") on "
+          : "did not take on ") +
+        upg_label(it) +
+        " for " +
+        j.who +
+        " (" +
+        j.scroll +
+        ")",
+      done ? "#5BCB5B" : "#CF575F"
+    );
+    if (!done) {
+      // full evidence for debugging: the server's answer, the item as it is now, the scroll and its game data
+      const js = (o) => {
+        try {
+          return JSON.stringify(o);
+        } catch (e) {
+          return String(o);
+        }
+      };
+      say(
+        "STAT SCROLL debug: response " +
+          js(res) +
+          " | item[" +
+          idx +
+          "] " +
+          js(character.items[idx]) +
+          " | scroll[" +
+          si +
+          "] " +
+          js(character.items[si]) +
+          " | scroll data " +
+          js(G.items[j.scroll]) +
+          " | item data " +
+          js(G.items[it.name]),
+        "#CF575F"
+      );
+      return "fail"; // something is off: do not keep buying scrolls
+    }
+    return "done";
+  }
+  // the pieces the sweep just took out for the Priest / Warrior (S.gear_pending): their own stat scroll goes on first
+  async function apply_support_scrolls() {
+    const jobs = [];
+    for (const p of S.gear_pending) {
+      const sup = support_cfg(p.for);
+      if (!sup || !stat_scroll_on(p.for)) continue;
+      const sc = stat_scroll_of(p.for);
+      if (!sc) continue;
+      const def = G.items[p.name];
+      if (!def || !(Number(def.stat) > 0)) continue;
+      const idx = bag_list(
+        (x) =>
+          x.name === p.name &&
+          (x.level || 0) === p.level &&
+          !x.stat_type &&
+          !x.l
+      )[0];
+      if (idx === undefined) continue;
+      const w =
+        (sup.weights && sup.weights[sc.stat]) || (sup.main === sc.stat ? 1 : 0);
+      if (!(w > 0)) continue;
+      jobs.push({
+        name: p.name,
+        level: p.level,
+        who: p.for,
+        scroll: sc.name,
+        stat: sc.stat,
+        budgeted: false,
+      });
+    }
+    if (!jobs.length) return;
+    const scrollNpc = find_npc(CFG.UPGRADE_SCROLL_NPC);
+    const upNpc = find_npc(CFG.UPGRADE_NPC);
+    for (const j of jobs) {
+      if ((await apply_stat_scroll(j, scrollNpc, upNpc)) === "fail") return;
+    }
+  }
+  async function gear_sweep() {
+    await drain_stand("a gear sweep");
+    if (await open_bank_for_compound()) {
+      if (CFG.GEAR_SWEEP) await gear_sweep_here();
+      if (CFG.SURPLUS_SELL && CFG.SURPLUS_COPIES) await sell_copies();
+      await free_bank_space(); // no-op while the bank has enough free item slots
+    }
+    await apply_support_scrolls();
+    return go_home();
+  }
+  const BOOT_AT = now();
+  function sweep_blocked_note() {
+    if (now() - BOOT_AT < 300000) return; // the Rangers need a few minutes to report after a restart
+    if (now() - (S.sweep_warn || 0) < 30 * 60000) return;
+    const missing = roster().filter((w) => !gear_fresh_for(w));
+    if (!missing.length) return;
+    S.sweep_warn = now();
+    say(
+      "Gear sweep / bank consolidation is waiting for a fresh gear report from " +
+        missing.join(", ") +
+        " - are they running the newest AutoRanger v5.js with GEAR_SHARE on? (Rangers silent for 30 min count as offline and are skipped.)",
+      "#CF575F"
+    );
+  }
+  const sweep_due = () =>
+    (sweep_blocked_note(), false) ||
+    ((CFG.GEAR_SWEEP || (CFG.SURPLUS_SELL && CFG.SURPLUS_COPIES)) &&
+      !has_jobs() &&
+      (now() - S.sweep_last >= CFG.GEAR_SWEEP_STANDALONE_MS ||
+        (CFG.SURPLUS_COPIES &&
+          now() - (S.copies_last || 0) >= CFG.GEAR_SWEEP_STANDALONE_MS)) &&
+      roster().every(gear_fresh_for));
+
+  // ---- bag tidy ----
+  // Nothing else frees a full Merchant bag. He sells the junk he is allowed to sell, extra finished/extra-copy gear
+  // (same keep rules as the bank sellers), banks compound material and loot when the bank has room, and logs what fills the bag.
+  function bag_census() {
+    const n = {};
+    for (let i = 0; i < character.isize; i++) {
+      const it = character.items[i];
+      if (!it) continue;
+      const k =
+        it.name +
+        (it.level ? " +" + it.level : "") +
+        (it.q > 1 ? " x" + it.q : "");
+      n[k] = (n[k] || 0) + 1;
+    }
+    return Object.keys(n)
+      .map((k) => (n[k] > 1 ? n[k] + "x " : "") + k)
+      .join(", ");
+  }
+  // Compound gear in the bag that nobody will ever need: not wanted by a Ranger, not the preferred kind, or its ladder tiers are all covered.
+  // (Complete triples of these used to sit in the bag forever: not compounded, not sold.) Needs fresh gear reports from every Ranger.
+  function dead_stock_bag() {
+    const out = { sell: [], why: "" };
+    if (!CFG.COMPOUND_NEED_DRIVEN) return out;
+    for (const who of roster())
+      if (!gear_fresh_for(who)) {
+        out.why = "no fresh gear report from " + who;
+        return out;
+      }
+    if (!value_fn()) {
+      out.why = "the game's item value function is not available";
+      return out;
+    }
+    const cs = comp_state();
+    const pend = S.gear_pending.slice();
+    for (let i = 0; i < character.isize; i++) {
+      const it = character.items[i];
+      if (!it || it.l || it.p || it.q > 1) continue;
+      const def = G.items[it.name];
+      if (
+        !def ||
+        !def.compound ||
+        never_sell(it) ||
+        focus_of(it.name) ||
+        (it.level || 0) >= CFG.COMPOUND_TARGET_LEVEL
+      )
+        continue;
+      if (scroll_grade(it) >= CFG.BANKFULL_KEEP_GRADE) continue;
+      const k = pend.findIndex(
+        (g) => g.name === it.name && g.level === (it.level || 0)
+      );
+      if (k >= 0) {
+        pend.splice(k, 1);
+        continue;
+      }
+      if (cs.useful(it)) continue;
+      const value = Math.round(sell_value(it.name, it.level || 0));
+      if (value > CFG.SURPLUS_MAX_VALUE_EACH) continue;
+      out.sell.push({ bag: i, it, value });
+    }
+    return out;
+  }
+  const tidy_due = () =>
+    CFG.BAG_TIDY &&
+    !has_jobs() &&
+    !is_paused() &&
+    (free_slots() <= CFG.BAG_TIDY_FREE ||
+      sellable_slots().length >= CFG.BAG_TIDY_JUNK ||
+      bag_list(is_stack).length > 0) &&
+    now() >= (S.tidy_next || 0);
+  async function bag_tidy() {
+    S.tidy_next = now() + CFG.BAG_TIDY_EVERY_MS;
+    say(
+      (free_slots() <= CFG.BAG_TIDY_FREE
+        ? "Bag is nearly full ("
+        : "Junk is piling up (") +
+        free_slots() +
+        " free): " +
+        bag_census(),
+      "#E1A951"
+    );
+    await drain_stand("a bag tidy");
+    // 1) what can be sold from the bag: junk always, surplus gear by the same rules as the bank (respects the dry run)
+    const sell_slots = {};
+    for (const i of sellable_slots()) sell_slots[i] = "junk";
+    let note = "";
+    const sp = surplus_plan(true);
+    const cp = copies_plan();
+    if (sp.why || cp.why) note = sp.why || cp.why;
+    for (const c of (sp.why ? [] : sp.sell).concat(cp.why ? [] : cp.sell))
+      if (c.bag !== undefined && !sell_slots[c.bag])
+        sell_slots[c.bag] = comp_label(c.it) + " ~" + c.value + "g";
+    const ds = dead_stock_bag();
+    if (ds.why && !note) note = ds.why;
+    for (const c of ds.sell)
+      if (!sell_slots[c.bag])
+        sell_slots[c.bag] =
+          comp_label(c.it) +
+          " ~" +
+          c.value +
+          "g (no Ranger or ladder step needs it)";
+    const gear_only = Object.keys(sell_slots).filter(
+      (i) => sell_slots[i] !== "junk"
+    );
+    if (gear_only.length && CFG.SURPLUS_DRY_RUN) {
+      say(
+        "Bag tidy - dry run, would also sell: " +
+          gear_only.map((i) => sell_slots[i]).join(", ")
+      );
+      for (const i of gear_only) delete sell_slots[i];
+    }
+    if (note)
+      say(
+        "Bag tidy: gear checks skipped - " + note + " (junk is still sold)",
+        "#CF575F"
+      );
+    if (note) S.tidy_next = now() + 240000; // look again soon: the gear reports may just not be in yet
+    const slots = Object.keys(sell_slots).map(Number);
+    if (slots.length) {
+      const npc = find_npc(CFG.JUNK_SELL_NPC);
+      const r =
+        npc &&
+        (await travel(
+          { map: npc.map, x: npc.x, y: npc.y },
+          0,
+          "selling from the full bag"
+        ));
+      if (npc && !r.failed) {
+        const names = {};
+        for (const i of slots)
+          names[i] = character.items[i] && character.items[i].name;
+        const res = await sell_junk_here(() =>
+          slots.filter(
+            (i) => character.items[i] && character.items[i].name === names[i]
+          )
+        );
+        say(
+          "Bag tidy: sold " +
+            res.sold +
+            " item(s); " +
+            free_slots() +
+            " bag slots free"
+        );
+      } else say("Bag tidy: could not reach the seller", "#CF575F");
+    }
+    // 1b) stackable loot a Ranger handed over (boss event): banked, never sold; a full bank gets room made first
+    if (bag_list(is_stack).length && (await open_bank_for_compound())) {
+      let nb = await put_back_in_bank(is_stack);
+      if (bag_list(is_stack).length) {
+        await free_bank_space();
+        if (character.map === "bank" || (await open_bank_for_compound()))
+          nb += await put_back_in_bank(is_stack);
+      }
+      say(
+        "Bag tidy: banked " +
+          nb +
+          " stackable item(s)" +
+          (bag_list(is_stack).length
+            ? "; " +
+              bag_list(is_stack).length +
+              " could not be banked (bank full)"
+            : "")
+      );
+    }
+    // 2) still tight: bank what the compound/upgrade rounds will pick up again (never gear waiting for a Ranger: put_back protects it)
+    if (free_slots() <= CFG.BAG_TIDY_FREE) {
+      if (await open_bank_for_compound()) {
+        const n = await put_back_in_bank(
+          (x) =>
+            !x.l &&
+            !!G.items[x.name] &&
+            (is_keeper(x) ||
+              !!G.items[x.name].compound ||
+              !!G.items[x.name].upgrade)
+        );
+        if (n)
+          say(
+            "Bag tidy: put " +
+              n +
+              " item(s) in the bank; " +
+              free_slots() +
+              " bag slots free"
+          );
+        else
+          say(
+            "Bag tidy: nothing could be banked (bank " +
+              (bank_free_slots()
+                ? "has room but the items are protected"
+                : "is full") +
+              ")",
+            "#CF575F"
+          );
+      }
+    }
+    // 3) still nearly out of room: bank everything he does not need on him (potions, scrolls and stand stock stay; so does gear waiting for a Ranger).
+    //    Boss drops (Grinch) are rarely compound / upgrade material, so step 2 left them in the bag.
+    if (
+      free_slots() <= CFG.BAG_TIDY_FORCE_FREE &&
+      (await open_bank_for_compound())
+    ) {
+      const n = await put_back_in_bank(
+        (x) => !x.l && !x.p && !!G.items[x.name] && !stack_protected(x.name)
+      );
+      if (n)
+        say(
+          "Bag tidy: banked " +
+            n +
+            " more item(s) he does not need on him; " +
+            free_slots() +
+            " bag slots free"
+        );
+    }
+    if (free_slots() <= CFG.BAG_TIDY_FREE)
+      say(
+        "Bag is still nearly full (" +
+          free_slots() +
+          " free) - needs your attention: " +
+          bag_census(),
+        "#CF575F"
+      );
+    return go_home();
+  }
+
+  async function compound_round() {
+    S.compound_next = now() + CFG.COMPOUND_EVERY_MS; // set first, so a failed round never loops
+    S.compound_attempts = 0;
+    if (!S.compound_chained) S.compound_chain = 0;
+    S.compound_chained = false;
+    await drain_stand("a compound round");
+    if (!(await open_bank_for_compound())) return go_home();
+
+    // the Rangers' needs first: hand-outs are marked as waiting, so nothing below sells or compounds them
+    if (CFG.GEAR_SWEEP && now() - S.sweep_last >= CFG.GEAR_SWEEP_EVERY_MS)
+      await gear_sweep_here();
+    if (
+      CFG.SURPLUS_SELL &&
+      CFG.SURPLUS_COPIES &&
+      now() - (S.copies_last || 0) >= CFG.GEAR_SWEEP_EVERY_MS
+    )
+      await sell_copies();
+    await free_bank_space();
+    if (CFG.COMPOUND_NEED_DRIVEN) {
+      const rep_ = comp_state().report();
+      if (rep_ && rep_ !== S.ladder_sig) {
+        S.ladder_sig = rep_;
+        say(
+          "Compound ladder (copies at that level or better / Ranger slots): " +
+            rep_,
+          "#51D2E1"
+        );
+      }
+    }
+    const bank_gold = Number(character.bank && character.bank.gold);
+    if (!(bank_gold >= CFG.COMPOUND_BANK_FLOOR)) {
+      say(
+        "Compounding stopped: bank holds " +
+          bank_gold +
+          " gold, below the " +
+          CFG.COMPOUND_BANK_FLOOR +
+          " floor",
+        "#CF575F"
+      );
+      return go_home();
+    }
+    if (S.compound_cap === null) {
+      S.compound_cap = Math.floor(bank_gold * CFG.COMPOUND_SESSION_PCT);
+      say(
+        "Compounding budget for this session: " +
+          S.compound_cap +
+          " gold (" +
+          Math.round(CFG.COMPOUND_SESSION_PCT * 100) +
+          "% of the bank)"
+      );
+    }
+    let left = S.compound_cap - S.compound_spent;
+    const groups = plan_groups();
+    if (!groups.length) {
+      say(
+        "Compound round: no triples of identical items (+" +
+          CFG.COMPOUND_MAX_INPUT_LEVEL +
+          " or lower) found"
+      );
+      return go_home();
+    }
+    // pick groups while the budget (for the scroll tier each one needs) and the bag space last
+    const by_slots = Math.floor(Math.max(0, free_slots() - 3) / 3);
+    const chosen = [];
+    const planned = {}; // scrolls already earmarked per tier
+    let plan_cost = 0;
+    // one entry per TRIPLE: a pile of 30 identical rings gives up to COMPOUND_MAX_GROUPS entries, not just one
+    for (const g of groups) {
+      const triples = Math.min(
+        Math.floor((g.bag + g.bank.length) / 3),
+        g.max_triples === undefined ? Infinity : g.max_triples
+      );
+      for (let t = 0; t < triples; t++) {
+        if (chosen.length >= Math.min(CFG.COMPOUND_MAX_GROUPS, by_slots)) break;
+        const used = planned[g.scroll] || 0;
+        const extra = quantity(g.scroll) > used ? 0 : unit_cost(g.scroll);
+        const g_left = focus_of(g.item.name)
+          ? Math.max(left, focus_of(g.item.name).budget || 0)
+          : left;
+        if (plan_cost + extra > Math.max(0, g_left)) break; // same scroll for the rest of this pile
+        planned[g.scroll] = used + 1;
+        plan_cost += extra;
+        chosen.push(Object.assign({}, g, { triple: t }));
+      }
+    }
+    const n = chosen.length;
+    if (n <= 0) {
+      say(
+        "Compound round skipped: budget left " +
+          left +
+          ", free slots " +
+          free_slots(),
+        "#CF575F"
+      );
+      return go_home();
+    }
+    const scroll_names = Object.keys(planned);
+    const touched = {};
+    say(
+      "Compound round: " +
+        n +
+        " triple(s) = " +
+        n * 3 +
+        " item(s) to compound (limit " +
+        CFG.COMPOUND_MAX_GROUPS +
+        " triples, " +
+        Math.floor(by_slots) +
+        " by bag space)"
+    );
+
+    // take what ALL the triples of each kind need out of the bank (highest slot first within a pack: slots may shift)
+    const per_key = {};
+    for (const g of chosen)
+      (per_key[g.key] = per_key[g.key] || { g, n: 0 }).n++;
+    for (const k of Object.keys(per_key)) {
+      const g = per_key[k].g;
+      touched[g.item.name] = true;
+      let need = per_key[k].n * 3 - g.bag;
+      const order = g.bank
+        .slice()
+        .sort((a, b) =>
+          a.pack < b.pack ? -1 : a.pack > b.pack ? 1 : b.i - a.i
+        );
+      for (const b of order) {
+        if (need <= 0) break;
+        const before = bag_list((x) => comp_key(x) === g.key).length;
+        const res = await call(() => bank_retrieve(b.pack, b.i));
+        const got = await call(() =>
+          wait_for(
+            () => bag_list((x) => comp_key(x) === g.key).length > before,
+            4000
+          )
+        );
+        if (res.failed || got.failed) {
+          say(
+            "Could not take " +
+              comp_label(g.item) +
+              " out of the bank: " +
+              (res.reason || got.reason),
+            "#CF575F"
+          );
+          break;
+        }
+        need--;
+      }
+    }
+    if (yield_now()) {
+      say(
+        "Compound round: a job is waiting - putting the items back in the bank"
+      );
+      await put_back_in_bank((it) => touched[it.name]);
+      S.compound_next = now() + 3000;
+      return;
+    }
+    // gold for the scrolls (only above the bank floor)
+    const to_buy = {};
+    let cost = 0;
+    for (const nm of scroll_names) {
+      const miss = Math.max(0, planned[nm] - quantity(nm));
+      if (miss) {
+        to_buy[nm] = miss;
+        cost += miss * unit_cost(nm);
+      }
+    }
+    if (cost > 0 && character.gold < cost) {
+      const want = cost - character.gold;
+      if (bank_gold - want < CFG.COMPOUND_BANK_FLOOR) {
+        say(
+          "Compounding stopped: withdrawing " +
+            want +
+            " would take the bank below its floor",
+          "#CF575F"
+        );
+        await put_back_in_bank((it) => touched[it.name]);
+        return go_home();
+      }
+      const before = character.gold;
+      const wd = await call(() => bank_withdraw(want));
+      const done = await call(() =>
+        wait_for(() => character.gold >= before + want - 1, 5000)
+      );
+      if (wd.failed || done.failed) {
+        say(
+          "Compound round: withdrawal failed: " + (wd.reason || done.reason),
+          "#CF575F"
+        );
+        await put_back_in_bank((it) => touched[it.name]);
+        return go_home();
+      }
+    }
+    // buy the scrolls
+    if (cost > 0) {
+      const npc = find_npc(CFG.COMPOUND_SCROLL_NPC);
+      const r =
+        npc &&
+        (await travel(
+          { map: npc.map, x: npc.x, y: npc.y },
+          0,
+          "buying compound scrolls"
+        ));
+      if (!npc || r.failed) {
+        say("Compound round: could not reach the scroll NPC", "#CF575F");
+        if (await open_bank_for_compound())
+          await put_back_in_bank((it) => touched[it.name]);
+        return go_home();
+      }
+      for (const nm of Object.keys(to_buy)) {
+        const k = to_buy[nm];
+        const had = quantity(nm);
+        const res = await call(() => buy_with_gold(nm, k));
+        const got = await call(() =>
+          wait_for(() => quantity(nm) >= had + k, 6000)
+        );
+        if (res.failed || got.failed) {
+          say(
+            "Compound round: buying " +
+              nm +
+              " failed: " +
+              (res.reason || got.reason),
+            "#CF575F"
+          );
+          if (await open_bank_for_compound())
+            await put_back_in_bank((it) => touched[it.name]);
+          return go_home();
+        }
+        S.compound_spent += k * unit_cost(nm);
+        say(
+          "Bought " +
+            k +
+            "x " +
+            nm +
+            " (session spend " +
+            S.compound_spent +
+            " / " +
+            S.compound_cap +
+            ")"
+        );
+      }
+    }
+    // odds check, then (unless dry run) compound
+    const up = find_npc(CFG.COMPOUND_UPGRADE_NPC);
+    if (up)
+      await travel(
+        { map: up.map, x: up.x, y: up.y },
+        0,
+        "compounding next to the upgrade NPC"
+      );
+    for (const g of chosen) {
+      // yield point: a group (3 items) is one atomic action; a waiting job goes first. The next round re-plans from the bank.
+      if (yield_now()) {
+        say("Compound round: a job is waiting - stopping at a group boundary");
+        S.compound_next = now() + 3000;
+        break;
+      }
+      act(
+        "Compound " + comp_label(g.item) + " x3",
+        P.ETA_S.compound_group,
+        true
+      );
+      const slots = bag_list((x) => comp_key(x) === g.key);
+      const si = locate_item(g.scroll);
+      if (slots.length < 3 || si < 0) {
+        say(
+          "Skipping " +
+            comp_label(g.item) +
+            ": not enough items or no scroll in the bag",
+          "#CF575F"
+        );
+        continue;
+      }
+      const [a, b, c] = slots;
+      const odds = await call(() => compound(a, b, c, si, null, true));
+      const chance = Number(odds.chance);
+      if (odds.failed || !(chance >= 0)) {
+        say(
+          "No odds for " +
+            comp_label(g.item) +
+            ": " +
+            JSON.stringify(odds.failed ? odds.reason : odds),
+          "#CF575F"
+        );
+        continue;
+      }
+      const tag =
+        comp_label(g.item) +
+        " x3 with " +
+        g.scroll +
+        ": " +
+        Math.round(chance * 1000) / 10 +
+        "% (grace " +
+        (odds.grace === undefined ? "?" : odds.grace) +
+        ")";
+      if (chance < min_chance_of(g.item.name)) {
+        say(
+          "COMPOUND skipped (below " +
+            Math.round(min_chance_of(g.item.name) * 100) +
+            "%): " +
+            tag
+        );
+        continue;
+      }
+      if (CFG.COMPOUND_DRY_RUN) {
+        say("COMPOUND dry run - would attempt " + tag);
+        continue;
+      }
+      const lvl_up = (x) =>
+        x.name === g.item.name &&
+        (x.level || 0) === (g.item.level || 0) + 1 &&
+        (x.p || "") === (g.item.p || "");
+      const made_before = bag_list(lvl_up).length;
+      S.compound_attempts++;
+      const res = await call(() => compound(a, b, c, si, null));
+      await call(() =>
+        wait_for(
+          () =>
+            bag_list(lvl_up).length > made_before ||
+            bag_list((x) => comp_key(x) === g.key).length <= slots.length - 3,
+          6000
+        )
+      );
+      await wait(300);
+      const win = bag_list(lvl_up).length > made_before;
+      const st = load_stats();
+      st.n++;
+      st.exp += chance;
+      st.var += chance * (1 - chance);
+      if (win) st.wins++;
+      try {
+        set("compound_stats", JSON.stringify(st));
+      } catch (e) {}
+      say(
+        "COMPOUND " +
+          (win
+            ? "SUCCESS"
+            : res.failed
+            ? "FAILED (" + res.reason + ")"
+            : "LOST the 3 items") +
+          " - " +
+          tag +
+          " | totals " +
+          st.wins +
+          "/" +
+          st.n +
+          ", quoted ~" +
+          st.exp.toFixed(1),
+        win ? "#5BCB5B" : "#CF575F"
+      );
+      if (win) S.compound_made[g.item.name] = true;
+      check_odds_honesty(st);
+      if (is_paused()) break;
+    }
+    // finished items at the sell level: sell them, or keep them in the bank
+    if (CFG.COMPOUND_RESULT_ACTION === "sell" && !CFG.COMPOUND_DRY_RUN) {
+      const sellers = bag_list(
+        (x) =>
+          S.compound_made[x.name] &&
+          (x.level || 0) >= CFG.COMPOUND_SELL_AT_LEVEL &&
+          !x.l
+      );
+      if (sellers.length) {
+        const npc = find_npc(CFG.JUNK_SELL_NPC);
+        const r =
+          npc &&
+          (await travel(
+            { map: npc.map, x: npc.x, y: npc.y },
+            0,
+            "selling compounded items"
+          ));
+        if (npc && !r.failed) {
+          for (const i of bag_list(
+            (x) =>
+              S.compound_made[x.name] &&
+              (x.level || 0) >= CFG.COMPOUND_SELL_AT_LEVEL &&
+              !x.l
+          )) {
+            const it = character.items[i];
+            if (!it) continue;
+            const g0 = character.gold;
+            const nm = comp_label(it);
+            await call(() => sell(i, 1));
+            await call(() => wait_for(() => !character.items[i], 2500));
+            say("Sold " + nm + " (+" + Math.max(0, character.gold - g0) + "g)");
+          }
+        }
+      }
+    }
+    // everything of the touched kinds goes back to the bank (leftover triples, results we keep)
+    if (await open_bank_for_compound()) {
+      const n_back = await put_back_in_bank(
+        (x) =>
+          touched[x.name] &&
+          !x.l &&
+          !(x.q > 1) &&
+          !!G.items[x.name] &&
+          !!G.items[x.name].compound
+      );
+      if (n_back) say("Put " + n_back + " item(s) back in the bank");
+      // storing may have filled the bank (or failed because it was full): make room now, not next round
+      const was_full = bank_free_slots() < CFG.BANKFULL_TRIGGER_FREE;
+      await free_bank_space();
+      if (was_full && character.map === "bank") {
+        const n2 = await put_back_in_bank(
+          (x) =>
+            !x.l &&
+            !(x.q > 1) &&
+            !!G.items[x.name] &&
+            !!G.items[x.name].compound &&
+            !!touched[x.name]
+        );
+        if (n2)
+          say(
+            "Put " + n2 + " leftover item(s) in the bank now that there is room"
+          );
+      }
+    }
+    // something was compounded: go straight into the next round (new +1/+2 results may form fresh triples);
+    // it ends on its own when there is nothing left to compound or the budget is spent
+    if (
+      S.compound_attempts > 0 &&
+      !is_paused() &&
+      (S.compound_chain || 0) < CFG.COMPOUND_MAX_CHAIN_ROUNDS
+    ) {
+      S.compound_chain = (S.compound_chain || 0) + 1;
+      S.compound_chained = true;
+      S.compound_next = now();
+      return;
+    }
+    S.compound_chain = 0;
+    return go_home();
+  }
+
+  // ===================== GEAR + UPGRADES ==========================
+  // The Ranger sends what he wears (gear_report). Upgrades are only spent on gear that could beat it.
+  // Item stats are estimated as base + upgrade-per-level * level (an approximation, used only to rank items).
+  const SLOT_OF_TYPE = {
+    helmet: ["helmet"],
+    chest: ["chest"],
+    pants: ["pants"],
+    gloves: ["gloves"],
+    shoes: ["shoes"],
+    cape: ["cape"],
+    ring: ["ring1", "ring2"],
+    earring: ["earring1", "earring2"],
+    amulet: ["amulet"],
+    belt: ["belt"],
+    orb: ["orb"],
+    quiver: ["offhand"], // Rangers wear it in the offhand slot (dex, range, armor)
+    // source (books) is NOT wearable by Rangers (confirmed live 2026-11-15): quivers go into the offhand (shield) slot only
+    weapon: ["mainhand"],
+  };
+  // v5: support characters (Priest ...): their own slot map (books and shields in the offhand, no quivers), weights and wearable rules
+  const support_cfg = (who) =>
+    (who && CFG.SUPPORT_GEAR && CFG.SUPPORT_GEAR[who]) || null;
+  const support_names = () => Object.keys(CFG.SUPPORT_GEAR || {});
+  const SUPPORT_SLOT_OF_TYPE = Object.assign({}, SLOT_OF_TYPE, {
+    shield: ["offhand"],
+    source: ["offhand"],
+  });
+  delete SUPPORT_SLOT_OF_TYPE.quiver;
+  const slots_of = (type, who) =>
+    (support_cfg(who) ? SUPPORT_SLOT_OF_TYPE : SLOT_OF_TYPE)[type];
+  // v5: items a support character keeps in his bag (the Warrior's basher for Stomp) and whether his last report shows none
+  const kit_names = (who) =>
+    (support_cfg(who) && support_cfg(who).bag_kit) || [];
+  const kit_missing = (who) => {
+    const g = S.gears[who];
+    const k = kit_names(who);
+    return !!g && k.length > 0 && !k.some((n) => g.bag && g.bag[n] > 0);
+  };
+  const two_hand = (who, it) => {
+    const sup = support_cfg(who);
+    const def = it && G.items[it.name];
+    return !!(
+      sup &&
+      def &&
+      def.type === "weapon" &&
+      (sup.two_hand_types || []).indexOf(def.wtype) !== -1
+    );
+  };
+  // would a support character (last report, however old) wear this item? Such items are never sold.
+  function support_wants(it) {
+    try {
+      if (!it || !G.items[it.name]) return false;
+      for (const who of support_names()) {
+        if (
+          S.gears[who] &&
+          kit_missing(who) &&
+          kit_names(who).indexOf(it.name) !== -1
+        )
+          return true; // the Warrior has no basher yet: keep every one for him
+        if (!S.gears[who] || !gear_wearable(it, who)) continue;
+        if (beats_worn(it, it.level || 0, who)) return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+  // <gear-scoring>
+  // The scoring itself lives in the shared lib (AL.gear, src/lib/gear.js): one GearScorer class for what is the same for every class (item stats at a level,
+  // stat-scroll points, set bonuses) and a subclass per character class (Ranger, Warrior, Priest). Tests: tests/golden_gear.js (every wearable item x level x option
+  // against the numbers of the v5 scorer) and tests/gear_score.js. The Merchant only supplies the world below and keeps the old function names as thin wrappers.
+  // CFG.GEAR_TRACE: true logs every set credit and every stat scroll the scorer counts (lines start with [gear]).
+  const gear_env = {
+    get G() {
+      return G;
+    },
+    CFG,
+    get gears() {
+      return S.gears;
+    },
+    get lead_gear() {
+      return S.ranger_gear;
+    },
+    slot_of_type: SLOT_OF_TYPE, // the Ranger's slot map: the set-credit code finds the worn piece a candidate would replace with it
+    get debug() {
+      return !!CFG.GEAR_TRACE;
+    },
+    log: (m) => say(m, "#B0B0B0"),
+  };
+  const gear_scorers = AL.gear.scorers(gear_env);
+  const prop_at = (def, level, p) => gear_scorers.ranger.prop_at(def, level, p);
+  // opts: { who, stat_type: the stat scroll already applied, assume_dex: count a scroll that could still be applied }; a character with a CFG.SUPPORT_GEAR profile is scored by its class scorer, anyone else as a Ranger
+  function gear_score(name, level, opts) {
+    return gear_scorers.for_who(opts && opts.who).score(name, level, opts);
+  }
+  // best the item could be at the upgrade cap, counting a Dexterity scroll it could still take
+  const potential_score = (it) => gear_scorers.ranger.potential(it, upg_max);
+  // </gear-scoring>
+  function gear_wearable(it, who) {
+    const def = it && G.items[it.name];
+    const sup = support_cfg(who);
+    if (sup) {
+      if (!def || !SUPPORT_SLOT_OF_TYPE[def.type]) return false;
+      if (sup.skip_types && sup.skip_types.indexOf(def.type) !== -1)
+        return false; // e.g. the Warrior cannot hold a Book (source)
+      if (def.class && def.class.indexOf(sup.cls) === -1) return false;
+      if (
+        def.type === "weapon" &&
+        !(def.class && def.class.indexOf(sup.cls) !== -1) &&
+        sup.weapon_types.indexOf(def.wtype) === -1
+      )
+        return false;
+      return true;
+    }
+    if (!def || !SLOT_OF_TYPE[def.type]) return false;
+    if (def.class && def.class.indexOf(CFG.GEAR_CLASS) === -1) return false;
+    if (
+      def.type === "weapon" &&
+      CFG.GEAR_WEAPON_TYPES.indexOf(def.wtype) === -1
+    )
+      return false;
+    return true;
+  }
+  // the worn item this one would replace: the weakest of the matching slots (an empty slot counts as 0)
+  // The Rangers, leader first. SexyDexy (RANGER_NAME) always has first call on gear; the others get what he does not need.
+  // v5: a Ranger that has not sent a gear report for ROSTER_AWAY_MS counts as away (logged off) and is left out, so no
+  // single offline Ranger blocks the sweep, the sells or the crafting. During the first 5 minutes after a restart everybody
+  // counts (the reports have not come in yet). If nobody is recent, the leader alone stays (the tasks then wait for his report).
+  const ROSTER_AWAY_MS = 30 * 60000;
+  const roster_all = () =>
+    [CFG.RANGER_NAME].concat(
+      CFG.TRUSTED_NAMES.filter((n) => n !== CFG.RANGER_NAME)
+    );
+  const roster = () => {
+    const all = roster_all();
+    if (now() - BOOT_AT < 300000) return all;
+    const here = all.filter((w) => {
+      const g = w === CFG.RANGER_NAME ? S.ranger_gear : S.gears[w];
+      return !!g && now() - g.at < ROSTER_AWAY_MS;
+    });
+    return here.length ? here : [CFG.RANGER_NAME];
+  };
+  const gear_of = (who) =>
+    who === CFG.RANGER_NAME ? S.ranger_gear : S.gears[who];
+  const gear_fresh_for = (who) => {
+    const g = gear_of(who);
+    return !!g && now() - g.at < 10 * 60000;
+  };
+  // the first Ranger (leader first) whose worn gear this score would beat; null when nobody would gain
+  function best_target(it, score, only_followers) {
+    for (const who of roster()) {
+      if (only_followers && who === CFG.RANGER_NAME) continue;
+      if (!gear_fresh_for(who)) continue;
+      const f = worn_floor(it, who);
+      if (score > f.score * CFG.GEAR_MARGIN) return { who, f };
+    }
+    return null;
+  }
+  function worn_floor(it, who) {
+    who = who || CFG.RANGER_NAME;
+    const g = gear_of(who);
+    const slots = slots_of(G.items[it.name].type, who);
+    if (two_hand(who, it)) {
+      // a two-handed weapon replaces the weapon AND the off hand
+      const sc = (sl) => {
+        const w = g && g.slots[sl];
+        return w
+          ? gear_score(w.name, w.level, { stat_type: w.stat_type, who })
+          : 0;
+      };
+      return { slot: "mainhand", score: sc("mainhand") + sc("offhand") };
+    }
+    let best = null;
+    for (const s of slots) {
+      const w = g && g.slots[s];
+      const score = w
+        ? gear_score(w.name, w.level, { stat_type: w.stat_type, who })
+        : 0;
+      if (!best || score < best.score) best = { slot: s, score };
+    }
+    return best;
+  }
+  const gear_fresh = () =>
+    !!S.ranger_gear && now() - S.ranger_gear.at < 10 * 60000;
+  function beats_worn(it, level, who) {
+    const f = worn_floor(it, who);
+    const sc = gear_score(it.name, level, { stat_type: it.stat_type, who });
+    return sc > f.score * CFG.GEAR_MARGIN && sc > 0;
+  }
+
+  // ---- flipping ----
+  // the game's own item value function; without it flipping is switched off (no guessing about prices)
+  const value_fn = () => {
+    try {
+      if (typeof calculate_item_value === "function")
+        return calculate_item_value;
+      if (parent && typeof parent.calculate_item_value === "function")
+        return parent.calculate_item_value;
+    } catch (e) {}
+    return null;
+  };
+  const flip_factor = () => {
+    try {
+      const v = Number(get("flip_factor"));
+      if (v > 0 && v < 2) return v;
+    } catch (e) {}
+    return CFG.FLIP_SELL_FACTOR;
+  };
+  const raw_value = (name, level) => {
+    const fn = value_fn();
+    if (!fn) return 0;
+    try {
+      return Number(fn({ name, level: level || 0 })) || 0;
+    } catch (e) {
+      return 0;
+    }
+  };
+  const sell_value = (name, level) => raw_value(name, level) * flip_factor();
+  const step_scroll = (name, level) => "scroll" + scroll_grade({ name, level });
+  // best expected value of an item standing at `level`, selling or upgrading on (optimal stopping up to FLIP_MAX_LEVEL)
+  function chain_value(name, level, first_chance) {
+    let E = sell_value(name, CFG.FLIP_MAX_LEVEL);
+    for (let L = CFG.FLIP_MAX_LEVEL - 1; L >= level; L--) {
+      const p =
+        L === level && first_chance !== undefined && first_chance !== null
+          ? first_chance
+          : CFG.FLIP_ASSUMED_CHANCE[L] !== undefined
+          ? CFG.FLIP_ASSUMED_CHANCE[L]
+          : 0.5;
+      E = Math.max(
+        sell_value(name, L),
+        p * E - unit_cost(step_scroll(name, L))
+      );
+    }
+    return E;
+  }
+  // go on from `level` with this quoted chance? (true = expected to earn more than selling as is)
+  function flip_step_ok(name, level, chance) {
+    const stay = sell_value(name, level);
+    const go =
+      chance * chain_value(name, level + 1) -
+      unit_cost(step_scroll(name, level));
+    return { ok: go > stay * (1 + CFG.FLIP_MIN_GAIN), stay, go };
+  }
+  const flip_ok = (it) =>
+    CFG.FLIP_ENABLED &&
+    !!value_fn() &&
+    !!it &&
+    !it.l &&
+    !(it.q > 1) &&
+    !!G.items[it.name] &&
+    !!G.items[it.name].upgrade &&
+    CFG.FLIP_KEEP_NAMES.indexOf(it.name) === -1 &&
+    (it.level || 0) < CFG.FLIP_MAX_LEVEL &&
+    scroll_grade(it) <= CFG.UPGRADE_MAX_SCROLL_GRADE &&
+    !(gear_wearable(it) && !!best_target(it, potential_score(it)));
+  function flip_candidates() {
+    const out = [];
+    const add = (it, where) => {
+      if (!flip_ok(it)) return;
+      const lvl = it.level || 0;
+      const stay = sell_value(it.name, lvl);
+      const ev = chain_value(it.name, lvl) - stay;
+      if (ev > stay * CFG.FLIP_MIN_GAIN && ev > 0)
+        out.push(Object.assign({ it, flip: true, gain: ev }, where));
+    };
+    for (let i = 0; i < character.isize; i++)
+      add(character.items[i], { bag: i });
+    for (const pack of CFG.UPGRADE_PACKS) {
+      const arr = character.bank && character.bank[pack];
+      if (Array.isArray(arr)) arr.forEach((it, i) => add(it, { pack, i }));
+    }
+    return out.sort((a, b) => b.gain - a.gain);
+  }
+
+  const upg_paused = () => {
+    try {
+      const v = get("upgrade_paused");
+      return v === true || v === "true";
+    } catch (e) {
+      return false;
+    }
+  };
+  function upg_stats() {
+    try {
+      const st = JSON.parse(get("upgrade_stats") || "null");
+      if (st && typeof st.n === "number") return st;
+    } catch (e) {}
+    return { n: 0, wins: 0, exp: 0, var: 0 };
+  }
+  function upg_honesty(st) {
+    if (st.n < CFG.UPGRADE_PAUSE_MIN_ATTEMPTS) return;
+    if (st.wins < st.exp - 2.5 * Math.sqrt(st.var)) {
+      try {
+        set("upgrade_paused", true);
+      } catch (e) {}
+      say(
+        "UPGRADES PAUSED: " +
+          st.wins +
+          " wins in " +
+          st.n +
+          " tries but the server quoted ~" +
+          st.exp.toFixed(1) +
+          ". Resume with set('upgrade_paused', false)",
+        "#CF575F"
+      );
+    }
+  }
+  const upg_label = (it) => it.name + " +" + (it.level || 0);
+  const upg_ok = (it) =>
+    !!it &&
+    !it.l &&
+    !(it.q > 1) &&
+    !!G.items[it.name] &&
+    !!G.items[it.name].upgrade &&
+    (gear_wearable(it) || support_names().some((w) => gear_wearable(it, w))) &&
+    (it.level || 0) < upg_max(it.name) &&
+    gamble_mode(it) !== "aside" &&
+    scroll_grade(it) <= CFG.UPGRADE_MAX_SCROLL_GRADE;
+  // copies of this exact item (name + level) in the bag and bank; waiting-for-a-Ranger items and locked ones are not spares
+  function upg_copies(it) {
+    const key = (x) => x.name + "|" + (x.level || 0);
+    const k = key(it);
+    let n = 0;
+    const pend = S.gear_pending.slice();
+    const add = (x, in_bag) => {
+      if (!x || x.l || x.q > 1 || key(x) !== k) return;
+      if (in_bag) {
+        const j = pend.findIndex(
+          (g) => g.name === x.name && g.level === (x.level || 0)
+        );
+        if (j >= 0) {
+          pend.splice(j, 1);
+          return;
+        }
+      }
+      n++;
+    };
+    for (let i = 0; i < character.isize; i++) add(character.items[i], true);
+    for (const pack of CFG.UPGRADE_PACKS) {
+      const arr = character.bank && character.bank[pack];
+      if (Array.isArray(arr)) arr.forEach((x) => add(x, false));
+    }
+    return n;
+  }
+  // "" = not a gamble item (or no fresh report from the leader), "aside" = already beats what SexyDexy wears, "fodder" = does not (and he still wears less than the cap)
+  function gamble_mode(it) {
+    if (
+      !it ||
+      !CFG.UPGRADE_GAMBLE_NAMES ||
+      CFG.UPGRADE_GAMBLE_NAMES.indexOf(it.name) === -1 ||
+      !gear_fresh()
+    )
+      return "";
+    if (beats_worn(it, it.level || 0, CFG.RANGER_NAME)) return "aside";
+    const w =
+      S.ranger_gear && S.ranger_gear.slots && S.ranger_gear.slots.mainhand;
+    if (w && w.name === it.name && (w.level || 0) >= upg_max(it.name))
+      return ""; // he already wears the cap: nothing to gain
+    return "fodder";
+  }
+  const upg_has_spare = (it) =>
+    gamble_mode(it) === "fodder" || upg_copies(it) >= CFG.UPGRADE_MIN_COPIES;
+  const upg_scroll = (it) => "scroll" + scroll_grade(it);
+
+  // v5: a listed stop-gap piece that would beat what a support character (Warrior / Priest) wears once upgraded to the limit
+  function support_upgrade_target(it) {
+    if (
+      !CFG.SUPPORT_UPGRADE_ANY &&
+      CFG.SUPPORT_UPGRADE_NAMES.indexOf(it.name) === -1
+    )
+      return null;
+    for (const who of support_names()) {
+      if (!gear_fresh_for(who) || !gear_wearable(it, who)) continue;
+      const f = worn_floor(it, who);
+      if (
+        gear_score(it.name, upg_max(it.name), {
+          stat_type: it.stat_type,
+          who,
+        }) >
+        f.score * CFG.GEAR_MARGIN
+      )
+        return { who, f };
+    }
+    return null;
+  }
+  // everything upgradable that could beat what the Ranger wears, best first (bag + bank)
+  function upgrade_candidates() {
+    const out = [];
+    const diag = (S.upg_diag = {
+      upgradable: 0,
+      ranger_kind: 0,
+      support_kind: 0,
+      level_ok: 0,
+      scroll_ok: 0,
+      better: 0,
+      no_spare: 0,
+      not_better: 0,
+      no_spare_names: {},
+    });
+    const add = (it, where) => {
+      const def = it && G.items[it.name];
+      if (def && def.upgrade && !it.l && !(it.q > 1)) {
+        diag.upgradable++;
+        if (support_names().some((w) => gear_wearable(it, w)))
+          diag.support_kind++;
+        if (
+          gear_wearable(it) ||
+          support_names().some((w) => gear_wearable(it, w))
+        ) {
+          diag.ranger_kind++;
+          if ((it.level || 0) < upg_max(it.name)) {
+            diag.level_ok++;
+            if (scroll_grade(it) <= CFG.UPGRADE_MAX_SCROLL_GRADE)
+              diag.scroll_ok++;
+          }
+        }
+      }
+      if (!upg_ok(it)) return;
+      if (!upg_has_spare(it)) {
+        diag.no_spare++;
+        const nm = it.name + "+" + (it.level || 0);
+        diag.no_spare_names[nm] = true;
+        return;
+      }
+      const potential = potential_score(it);
+      const tg = best_target(it, potential) || support_upgrade_target(it);
+      if (!tg) {
+        diag.not_better++;
+        if (!diag.why) {
+          const parts = [];
+          for (const who of roster().concat(
+            support_names().filter((w) => gear_wearable(it, w))
+          )) {
+            if (!gear_fresh_for(who)) {
+              parts.push(who + ": no fresh gear report");
+              continue;
+            }
+            const f = worn_floor(it, who);
+            parts.push(
+              who +
+                " wears " +
+                Math.round(f.score * 10) / 10 +
+                " (needs " +
+                Math.round(f.score * CFG.GEAR_MARGIN * 10) / 10 +
+                ")"
+            );
+          }
+          diag.why =
+            upg_label(it) +
+            " would score " +
+            Math.round(potential * 10) / 10 +
+            " at +" +
+            upg_max(it.name) +
+            ", but " +
+            parts.join("; ");
+        }
+        return;
+      }
+      const f = tg.f;
+      diag.better++;
+      if (
+        !(
+          gear_score(it.name, upg_max(it.name), {
+            stat_type: it.stat_type,
+          }) >
+          f.score * CFG.GEAR_MARGIN
+        )
+      ) {
+        const k = it.name + ":dexpot";
+        if (!S.dexpot_logged) S.dexpot_logged = {};
+        if (!S.dexpot_logged[k]) {
+          S.dexpot_logged[k] = 1;
+          say(
+            upg_label(it) +
+              " would beat what " +
+              tg.who +
+              " wears once a Dexterity scroll is applied"
+          );
+        }
+      }
+      const pot2 = support_cfg(tg.who)
+        ? gear_score(it.name, upg_max(it.name), {
+            stat_type: it.stat_type,
+            who: tg.who,
+          })
+        : potential; // a Warrior / Priest target: scored with THEIR weights
+      out.push(
+        Object.assign(
+          { it, potential: pot2, gain: pot2 - f.score, for: tg.who },
+          where
+        )
+      );
+    };
+    for (let i = 0; i < character.isize; i++)
+      add(character.items[i], { bag: i });
+    for (const pack of CFG.UPGRADE_PACKS) {
+      const arr = character.bank && character.bank[pack];
+      if (Array.isArray(arr)) arr.forEach((it, i) => add(it, { pack, i }));
+    }
+    const lead = (c) => (c.for === CFG.RANGER_NAME ? 0 : 1); // the leader's upgrades are done first
+    return out.sort(
+      (a, b) =>
+        lead(a) - lead(b) ||
+        b.gain - a.gain ||
+        (a.it.level || 0) - (b.it.level || 0)
+    );
+  }
+  const upg_due = () =>
+    CFG.UPGRADE_ENABLED &&
+    !upg_paused() &&
+    !has_jobs() &&
+    now() >= S.upgrade_next &&
+    gear_fresh();
+
+  // A finished piece that is going to a Ranger: his stat scroll (dex) goes on when the piece takes one (stat value > 0, none applied yet) and would beat what he
+  // wears with it. The shared apply_stat_scroll does the work. Returns true when applied. (Support characters get theirs in the gear sweep: apply_support_scrolls.)
+  async function apply_ranger_scroll(w, scrollNpc, upNpc) {
+    if (
+      stat_scroll_class(w.for) !== "ranger" ||
+      !stat_scroll_on(w.for) ||
+      !CFG.DEX_SCROLL_POTENTIAL
+    )
+      return false;
+    const sc = stat_scroll_of(w.for);
+    if (!sc) return false;
+    const idx = bag_list(
+      (x) => x.name === w.name && (x.level || 0) === w.level
+    )[0];
+    if (idx === undefined) return false;
+    const it = character.items[idx];
+    const def = G.items[it.name];
+    if (!def || !(Number(def.stat) > 0) || it.stat_type || it.l) return false;
+    const f = worn_floor(it, w.for);
+    const with_dex = gear_score(it.name, w.level, { assume_dex: true });
+    if (!(with_dex > f.score * CFG.GEAR_MARGIN)) return false;
+    const r = await apply_stat_scroll(
+      {
+        name: w.name,
+        level: w.level,
+        who: w.for || CFG.RANGER_NAME,
+        scroll: sc.name,
+        stat: sc.stat,
+        budgeted: true,
+      },
+      scrollNpc,
+      upNpc
+    );
+    return r === "done";
+  }
+
+  async function upgrade_round() {
+    S.upgrade_next = now() + CFG.UPGRADE_EVERY_MS;
+    S.upgrade_attempts = 0;
+    await drain_stand("an upgrade round");
+    if (!(await open_bank_for_compound())) return go_home();
+    const bank_gold = Number(character.bank && character.bank.gold);
+    if (!(bank_gold >= CFG.COMPOUND_BANK_FLOOR)) {
+      say(
+        "Upgrades stopped: bank holds " +
+          bank_gold +
+          " gold, below the " +
+          CFG.COMPOUND_BANK_FLOOR +
+          " floor",
+        "#CF575F"
+      );
+      return go_home();
+    }
+    if (S.upgrade_cap === null) {
+      S.upgrade_cap = Math.floor(bank_gold * CFG.UPGRADE_SESSION_PCT);
+      say(
+        "Upgrade budget for this session: " +
+          S.upgrade_cap +
+          " gold (" +
+          Math.round(CFG.UPGRADE_SESSION_PCT * 100) +
+          "% of the bank)"
+      );
+    }
+    const ranger_cands = upgrade_candidates();
+    const d0 = S.upg_diag;
+    say(
+      "Upgrade round: looked at the bag and bank - " +
+        d0.upgradable +
+        " upgradable item(s), " +
+        d0.ranger_kind +
+        " of a kind the Rangers, the Warrior or the Priest can wear (" +
+        d0.support_kind +
+        " of those fit the Warrior / Priest), " +
+        d0.level_ok +
+        " below +" +
+        CFG.UPGRADE_MAX_LEVEL +
+        ", " +
+        d0.scroll_ok +
+        " within the scroll tier limit, " +
+        d0.better +
+        " that could beat what their wearer has on" +
+        (d0.no_spare
+          ? "; " +
+            d0.no_spare +
+            " skipped because no second copy of the same level exists (" +
+            Object.keys(d0.no_spare_names).join(", ") +
+            ")"
+          : "") +
+        (d0.not_better
+          ? "; " +
+            d0.not_better +
+            " would not beat what the Rangers / Warrior / Priest wear (" +
+            d0.why +
+            ")"
+          : "")
+    );
+    const cands = ranger_cands.concat(flip_candidates());
+    if (!cands.length) {
+      say(
+        "Upgrade round: nothing could beat what " +
+          roster()
+            .concat(
+              support_names().filter((n) => gear_fresh_for(n) && !/\+$/.test(n))
+            )
+            .join(", ") +
+          " wear, and nothing is worth flipping" +
+          (CFG.FLIP_ENABLED && !value_fn()
+            ? " (flipping is off: this server has no item value function)"
+            : "")
+      );
+      return go_home();
+    }
+    const room = Math.max(0, free_slots() - 3);
+    const chosen = cands.slice(0, Math.min(CFG.UPGRADE_MAX_ITEMS, room));
+    if (!chosen.length) {
+      say("Upgrade round skipped: no free bag slots", "#CF575F");
+      return go_home();
+    }
+    // take them out of the bank (highest index first within a pack, slots shift)
+    const bank_ones = chosen
+      .filter((c) => c.pack)
+      .sort((a, b) => (a.pack < b.pack ? -1 : a.pack > b.pack ? 1 : b.i - a.i));
+    const names = {};
+    for (const c of chosen) names[c.it.name] = true;
+    for (const c of bank_ones) {
+      const before = bag_list(
+        (x) => x.name === c.it.name && (x.level || 0) === (c.it.level || 0)
+      ).length;
+      const res = await call(() => bank_retrieve(c.pack, c.i));
+      const got = await call(() =>
+        wait_for(
+          () =>
+            bag_list(
+              (x) =>
+                x.name === c.it.name && (x.level || 0) === (c.it.level || 0)
+            ).length > before,
+          4000
+        )
+      );
+      if (res.failed || got.failed) {
+        say(
+          "Could not take " +
+            upg_label(c.it) +
+            " out of the bank: " +
+            (res.reason || got.reason),
+          "#CF575F"
+        );
+        c.skip = true;
+      }
+    }
+    // go to the upgrade NPC; scrolls are bought one at a time right before each attempt
+    const work = chosen
+      .filter((c) => !c.skip)
+      .map((c) => ({
+        name: c.it.name,
+        level: c.it.level || 0,
+        start: c.it.level || 0,
+        flip: !!c.flip,
+        for: c.for || CFG.RANGER_NAME,
+      }));
+    const scrollNpc = find_npc(CFG.UPGRADE_SCROLL_NPC);
+    const upNpc = find_npc(CFG.UPGRADE_NPC);
+    const keep_for_ranger = [];
+    let yielded = false;
+    for (const w of work) {
+      for (;;) {
+        if (upg_paused()) break;
+        // yield point: one upgrade attempt is one atomic action; a waiting job goes first. The next round re-plans from the bank.
+        if (yield_now()) {
+          say("Upgrade round: a job is waiting - stopping at an item boundary");
+          yielded = true;
+          w.stop_all = true;
+          S.upgrade_next = now() + 3000;
+          break;
+        }
+        act("Upgrade " + w.name + " +" + w.level, P.ETA_S.upgrade_item, true);
+        const slot0 = bag_list(
+          (x) => x.name === w.name && (x.level || 0) === w.level
+        )[0];
+        if (slot0 === undefined) break;
+        const it = character.items[slot0];
+        if (w.level >= (w.flip ? CFG.FLIP_MAX_LEVEL : upg_max(w.name))) break;
+        if (!w.flip && gamble_mode(it) === "aside") {
+          say(
+            "Upgrade: " +
+              w.name +
+              " +" +
+              w.level +
+              " is better than what " +
+              CFG.RANGER_NAME +
+              " wears - set aside for him, not upgraded further",
+            "#8AB4D0"
+          );
+          break;
+        }
+        if (!w.flip && !upg_has_spare(it)) {
+          say(
+            "Upgrade: stopping at " +
+              upg_label(it) +
+              " - no second copy to fall back on if it breaks"
+          );
+          break;
+        }
+        const sname = upg_scroll(it);
+        const price = unit_cost(sname);
+        if (S.upgrade_spent + price > S.upgrade_cap) {
+          say(
+            "Upgrade budget used up (" +
+              S.upgrade_spent +
+              " / " +
+              S.upgrade_cap +
+              ")"
+          );
+          w.stop_all = true;
+          break;
+        }
+        // scroll in the bag? else buy one (withdraw gold from the bank first when short)
+        if (quantity(sname) < 1) {
+          if (character.gold < price) {
+            if (!(await open_bank_for_compound())) {
+              w.stop_all = true;
+              break;
+            }
+            const bg = Number(character.bank && character.bank.gold);
+            if (bg - price < CFG.COMPOUND_BANK_FLOOR) {
+              say(
+                "Upgrades stopped: buying a scroll would take the bank below its floor",
+                "#CF575F"
+              );
+              w.stop_all = true;
+              break;
+            }
+            const before = character.gold;
+            await call(() => bank_withdraw(price));
+            await call(() =>
+              wait_for(() => character.gold >= before + price - 1, 5000)
+            );
+          }
+          if (scrollNpc)
+            await travel(
+              { map: scrollNpc.map, x: scrollNpc.x, y: scrollNpc.y },
+              0,
+              "buying " + sname
+            );
+          const had = quantity(sname);
+          const res = await call(() => buy_with_gold(sname, 1));
+          const got = await call(() =>
+            wait_for(() => quantity(sname) > had, 6000)
+          );
+          if (res.failed || got.failed) {
+            say(
+              "Buying " + sname + " failed: " + (res.reason || got.reason),
+              "#CF575F"
+            );
+            w.stop_all = true;
+            break;
+          }
+          S.upgrade_spent += price;
+        }
+        if (upNpc)
+          await travel(
+            { map: upNpc.map, x: upNpc.x, y: upNpc.y },
+            0,
+            "upgrading next to the upgrade NPC"
+          );
+        const i2 = bag_list(
+          (x) => x.name === w.name && (x.level || 0) === w.level
+        )[0];
+        const si = locate_item(sname);
+        if (i2 === undefined || si < 0) break;
+        const odds = await call(() => upgrade(i2, si, null, true));
+        const chance = Number(odds.chance);
+        if (odds.failed || !(chance >= 0)) {
+          say(
+            "No odds for " +
+              w.name +
+              " +" +
+              w.level +
+              ": " +
+              JSON.stringify(odds.failed ? odds.reason : odds),
+            "#CF575F"
+          );
+          break;
+        }
+        let tag =
+          w.name +
+          " +" +
+          w.level +
+          " -> +" +
+          (w.level + 1) +
+          " with " +
+          sname +
+          ": " +
+          Math.round(chance * 1000) / 10 +
+          "% (grace " +
+          (odds.grace === undefined ? "?" : odds.grace) +
+          ")";
+        if (chance < upg_min_chance(w.name, it)) {
+          say(
+            "UPGRADE skipped (below " +
+              Math.round(upg_min_chance(w.name, it) * 100) +
+              "%): " +
+              tag
+          );
+          break;
+        }
+        if (w.flip) {
+          const fs = flip_step_ok(w.name, w.level, chance);
+          const money =
+            " [flip: selling now ~" +
+            Math.round(fs.stay) +
+            "g, expected if I go on ~" +
+            Math.round(fs.go) +
+            "g]";
+          if (!fs.ok) {
+            say("FLIP not worth it: " + tag + money);
+            break;
+          }
+          tag += money;
+        }
+        if (CFG.UPGRADE_DRY_RUN) {
+          say(
+            (w.flip ? "FLIP" : "UPGRADE") + " dry run - would attempt " + tag
+          );
+          break;
+        }
+        S.upgrade_attempts++;
+        const lvl_now = w.level;
+        const res = await call(() => upgrade(i2, si));
+        await call(() =>
+          wait_for(
+            () =>
+              !character.items[i2] ||
+              (character.items[i2].name === w.name &&
+                (character.items[i2].level || 0) !== lvl_now),
+            6000
+          )
+        );
+        await wait(300);
+        const win =
+          !!character.items[i2] &&
+          character.items[i2].name === w.name &&
+          (character.items[i2].level || 0) === lvl_now + 1;
+        const st = upg_stats();
+        st.n++;
+        st.exp += chance;
+        st.var += chance * (1 - chance);
+        if (win) st.wins++;
+        try {
+          set("upgrade_stats", JSON.stringify(st));
+        } catch (e) {}
+        say(
+          "UPGRADE " +
+            (win
+              ? "SUCCESS"
+              : res.failed && character.items[i2]
+              ? "FAILED (" + res.reason + ")"
+              : "LOST the item") +
+            " - " +
+            tag +
+            " | totals " +
+            st.wins +
+            "/" +
+            st.n +
+            ", quoted ~" +
+            st.exp.toFixed(1),
+          win ? "#5BCB5B" : "#CF575F"
+        );
+        upg_honesty(st);
+        if (!win) break;
+        w.level = lvl_now + 1;
+      }
+      if (w.stop_all) break;
+    }
+    // flipped items: sell them (or bank them) now, at Gabriel
+    if (!CFG.UPGRADE_DRY_RUN && !yielded && CFG.FLIP_RESULT_ACTION === "sell") {
+      const flipped = work.filter((w) => w.flip);
+      const is_flipped = (x) =>
+        flipped.some((w) => w.name === x.name && (x.level || 0) === w.level) &&
+        !x.l;
+      if (bag_list(is_flipped).length) {
+        const npc = find_npc(CFG.JUNK_SELL_NPC);
+        const r =
+          npc &&
+          (await travel(
+            { map: npc.map, x: npc.x, y: npc.y },
+            0,
+            "selling flipped items"
+          ));
+        if (npc && !r.failed) {
+          const res = await sell_junk_here(() => bag_list(is_flipped));
+          say(
+            "Sold " +
+              res.sold +
+              " flipped item(s); gold is now " +
+              character.gold
+          );
+        }
+      }
+    }
+    // what is done: better than what is worn -> keep in the bag for the Ranger, the rest back to the bank
+    for (const w of work) {
+      if (w.flip) continue;
+      const idx = bag_list(
+        (x) => x.name === w.name && (x.level || 0) === w.level
+      )[0];
+      if (idx === undefined) continue;
+      if (!CFG.UPGRADE_DRY_RUN && !yielded && w.level > w.start)
+        await apply_ranger_scroll(w, scrollNpc, upNpc);
+      const idx2 = bag_list(
+        (x) => x.name === w.name && (x.level || 0) === w.level
+      )[0];
+      if (idx2 === undefined) continue;
+      const it = character.items[idx2];
+      if (
+        !CFG.UPGRADE_DRY_RUN &&
+        w.level > w.start &&
+        beats_worn(it, w.level, w.for)
+      ) {
+        S.gear_pending.push({
+          name: w.name,
+          level: w.level,
+          for: w.for || CFG.RANGER_NAME,
+        });
+        say(
+          "Keeping " +
+            upg_label(it) +
+            " for " +
+            (w.for || CFG.RANGER_NAME) +
+            " (better than what he wears)",
+          "#5BCB5B"
+        );
+      }
+    }
+    if (await open_bank_for_compound()) {
+      const n_back = await put_back_in_bank(
+        (x) =>
+          !!names[x.name] &&
+          !x.l &&
+          !(x.q > 1) &&
+          !S.gear_pending.some(
+            (g) => g.name === x.name && g.level === (x.level || 0)
+          )
+      );
+      if (n_back) say("Put " + n_back + " item(s) back in the bank");
+    }
+    return go_home();
+  }
+
+  // ===== manual compound test (top buttons). One triple, run from the main loop so it never collides with a job. =====
+  async function manual_compound_test(real) {
+    const tag = real ? "Compound test" : "Compound odds check";
+    await drain_stand("a compound test");
+    if (!(await open_bank_for_compound())) return go_home();
+    // the cheapest triple: lowest scroll grade, then lowest level, from the bag and the bank
+    const pool = {};
+    const add = (it, where) => {
+      if (!comp_ok(it)) return;
+      const k = comp_key(it);
+      const e = (pool[k] = pool[k] || { it, bag: [], bank: [] });
+      if (where.pack) e.bank.push(where);
+      else e.bag.push(where.i);
+    };
+    for (let i = 0; i < character.isize; i++) add(character.items[i], { i });
+    for (const pack of CFG.COMPOUND_PACKS) {
+      const arr = character.bank && character.bank[pack];
+      if (Array.isArray(arr)) arr.forEach((it, i) => add(it, { pack, i }));
+    }
+    let best = null;
+    for (const k in pool) {
+      const e = pool[k];
+      if (e.bag.length + e.bank.length < 3) continue;
+      const grade = scroll_grade(e.it);
+      if (grade > max_grade_of(e.it.name)) continue;
+      const rank = grade * 100 + (e.it.level || 0);
+      if (!best || rank < best.rank)
+        best = Object.assign(e, { k, rank, grade });
+    }
+    if (!best) {
+      say(
+        tag + ": no three identical compoundable items in the bag or bank",
+        "#CF575F"
+      );
+      return go_home();
+    }
+    const item = best.it;
+    for (const b of best.bank.sort((x, y) =>
+      x.pack < y.pack ? -1 : x.pack > y.pack ? 1 : y.i - x.i
+    )) {
+      if (bag_list((x) => comp_ok(x) && comp_key(x) === best.k).length >= 3)
+        break;
+      const before = bag_list(
+        (x) => comp_ok(x) && comp_key(x) === best.k
+      ).length;
+      const res = await call(() => bank_retrieve(b.pack, b.i));
+      await call(() =>
+        wait_for(
+          () =>
+            bag_list((x) => comp_ok(x) && comp_key(x) === best.k).length >
+            before,
+          4000
+        )
+      );
+      if (res.failed) {
+        say(
+          tag +
+            ": could not take " +
+            comp_label(item) +
+            " out of the bank: " +
+            res.reason,
+          "#CF575F"
+        );
+        break;
+      }
+    }
+    const triple = () => bag_list((x) => comp_ok(x) && comp_key(x) === best.k);
+    if (triple().length < 3) {
+      say(tag + ": could not gather three " + comp_label(item), "#CF575F");
+      if (await open_bank_for_compound())
+        await put_back_in_bank((x) => comp_ok(x) && x.name === item.name);
+      return go_home();
+    }
+    // the matching compound scroll: bag, else buy one
+    const sname = scroll_for(item);
+    if (quantity(sname) < 1) {
+      const price = unit_cost(sname);
+      if (character.gold < price) {
+        const bg = Number(character.bank && character.bank.gold);
+        if (!(bg - price >= CFG.COMPOUND_BANK_FLOOR)) {
+          say(
+            tag + ": not enough gold for a " + sname + " (" + price + ")",
+            "#CF575F"
+          );
+          if (await open_bank_for_compound())
+            await put_back_in_bank((x) => comp_ok(x) && x.name === item.name);
+          return go_home();
+        }
+        const before = character.gold;
+        await call(() => bank_withdraw(price));
+        await call(() =>
+          wait_for(() => character.gold >= before + price - 1, 5000)
+        );
+      }
+      const sn = find_npc(CFG.COMPOUND_SCROLL_NPC);
+      if (sn)
+        await travel({ map: sn.map, x: sn.x, y: sn.y }, 0, "buying " + sname);
+      const had = quantity(sname);
+      const res = await call(() => buy_with_gold(sname, 1));
+      const got = await call(() => wait_for(() => quantity(sname) > had, 6000));
+      if (res.failed || got.failed)
+        say(
+          tag + ": buying " + sname + " failed: " + (res.reason || got.reason),
+          "#CF575F"
+        );
+    }
+    const up = find_npc(CFG.COMPOUND_UPGRADE_NPC);
+    if (up)
+      await travel(
+        { map: up.map, x: up.x, y: up.y },
+        0,
+        "compound test next to the upgrade NPC"
+      );
+    const [a, b, c] = triple();
+    const si = locate_item(sname);
+    const oname = CFG.OFFERING_ITEMS.find((n) => quantity(n) > 0);
+    const pct = (o) =>
+      o.failed || !(Number(o.chance) >= 0)
+        ? "no quote (" + JSON.stringify(o.reason || o) + ")"
+        : Math.round(o.chance * 1000) / 10 +
+          "% (grace " +
+          (o.grace === undefined ? "?" : o.grace) +
+          ")";
+    if (a !== undefined && si >= 0) {
+      const q0 = await call(() => compound(a, b, c, si, null, true));
+      say(
+        tag +
+          ": " +
+          comp_label(item) +
+          " x3 with " +
+          sname +
+          ", no offering: " +
+          pct(q0) +
+          " | luck x" +
+          character.luckm,
+        "#51D2E1"
+      );
+      let oi = -1;
+      if (oname) {
+        oi = locate_item(oname);
+        const q1 = await call(() => compound(a, b, c, si, oi, true));
+        say(tag + ": same compound with " + oname + ": " + pct(q1), "#51D2E1");
+      }
+      if (real) {
+        const use = !!oname && CFG.TEST_USE_OFFERING;
+        const lvl_up = (x) =>
+          x.name === item.name &&
+          (x.level || 0) === (item.level || 0) + 1 &&
+          (x.p || "") === (item.p || "");
+        const made = bag_list(lvl_up).length;
+        say(
+          tag +
+            ": compounding " +
+            comp_label(item) +
+            " x3 now" +
+            (use ? " WITH " + oname : " without an offering"),
+          "#E1A951"
+        );
+        const res = await call(() =>
+          use ? compound(a, b, c, si, oi) : compound(a, b, c, si, null)
+        );
+        await call(() =>
+          wait_for(
+            () => bag_list(lvl_up).length > made || triple().length < 3,
+            6000
+          )
+        );
+        await wait(300);
+        const win = bag_list(lvl_up).length > made;
+        say(
+          tag +
+            ": " +
+            (win
+              ? "SUCCESS"
+              : res.failed
+              ? "FAILED (" + (res.reason || "?") + ")"
+              : "the items were lost") +
+            " - " +
+            comp_label(item) +
+            " x3",
+          win ? "#5BCB5B" : "#CF575F"
+        );
+      }
+    } else say(tag + ": the items or the scroll are not in the bag", "#CF575F");
+    if (await open_bank_for_compound()) {
+      const n = await put_back_in_bank(
+        (x) => !x.l && !(x.q > 1) && x.name === item.name
+      );
+      if (n) say(tag + ": put " + n + " item(s) back in the bank");
+    }
+    return go_home();
+  }
+  function add_test_buttons() {
+    try {
+      if (typeof add_top_button !== "function") return;
+      add_top_button(
+        "al_bank_excess",
+        "Bank excess",
+        () => alive() && (S.bank_excess = true)
+      );
+      add_top_button(
+        "al_hold_release",
+        "Release",
+        () => alive() && (S.hold = null)
+      );
+      add_top_button(
+        "al_sell_round",
+        "Sell round",
+        () => alive() && (S.sell_now = true)
+      );
+    } catch (e) {}
+  }
+
+  // ===== World watch: bosses and events =====
+  // The game keeps the server info in S: every live boss is S[monster] = {live, hp, max_hp, map, x, y, target} and
+  // the published event lineup is S.schedule.events = [{id, event, at, status}]. Nothing here acts; it only logs.
+  // Boss table is kept across reloads in get/set("boss_log"): { monster: {max_hp, last_seen, map, x, y} }.
+  const WATCH = { up: {}, warned: {}, report_at: 0, offset: 0, synced: null };
+  function boss_table() {
+    try {
+      return JSON.parse(get("boss_log") || "{}") || {};
+    } catch (e) {
+      return {};
+    }
+  }
+  function boss_report() {
+    const t = boss_table();
+    const rows = Object.keys(t)
+      .map((k) => Object.assign({ name: k }, t[k]))
+      .sort((a, b) => b.max_hp - a.max_hp);
+    if (!rows.length) return "no boss seen yet";
+    return rows
+      .map((r) => {
+        const live = WATCH.up[r.name];
+        const ago = Math.round((now() - r.last_seen) / 60000);
+        return (
+          r.name +
+          " (" +
+          Math.round(r.max_hp / 1000) +
+          "k HP) " +
+          (live ? "UP now at " : "last seen " + ago + " min ago at ") +
+          r.map +
+          " " +
+          Math.round(r.x) +
+          "," +
+          Math.round(r.y)
+        );
+      })
+      .join(" | ");
+  }
+  function world_watch() {
+    if (!CFG.WATCH_ENABLED) return;
+    let Sv = null;
+    try {
+      Sv = parent.S;
+    } catch (e) {}
+    if (!Sv || typeof Sv !== "object") return;
+    const t = boss_table();
+    let dirty = false;
+    const seen = {};
+    for (const k of Object.keys(Sv)) {
+      const b = Sv[k];
+      if (
+        !b ||
+        typeof b !== "object" ||
+        typeof b.live !== "boolean" ||
+        !G.monsters[k]
+      )
+        continue;
+      if (!b.live) continue;
+      seen[k] = true;
+      const prev = t[k] || {};
+      t[k] = {
+        max_hp:
+          Number(b.max_hp) || Number(G.monsters[k].hp) || prev.max_hp || 0,
+        last_seen: now(),
+        map: b.map || prev.map,
+        x: b.x,
+        y: b.y,
+      };
+      dirty = true;
+      if (!WATCH.up[k])
+        say(
+          "Boss up: " +
+            (G.monsters[k].name || k) +
+            " (" +
+            Math.round(t[k].max_hp / 1000) +
+            "k HP, " +
+            Math.round(Number(b.hp) / 1000) +
+            "k now) at " +
+            t[k].map +
+            " " +
+            Math.round(b.x) +
+            "," +
+            Math.round(b.y),
+          "#E0A040"
+        );
+    }
+    for (const k of Object.keys(WATCH.up))
+      if (!seen[k])
+        say(
+          "Boss gone: " + ((G.monsters[k] && G.monsters[k].name) || k),
+          "#E0A040"
+        );
+    WATCH.up = seen;
+    if (dirty) {
+      try {
+        set("boss_log", JSON.stringify(t));
+      } catch (e) {}
+    }
+    // scheduled events
+    const sch = Sv.schedule;
+    if (sch && sch.server_time && sch.server_time !== WATCH.synced) {
+      WATCH.synced = sch.server_time;
+      WATCH.offset = sch.server_time - Date.now();
+    }
+    const here = Date.now() + WATCH.offset;
+    for (const o of (sch && sch.events) || []) {
+      if (!o || o.status !== "scheduled" || !(o.at > here)) continue;
+      const mins = (o.at - here) / 60000;
+      const limits = CFG.WATCH_EVENT_WARN_MIN.filter((w) => mins <= w);
+      if (!limits.length) continue;
+      const w = Math.min.apply(null, limits); // the closest limit it has passed
+      if (WATCH.warned[o.id + ":" + w]) continue;
+      for (const w2 of CFG.WATCH_EVENT_WARN_MIN)
+        if (w2 >= w) WATCH.warned[o.id + ":" + w2] = true;
+      say(
+        "Event soon: " +
+          ((G.events && G.events[o.event] && G.events[o.event].name) ||
+            o.event) +
+          " in " +
+          Math.ceil(mins) +
+          " min",
+        "#E0A040"
+      );
+    }
+    if (now() - WATCH.report_at >= CFG.WATCH_REPORT_MS) {
+      WATCH.report_at = now();
+      say("Bosses (largest first): " + boss_report());
+    }
+  }
+  // ===== Merchant's Luck: buff each Ranger once an hour =====
+  const mluck_def = () => (G.skills && G.skills.mluck) || null;
+  function mluck_state() {
+    try {
+      return JSON.parse(get("mluck_at") || "{}") || {};
+    } catch (e) {
+      return {};
+    }
+  }
+  const mluck_save = (st) => {
+    try {
+      set("mluck_at", JSON.stringify(st));
+    } catch (e) {}
+  };
+  const mluck_on = () => {
+    const d = mluck_def();
+    return (
+      CFG.MLUCK_ENABLED &&
+      !!d &&
+      character.level >= (Number(d.level) || 0) &&
+      character.mp >= (Number(d.mp) || 0)
+    );
+  };
+  // the Rangers whose buff is gone or about to be (leader first), that reported a position lately
+  function mluck_wanted() {
+    const st = mluck_state();
+    return roster().filter(
+      (n) =>
+        gear_fresh_for(n) &&
+        Date.now() - (st[n] || 0) >= CFG.MLUCK_RENEW_MS &&
+        Date.now() - ((S.mluck_skip || {})[n] || 0) >= CFG.MLUCK_RETRY_MS
+    );
+  }
+  function mluck_due() {
+    if (!mluck_on() || is_paused() || has_jobs() || now() < (S.mluck_next || 0))
+      return false;
+    S.mluck_next = now() + CFG.MLUCK_CHECK_MS;
+    return mluck_wanted().length > 0;
+  }
+  async function mluck_round() {
+    const d = mluck_def();
+    const range = Math.max(60, (Number(d.range) || 320) - 40);
+    S.mluck_skip = S.mluck_skip || {};
+    for (const name of mluck_wanted()) {
+      if (!alive() || character.rip || has_jobs() || !mluck_on()) break;
+      let g = gear_of(name);
+      const req = { from: name, map: g.map, x: g.x, y: g.y };
+      act("Merchant's Luck", 60, true);
+      const ok = await go_to_ranger(req, "casting Merchant's Luck on " + name);
+      let p = get_player(name);
+      if (!ok || !p) {
+        S.mluck_skip[name] = Date.now();
+        say(
+          "Merchant's Luck: could not reach " +
+            name +
+            " (" +
+            (req.fail_reason || "not in view") +
+            ") - trying again in " +
+            Math.round(CFG.MLUCK_RETRY_MS / 60000) +
+            " min",
+          "#CF575F"
+        );
+        continue;
+      }
+      if (d2(character, p) > range) await call(() => xmove(p.x, p.y));
+      p = get_player(name) || p;
+      const res = await call(() => use_skill("mluck", p));
+      await wait(600);
+      p = get_player(name) || p;
+      const buffed = !!(p && p.s && p.s.mluck);
+      if (res.failed || (p && p.s && !buffed)) {
+        S.mluck_skip[name] = Date.now();
+        say(
+          "Merchant's Luck on " +
+            name +
+            " did not take: " +
+            (res.reason || JSON.stringify(res)) +
+            (p && p.s ? " (buffs: " + Object.keys(p.s).join(",") + ")" : ""),
+          "#CF575F"
+        );
+        continue;
+      }
+      const st = mluck_state();
+      st[name] = Date.now();
+      mluck_save(st);
+      say(
+        "Merchant's Luck cast on " +
+          name +
+          " (lasts " +
+          Math.round((Number(d.duration) || 3600000) / 60000) +
+          " min; renewed in " +
+          Math.round(CFG.MLUCK_RENEW_MS / 60000) +
+          ")",
+        "#5BCB5B"
+      );
+      await wait(400); // the skill's own cooldown
+    }
+    return go_home();
+  }
+
+  // ===== Merchant's Luck for everybody in town while the Grinch is live =====
+  const grinch_live = () => {
+    try {
+      const g = parent.S && parent.S.grinch;
+      return !!(g && g.live);
+    } catch (e) {
+      return false;
+    }
+  };
+  function mluck_town_on() {
+    const d = mluck_def();
+    return !!(
+      CFG.MLUCK_GRINCH &&
+      d &&
+      grinch_live() &&
+      character.level >= (Number(d.level) || 0) &&
+      character.mp >= (Number(d.mp) || 0)
+    );
+  }
+  // player characters in the town area (not NPCs, not dead, not himself) that have no Merchant's Luck (or little left)
+  function mluck_town_wanted() {
+    const out = [];
+    if (character.map !== CFG.STAND_SPOT.map) return out;
+    const skip = S.mluck_town_skip || {};
+    for (const e of Object.values(parent.entities || {})) {
+      if (
+        !e ||
+        e.type !== "character" ||
+        e.npc ||
+        e.rip ||
+        e.dead ||
+        e.name === character.name
+      )
+        continue;
+      if (e.map && e.map !== CFG.STAND_SPOT.map) continue;
+      if (e.x === undefined || d2(CFG.STAND_SPOT, e) > CFG.MLUCK_TOWN_RADIUS)
+        continue;
+      const b = e.s && e.s.mluck;
+      if (b && !(Number(b.ms) < CFG.MLUCK_TOWN_MIN_LEFT_MS)) continue; // has it (ms = time left; unknown = assume plenty)
+      if (Date.now() - (skip[e.name] || 0) < CFG.MLUCK_TOWN_RETRY_MS) continue;
+      out.push(e);
+    }
+    return out.sort((a, b) => d2(character, a) - d2(character, b));
+  }
+  function mluck_town_due() {
+    if (
+      !mluck_town_on() ||
+      is_paused() ||
+      has_jobs() ||
+      now() < (S.mluck_town_next || 0)
+    )
+      return false;
+    S.mluck_town_next = now() + CFG.MLUCK_TOWN_CHECK_MS;
+    return mluck_town_wanted().length > 0;
+  }
+  async function mluck_town_round() {
+    const d = mluck_def();
+    const range = Math.max(60, (Number(d.range) || 320) - 40);
+    S.mluck_town_skip = S.mluck_town_skip || {};
+    let done = 0;
+    for (const t of mluck_town_wanted()) {
+      if (!alive() || character.rip || has_jobs() || !mluck_town_on()) break;
+      let p = parent.entities[t.name] || t;
+      if (!p || p.rip || d2(CFG.STAND_SPOT, p) > CFG.MLUCK_TOWN_RADIUS)
+        continue; // left town meanwhile
+      act("Merchant's Luck", 30, true);
+      if (d2(character, p) > range) await call(() => xmove(p.x, p.y));
+      p = parent.entities[t.name] || p;
+      const res = await call(() => use_skill("mluck", p));
+      await wait(400);
+      if (res.failed) {
+        S.mluck_town_skip[t.name] = Date.now();
+        say(
+          "Merchant's Luck on " +
+            t.name +
+            " did not take: " +
+            (res.reason || JSON.stringify(res)),
+          "#CF575F"
+        );
+        continue;
+      }
+      done++;
+      S.mluck_town_skip[t.name] = Date.now() - CFG.MLUCK_TOWN_RETRY_MS + 30000; // do not recast within 30 s if the buff flag has not shown up yet
+      say("Merchant's Luck (Grinch) cast on " + t.name, "#5BCB5B");
+    }
+    if (done)
+      say(
+        "Merchant's Luck: buffed " +
+          done +
+          " player(s) in town while the Grinch is live",
+        "#5BCB5B"
+      );
+    return go_home();
+  }
+
+  // v5 (Sean 2026-11-18): the leader stops by before a forced farm / boss and about hourly: cast on the listed players (nearest first), tell him when done
+  function mluck_party_due() {
+    const q = S.mluck_req;
+    if (!q) return false;
+    if (now() - q.at > 180000) {
+      S.mluck_req = null;
+      return false;
+    }
+    return !is_paused() && !has_jobs();
+  }
+  async function mluck_party_round() {
+    const q = S.mluck_req;
+    S.mluck_req = null;
+    if (!q) return;
+    const d = mluck_def();
+    const range = Math.max(60, (Number(d.range) || 320) - 40);
+    const cast = [],
+      failed = [];
+    let pending = q.names.filter((n) => n !== character.name);
+    const t0 = now();
+    while (
+      pending.length &&
+      now() - t0 < CFG.MLUCK_PARTY_WAIT_MS &&
+      alive() &&
+      !character.rip &&
+      !has_jobs()
+    ) {
+      const here = [];
+      for (const n of pending) {
+        const p = parent.entities[n];
+        if (
+          !p ||
+          p.type !== "character" ||
+          p.rip ||
+          p.dead ||
+          p.x === undefined
+        )
+          continue; // not here (yet)
+        if (p.map && p.map !== CFG.STAND_SPOT.map) continue;
+        if (d2(CFG.STAND_SPOT, p) > CFG.MLUCK_TOWN_RADIUS) continue;
+        here.push(p);
+      }
+      here.sort((a, b) => d2(character, a) - d2(character, b));
+      for (const t of here) {
+        const b = t.s && t.s.mluck;
+        if (b && !(Number(b.ms) < CFG.MLUCK_TOWN_MIN_LEFT_MS)) {
+          cast.push(t.name);
+          pending = pending.filter((n) => n !== t.name);
+          continue;
+        } // has it already
+        if (character.mp < (Number(d.mp) || 0)) {
+          failed.push(t.name);
+          pending = pending.filter((n) => n !== t.name);
+          continue;
+        }
+        act("Merchant's Luck", 30, true);
+        if (d2(character, t) > range) await call(() => xmove(t.x, t.y));
+        const p = parent.entities[t.name] || t;
+        const res = await call(() => use_skill("mluck", p));
+        await wait(400);
+        pending = pending.filter((n) => n !== t.name);
+        if (res.failed) {
+          failed.push(t.name);
+          say(
+            "Merchant's Luck on " +
+              t.name +
+              " did not take: " +
+              (res.reason || JSON.stringify(res)),
+            "#CF575F"
+          );
+        } else {
+          cast.push(t.name);
+          say("Merchant's Luck (party stop) cast on " + t.name, "#5BCB5B");
+        }
+      }
+      if (pending.length) await wait(1500);
+    }
+    for (const n of pending) failed.push(n); // never showed up in town
+    reply(q.from, { type: "mluck_done", id: q.id, cast, failed });
+    return go_home();
+  }
+
+  // ===== CRAFT REPORT: which recipes would make money if the result is sold to an NPC (no player market to price against) =====
+  // Value of a result = what Gabriel pays (game value x the learned flip factor). Cost = ingredients at the game's gold value
+  // (what an NPC charges; materials you farm are really cheaper, so this is the pessimistic side) + the recipe's gold fee.
+  // Runs once about 30 s after the start and again whenever the console says set("craft_report", "1").
+  function craft_report() {
+    try {
+      if (!G.craft)
+        return say("Craft report: no recipe data (G.craft)", "#CF575F");
+      const npc_stock = {};
+      for (const id in G.npcs || {}) {
+        const l = G.npcs[id] && G.npcs[id].items;
+        if (Array.isArray(l)) l.forEach((n) => n && (npc_stock[n] = true));
+      }
+      const rows = [];
+      for (const key in G.craft) {
+        const rec = G.craft[key];
+        const def = G.items[key];
+        if (!rec || !def || !Array.isArray(rec.items)) continue;
+        let cost = Number(rec.cost) || 0;
+        let unknown = 0;
+        let farmed = 0;
+        for (const ing of rec.items) {
+          const q = Number(ing[0]) || 1;
+          const d = G.items[ing[1]];
+          if (!d) {
+            unknown++;
+            continue;
+          }
+          cost += q * (Number(d.g) || 0);
+          if (!npc_stock[ing[1]]) farmed++;
+        }
+        const value = sell_value(key, 0);
+        rows.push({
+          key,
+          name: def.name || key,
+          value,
+          cost,
+          profit: value - cost,
+          unknown,
+          farmed,
+          quest: rec.quest || "",
+        });
+      }
+      rows.sort((a, b) => b.profit - a.profit);
+      const fmt = (n) => Math.round(n).toLocaleString();
+      say(
+        "Craft report: " +
+          rows.length +
+          " recipes, sold to Gabriel at " +
+          Math.round(flip_factor() * 100) +
+          "% of game value. Best first (profit = value - ingredients - fee):",
+        "#E0A040"
+      );
+      rows
+        .slice(0, 5)
+        .forEach((r) =>
+          say(
+            "  " +
+              r.name +
+              " [" +
+              r.key +
+              "]: sells " +
+              fmt(r.value) +
+              ", costs " +
+              fmt(r.cost) +
+              ", profit " +
+              fmt(r.profit) +
+              (r.farmed
+                ? ", " + r.farmed + " ingredient(s) not sold by NPCs"
+                : ", all ingredients buyable") +
+              (r.quest ? ", at " + r.quest : "") +
+              (r.unknown ? ", " + r.unknown + " unknown ingredient(s)" : ""),
+            "#E0A040"
+          )
+        );
+      // the shortlist: only recipes where every ingredient is sold by an NPC (a supply that never runs out), most profitable first
+      // what he could make RIGHT NOW from the bag and the bank he last saw (stack counts), best total profit first
+      for (const r of rows) {
+        const rec = G.craft[r.key];
+        let times = Infinity;
+        for (const ing of rec.items)
+          times = Math.min(
+            times,
+            Math.floor(mats_have(ing[1]) / (Number(ing[0]) || 1))
+          );
+        r.times = Number.isFinite(times) ? times : 0;
+        r.total = r.times * r.profit;
+      }
+      const now_list = rows
+        .filter((r) => r.times > 0)
+        .sort((a, b) => b.total - a.total);
+      say(
+        "Craft report - CAN MAKE NOW from the bag and bank he last saw: " +
+          now_list.length +
+          " recipes (profit = result value minus ingredient value; selling the ingredients instead pays their game value)",
+        "#E0A040"
+      );
+      now_list
+        .slice(0, 8)
+        .forEach((r) =>
+          say(
+            "  " +
+              r.name +
+              " [" +
+              r.key +
+              "] x" +
+              r.times +
+              ": profit " +
+              fmt(r.profit) +
+              " each, " +
+              fmt(r.total) +
+              " total" +
+              (r.quest ? ", at " + r.quest : ""),
+            "#E0A040"
+          )
+        );
+      const sure = rows.filter((r) => r.profit > 0 && !r.farmed && !r.unknown);
+      say(
+        "Craft report - SHORTLIST (all ingredients buyable at NPCs, profit > 0): " +
+          sure.length +
+          " recipes",
+        "#E0A040"
+      );
+      const buyable = rows.filter((r) => !r.farmed && !r.unknown);
+      const stocked = Object.keys(npc_stock).length;
+      say(
+        "Craft report - check: " +
+          stocked +
+          " different items are sold by NPCs in G.npcs; " +
+          buyable.length +
+          " of " +
+          rows.length +
+          " recipes use only those. Closest to profit (profit, name): " +
+          buyable
+            .sort((a, b) => b.profit - a.profit)
+            .slice(0, 4)
+            .map((r) => fmt(r.profit) + " " + r.key)
+            .join(" | "),
+        "#E0A040"
+      );
+      sure
+        .slice(0, 10)
+        .forEach((r) =>
+          say(
+            "  " +
+              r.name +
+              " [" +
+              r.key +
+              "]: sells " +
+              fmt(r.value) +
+              ", costs " +
+              fmt(r.cost) +
+              ", profit " +
+              fmt(r.profit) +
+              (r.quest ? ", at " + r.quest : ""),
+            "#E0A040"
+          )
+        );
+      const pos = rows.filter((r) => r.profit > 0).length;
+      say(
+        "Craft report: " +
+          pos +
+          " of " +
+          rows.length +
+          " recipes show a profit at these prices (ingredients valued at their NPC price)",
+        "#E0A040"
+      );
+    } catch (e) {
+      say("Craft report failed: " + ((e && e.message) || e), "#CF575F");
+    }
+  }
+  setTimeout(craft_report, 30000);
+  setInterval(() => {
+    try {
+      if (String(get("craft_report") || "") === "1") {
+        set("craft_report", "");
+        craft_report();
+      }
+    } catch (e) {}
+  }, 10000);
+
+  setInterval(world_watch, CFG.WATCH_EVERY_MS);
+
+  // ===== Rose's lotteries =====
+  // The lotteries have no code functions, only socket messages (the same ones the game's own windows send):
+  //   lottery_status -> lottery_status {product:"daily_item", current:{prize, ticketPrice, accountLimit, closesAt, purchasesPermitted}, accountTickets}
+  //   lottery_purchase {requestId} -> lottery_purchase {success}
+  //   money_lottery_status -> money_lottery_status {product:"money_lottery", current:{drawId, jackpotGold, ticketPrice, accountLimit, closesAt, purchasesPermitted}, accountTickets}
+  //   money_lottery_quick_pick -> money_lottery_quick_pick {success, numbers}
+  //   money_lottery_purchase {requestId, numbers, drawId} -> money_lottery_purchase {success, receipt:{numbers}}
+  const lottery_day = () => String(Math.floor(Date.now() / 86400000)); // UTC day number
+  function lottery_ledger() {
+    let l = null;
+    try {
+      l = JSON.parse(get("lottery_ledger") || "null");
+    } catch (e) {}
+    if (!l || l.day !== lottery_day()) l = { day: lottery_day(), spent: 0 };
+    return l;
+  }
+  const lottery_left = () =>
+    Math.max(0, CFG.LOTTERY_DAILY_CAP - lottery_ledger().spent);
+  function lottery_spend(n, what) {
+    const l = lottery_ledger();
+    l.spent += n;
+    try {
+      set("lottery_ledger", JSON.stringify(l));
+    } catch (e) {}
+    donate_track_out(n);
+    say(
+      "Lottery: bought " +
+        what +
+        " for " +
+        n +
+        " gold (today " +
+        l.spent +
+        " / " +
+        CFG.LOTTERY_DAILY_CAP +
+        ")",
+      "#A33AA0"
+    );
+  }
+  // ============================ PACED REQUESTS (v5) ============================
+  // The lottery sockets, the donation and the event exchange all hit server-side rate limits ("throttled"). v4 paced only the
+  // lottery, round by round. v5 sends every such request through ONE queue: they go out one at a time, at least CFG.PACE_MS
+  // after the previous one FINISHED (answer or timeout), whichever round asks. Retry back-off (growing waits) stays where it is.
+  const PACE = { chain: Promise.resolve(), last: 0, n: 0, held_ms: 0 };
+  function paced(fn) {
+    const job = PACE.chain.then(async () => {
+      const gap = CFG.PACE_MS - (Date.now() - PACE.last);
+      if (gap > 0) {
+        PACE.held_ms += gap;
+        await wait(gap);
+      }
+      PACE.n++;
+      try {
+        return await fn();
+      } finally {
+        PACE.last = Date.now();
+      }
+    });
+    PACE.chain = job.catch(() => {});
+    return job;
+  }
+  function sock_ask_raw(ev, payload, reply, ms) {
+    return new Promise((resolve) => {
+      const sk = parent.socket;
+      let done = false;
+      const fin = (d) => {
+        if (done) return;
+        done = true;
+        try {
+          sk.off(reply, h);
+        } catch (e) {}
+        resolve(d);
+      };
+      const h = (d) => fin(d);
+      sk.on(reply, h);
+      sk.emit(ev, payload);
+      setTimeout(() => fin(null), ms || 8000);
+    });
+  }
+  const sock_ask = (ev, payload, reply, ms) =>
+    paced(() => sock_ask_raw(ev, payload, reply, ms));
+  const lottery_off = () => {
+    try {
+      const v = get("lottery_off");
+      return v === true || v === "true";
+    } catch (e) {
+      return false;
+    }
+  };
+  const lottery_due = () =>
+    CFG.LOTTERY_ENABLED &&
+    !lottery_off() &&
+    !is_paused() &&
+    !has_jobs() &&
+    now() >= S.lottery_next &&
+    lottery_left() >= 1;
+  async function lottery_round() {
+    S.lottery_next = now() + CFG.LOTTERY_EVERY_MS;
+    await drain_stand("the lottery");
+    if (!(await open_bank_for_compound())) return go_home();
+    const bank_gold = Number(character.bank && character.bank.gold) || 0;
+    const spare = Math.max(0, bank_gold - CFG.LOTTERY_BANK_FLOOR);
+    const budget = Math.min(spare, lottery_left());
+    if (budget < 100000) {
+      say(
+        "Lottery: nothing to spend - spare gold " +
+          spare +
+          " (bank " +
+          bank_gold +
+          " minus floor " +
+          CFG.LOTTERY_BANK_FLOOR +
+          "), daily cap left " +
+          lottery_left()
+      );
+      return go_home();
+    }
+    const before = character.gold;
+    const dep = await call(() => bank_withdraw(budget));
+    const got = await call(() =>
+      wait_for(() => character.gold >= before + budget - 1, 5000)
+    );
+    if (dep.failed || got.failed) {
+      say(
+        "Lottery: could not withdraw " +
+          budget +
+          ": " +
+          (dep.reason || got.reason),
+        "#CF575F"
+      );
+      return go_home();
+    }
+    let npc = find_npc("lotterylady");
+    if (!npc) npc = CFG.LOTTERY_NPC_FALLBACK;
+    act("Lottery", 90, true);
+    const r = await travel(
+      { map: npc.map, x: npc.x, y: npc.y },
+      0,
+      "visiting Rose (lottery)"
+    );
+    if (r.failed) {
+      say("Lottery: could not reach Rose: " + r.reason, "#CF575F");
+      return go_home();
+    }
+    let left = budget;
+    const closes = [];
+    const item = await sock_ask("lottery_status", {}, "lottery_status");
+    const money = await sock_ask(
+      "money_lottery_status",
+      {},
+      "money_lottery_status"
+    );
+    say(
+      "Lottery status - item: " +
+        JSON.stringify(item || "no answer").slice(0, 400)
+    );
+    say(
+      "Lottery status - money: " +
+        JSON.stringify(money || "no answer").slice(0, 400)
+    );
+    // item lottery
+    const ic = item && item.available && item.current;
+    if (CFG.LOTTERY_ITEM && ic) {
+      closes.push(Date.parse(ic.closesAt));
+      const room = (ic.accountLimit || 1) - (item.accountTickets || 0);
+      if (
+        ic.purchasesPermitted &&
+        room > 0 &&
+        ic.ticketPrice <= left &&
+        ic.ticketPrice <= lottery_left()
+      ) {
+        const rid = "i" + Date.now() + Math.random().toString(36).slice(2, 10);
+        let res = null;
+        for (let t = 0; t < 5; t++) {
+          await wait(1500 + t * 2500);
+          res = await sock_ask(
+            "lottery_purchase",
+            { requestId: rid },
+            "lottery_purchase",
+            10000
+          );
+          if (!(res && res.reason === "throttled")) break; // same requestId on a retry, so a ticket can never be bought twice
+        }
+        if (res && res.success) {
+          left -= ic.ticketPrice;
+          lottery_spend(
+            ic.ticketPrice,
+            "an Item Lottery ticket (prize " +
+              JSON.stringify(ic.prize).slice(0, 120) +
+              ")"
+          );
+        } else
+          say(
+            "Lottery: item ticket not bought: " +
+              JSON.stringify(res || "no answer"),
+            "#CF575F"
+          );
+      } else
+        say(
+          "Lottery: no item ticket - " +
+            (!ic.purchasesPermitted
+              ? "purchases closed"
+              : room <= 0
+              ? "ticket limit reached"
+              : "price " + ic.ticketPrice + " is above what is left to spend")
+        );
+    }
+    // money lottery
+    const mc = money && money.available && money.current;
+    if (CFG.LOTTERY_MONEY_TICKETS > 0 && mc) {
+      closes.push(Date.parse(mc.closesAt));
+      let room = Math.min(
+        CFG.LOTTERY_MONEY_TICKETS,
+        (mc.accountLimit || 0) - (money.accountTickets || 0)
+      );
+      while (
+        room > 0 &&
+        mc.purchasesPermitted &&
+        mc.ticketPrice <= left &&
+        mc.ticketPrice <= lottery_left()
+      ) {
+        // the server rate-limits these requests ("throttled"): pause between requests and retry a few times with a growing wait
+        let q = null;
+        for (let t = 0; t < 5; t++) {
+          await wait(1500 + t * 2500);
+          q = await sock_ask(
+            "money_lottery_quick_pick",
+            {},
+            "money_lottery_quick_pick"
+          );
+          if (!(q && q.reason === "throttled")) break;
+        }
+        if (!q || !q.success || !q.numbers) {
+          say(
+            "Lottery: quick pick failed: " + JSON.stringify(q || "no answer"),
+            "#CF575F"
+          );
+          break;
+        }
+        const rid = "m" + Date.now() + Math.random().toString(36).slice(2, 10);
+        let res = null;
+        for (let t = 0; t < 5; t++) {
+          if (t) await wait(1500 + t * 2500);
+          res = await sock_ask(
+            "money_lottery_purchase",
+            { requestId: rid, numbers: q.numbers, drawId: mc.drawId },
+            "money_lottery_purchase",
+            10000
+          );
+          if (!(res && res.reason === "throttled")) break; // same requestId on a retry, so a ticket can never be bought twice
+        }
+        if (!res || !res.success) {
+          say(
+            "Lottery: money ticket not bought: " +
+              JSON.stringify(res || "no answer"),
+            "#CF575F"
+          );
+          break;
+        }
+        left -= mc.ticketPrice;
+        room--;
+        lottery_spend(
+          mc.ticketPrice,
+          "a Money Lottery ticket [" +
+            ((res.receipt && res.receipt.numbers) || q.numbers).join(", ") +
+            "]"
+        );
+      }
+    }
+    // next visit: after the earliest draw closes (new tickets), but never sooner than the normal interval allows
+    const next_draw = closes.filter((t) => t > now()).sort((a, b) => a - b)[0];
+    if (next_draw)
+      S.lottery_next = Math.max(
+        now() + 10 * 60000,
+        Math.min(now() + 6 * 3600000, next_draw + 30000)
+      );
+    say(
+      "Lottery done: spent " +
+        (budget - left) +
+        " gold; next visit " +
+        Math.round((S.lottery_next - now()) / 60000) +
+        " min"
+    );
+    return go_home();
+  }
+
+  // ===== Lost and Found donations =====
+  function donate_ledger() {
+    let l = null;
+    try {
+      l = JSON.parse(get("donate_ledger") || "null");
+    } catch (e) {}
+    const day = String(Math.floor(Date.now() / 86400000));
+    if (!l || l.day !== day)
+      l = { day, spent: 0, probe: l ? !!l.probe : false };
+    return l;
+  }
+  function donate_track() {
+    try {
+      return JSON.parse(get("donate_track") || "null");
+    } catch (e) {
+      return null;
+    }
+  }
+  function donate_track_save(t) {
+    try {
+      set("donate_track", JSON.stringify(t));
+    } catch (e) {}
+  }
+  // gold that left the bank+bag through donations / lottery, counted so it does not look like "earned less"
+  function donate_track_out(n) {
+    const t = donate_track();
+    if (!t) return;
+    t.out = (Number(t.out) || 0) + n;
+    donate_track_save(t);
+  }
+  const donate_cap = () => {
+    const t = donate_track();
+    return CFG.DONATE_CAP_ADAPT && t && t.cap > 0
+      ? t.cap
+      : CFG.DONATE_DAILY_CAP;
+  };
+  // Once per UTC day, with the bank open: compare today's wealth with yesterday's snapshot and move the cap by at most one step.
+  function donate_cap_update(wealth) {
+    const today = String(Math.floor(Date.now() / 86400000));
+    let t = donate_track();
+    if (!t || !(t.cap > 0)) {
+      donate_track_save({
+        day: today,
+        t0: Date.now(),
+        wealth0: wealth,
+        cap: CFG.DONATE_DAILY_CAP,
+        out: 0,
+      });
+      return;
+    }
+    if (!CFG.DONATE_CAP_ADAPT || t.day === today) return;
+    const el = Date.now() - (Number(t.t0) || 0);
+    let cap = t.cap;
+    let earned_day = null;
+    if (el >= 12 * 3600000 && el <= 72 * 3600000) {
+      earned_day = Math.round(
+        ((wealth - (Number(t.wealth0) || 0) + (Number(t.out) || 0)) *
+          86400000) /
+          el
+      );
+      let target =
+        Math.floor(
+          (Math.max(0, earned_day) * CFG.DONATE_EARN_SHARE) / CFG.DONATE_STEP
+        ) * CFG.DONATE_STEP;
+      target = Math.min(
+        cap + CFG.DONATE_STEP,
+        Math.max(cap - CFG.DONATE_STEP, target)
+      );
+      cap = Math.min(CFG.DONATE_CAP_MAX, Math.max(CFG.DONATE_CAP_MIN, target));
+    }
+    say(
+      "Donation cap: " +
+        (earned_day === null
+          ? "no usable 24h reading, cap stays "
+          : "earned about " +
+            earned_day +
+            " gold per 24h (not counting compound/upgrade/potion spending) -> cap ") +
+        cap +
+        " per day (was " +
+        t.cap +
+        ")",
+      "#58CF40"
+    );
+    donate_track_save({
+      day: today,
+      t0: Date.now(),
+      wealth0: wealth,
+      cap,
+      out: 0,
+    });
+  }
+  const donate_left = () => Math.max(0, donate_cap() - donate_ledger().spent);
+  const donate_off = () => {
+    try {
+      const v = get("donate_off");
+      return v === true || v === "true";
+    } catch (e) {
+      return false;
+    }
+  };
+  const donate_due = () =>
+    CFG.DONATE_ENABLED &&
+    !donate_off() &&
+    !is_paused() &&
+    !has_jobs() &&
+    now() >= S.donate_next &&
+    donate_left() >= 1 &&
+    free_slots() >= CFG.DONATE_MIN_FREE_SLOTS;
+  async function donate_round() {
+    S.donate_next = now() + CFG.DONATE_EVERY_MS;
+    await drain_stand("a donation");
+    if (!(await open_bank_for_compound())) return go_home();
+    const led = donate_ledger();
+    const bank_gold = Number(character.bank && character.bank.gold) || 0;
+    donate_cap_update(bank_gold + (Number(character.gold) || 0));
+    const spare = Math.max(0, bank_gold - CFG.DONATE_BANK_FLOOR);
+    const want = led.probe ? CFG.DONATE_STEP : CFG.DONATE_PROBE_GOLD;
+    const amount = Math.min(want, spare, donate_left());
+    if (amount < Math.min(want, 1000)) {
+      say(
+        "Donation: nothing to give - spare gold " +
+          spare +
+          " (bank " +
+          bank_gold +
+          " minus floor " +
+          CFG.DONATE_BANK_FLOOR +
+          "), daily cap left " +
+          donate_left()
+      );
+      return go_home();
+    }
+    const before_g = character.gold;
+    const wd = await call(() => bank_withdraw(amount));
+    const got = await call(() =>
+      wait_for(() => character.gold >= before_g + amount - 1, 5000)
+    );
+    if (wd.failed || got.failed) {
+      say(
+        "Donation: could not withdraw " +
+          amount +
+          ": " +
+          (wd.reason || got.reason),
+        "#CF575F"
+      );
+      return go_home();
+    }
+    let npc = find_npc("lostandfound");
+    if (!npc) npc = CFG.DONATE_NPC_FALLBACK;
+    act("Donate", 90, true);
+    const r = await travel(
+      { map: npc.map, x: npc.x, y: npc.y },
+      0,
+      "donating at Lost and Found"
+    );
+    if (r.failed) {
+      say("Donation: could not reach Lost and Found: " + r.reason, "#CF575F");
+      return go_home();
+    }
+    const tally0 = bag_tally();
+    const xp0 = Number(character.xp) || 0;
+    const lvl0 = character.level;
+    const gold0 = character.gold;
+    const res = await paced(() => call(() => donate_gold(amount)));
+    if (res.failed) {
+      say(
+        "Donation of " +
+          amount +
+          " failed: " +
+          (res.reason || JSON.stringify(res)),
+        "#CF575F"
+      );
+      S.donate_next = now() + 3 * CFG.DONATE_EVERY_MS;
+      return go_home();
+    }
+    await wait(1200);
+    const tally1 = bag_tally();
+    const got_items = [];
+    for (const n in tally1) {
+      const d = tally1[n] - (tally0[n] || 0);
+      if (d > 0) got_items.push(d + "x " + n);
+    }
+    const resp = JSON.stringify(res).slice(0, 300);
+    const code = res.response || "";
+    const gave = gold0 - character.gold;
+    say(
+      "Donation: gave " +
+        gave +
+        " gold -> answer " +
+        resp +
+        "; XP +" +
+        ((Number(character.xp) || 0) - xp0) +
+        " (level " +
+        lvl0 +
+        " -> " +
+        character.level +
+        ")" +
+        (got_items.length
+          ? "; handed back: " + got_items.join(", ")
+          : "; nothing handed back"),
+      "#58CF40"
+    );
+    if (/low/.test(String(code))) {
+      say(
+        "Donation: the NPC calls " +
+          amount +
+          " too little - stopping donations until DONATE_PROBE_GOLD / DONATE_STEP are raised",
+        "#CF575F"
+      );
+      S.donate_next = now() + 12 * 3600000;
+    } else if (gave > 0) {
+      led.spent += gave;
+      led.probe = true;
+      donate_track_out(gave);
+      try {
+        set("donate_ledger", JSON.stringify(led));
+      } catch (e) {}
+    }
+    return go_home();
+  }
+
+  // ===== Crafting at Leo =====
+  // A Ranger without a quiver gets one made: materials come from the bag and the bank, nothing else is touched.
+  // The finished item stays in the bag; the upgrade rounds and the gear sweep take it from there.
+  function craft_needs() {
+    const out = [];
+    if (!CFG.CRAFT_ENABLED) return out;
+    const who_list = roster();
+    S.craft_why = "";
+    for (const who of who_list)
+      if (!gear_fresh_for(who)) {
+        S.craft_why = "no fresh gear report from " + who;
+        return out;
+      }
+    for (const item of CFG.CRAFT_ITEMS) {
+      const def = G.items[item];
+      if (!def || !G.craft || !G.craft[item]) continue;
+      const slots = SLOT_OF_TYPE[def.type] || [];
+      if (!slots.length) continue;
+      let lacking = 0;
+      for (const who of who_list) {
+        const g = gear_of(who);
+        const wears = slots.some((sl) => {
+          const w = g && g.slots && g.slots[sl];
+          return !!w && G.items[w.name] && G.items[w.name].type === def.type;
+        });
+        if (!wears) lacking++;
+      }
+      let held = 0; // items in the bag include the ones already waiting for a Ranger
+      const count = (it) => {
+        if (it && G.items[it.name] && G.items[it.name].type === def.type)
+          held++;
+      };
+      for (let i = 0; i < character.isize; i++) count(character.items[i]);
+      for (const pack of CFG.UPGRADE_PACKS) {
+        const arr = character.bank && character.bank[pack];
+        if (Array.isArray(arr)) arr.forEach(count);
+      }
+      const n = Math.min(CFG.CRAFT_MAX_PER_RUN, lacking - held);
+      if (n > 0) out.push({ item, n });
+    }
+    // v5: CRAFT_TARGETS - make an item until this many exist in total (worn by the Rangers + in the Merchant's bag + in the bank)
+    for (const t of CFG.CRAFT_TARGETS) {
+      if (!G.items[t.item] || !G.craft || !G.craft[t.item]) continue;
+      if (rc_cfg(t.item) && rc_done(t.item)) continue; // the Ranger's compound focus has what it needs (e.g. the +3 orb): no more of it
+      // an item with a compound focus counts as the copies it took to make it (a +3 = 27 copies); everything else counts each item once
+      const wt = (lv) => (rc_cfg(t.item) ? Math.pow(3, lv || 0) : 1);
+      let have = 0;
+      for (const who of who_list) {
+        const g = gear_of(who);
+        for (const sl in (g && g.slots) || {})
+          if (g.slots[sl] && g.slots[sl].name === t.item)
+            have += wt(g.slots[sl].level);
+      }
+      for (let i = 0; i < character.isize; i++) {
+        const it = character.items[i];
+        if (it && it.name === t.item) have += (it.q || 1) * wt(it.level);
+      }
+      for (const pack of CFG.UPGRADE_PACKS) {
+        const arr = character.bank && character.bank[pack];
+        if (Array.isArray(arr))
+          arr.forEach((it) => {
+            if (it && it.name === t.item) have += (it.q || 1) * wt(it.level);
+          });
+      }
+      const n = Math.min(CFG.CRAFT_MAX_PER_RUN, t.total - have);
+      if (n > 0) out.push({ item: t.item, n, target: true });
+    }
+    return out;
+  }
+  const craft_due = () => {
+    if (!CFG.CRAFT_ENABLED || is_paused() || has_jobs()) return false;
+    if (now() < S.craft_next) return false;
+    if (free_slots() < CFG.CRAFT_MIN_FREE_SLOTS) {
+      craft_note(
+        "only " +
+          free_slots() +
+          " free bag slots, needs " +
+          CFG.CRAFT_MIN_FREE_SLOTS
+      );
+      return false;
+    }
+    const needs = craft_needs();
+    if (!needs.length) {
+      craft_note(
+        S.craft_why ||
+          "every Ranger has a quiver and the CRAFT_TARGETS counts are met (worn, in the bag or in the bank)"
+      );
+      return false;
+    }
+    return true;
+  };
+  function craft_note(why) {
+    if (now() - (S.craft_note_at || 0) < 30 * 60000) return;
+    S.craft_note_at = now();
+    say("Crafting: nothing to do right now - " + why);
+  }
+  const mats_have = (name, lv) =>
+    bag_qty(name, lv) + bank_stacks(name, lv).reduce((a, b) => a + b.q, 0);
+  async function craft_round() {
+    S.craft_next = now() + CFG.CRAFT_EVERY_MS;
+    await drain_stand("a crafting trip");
+    if (!(await open_bank_for_compound())) return go_home();
+    const needs = craft_needs();
+    // v5: the recipe fee (Venom Band: 240,000) is paid from the bag: take what is missing out of the bank first
+    {
+      let fee = 0;
+      for (const nd of needs)
+        fee += ((G.craft[nd.item] || {}).cost || 0) * nd.n;
+      const short = fee + keep_gold() - character.gold;
+      const avail = Number(character.bank && character.bank.gold) || 0;
+      if (fee > 0 && short > 0 && avail > 0) {
+        const amount = Math.min(avail, short + CFG.WITHDRAW_BUFFER);
+        const wd = await call(() => bank_withdraw(amount));
+        if (wd.failed)
+          say(
+            "Crafting: could not withdraw " +
+              amount +
+              " gold for the recipe fee: " +
+              (wd.reason || "?"),
+            "#CF575F"
+          );
+        else
+          await call(() =>
+            wait_for(() => character.gold >= fee + keep_gold(), 4000)
+          );
+      }
+    }
+    // what can be made from what is there
+    const plan = [];
+    for (const nd of needs) {
+      const rec = G.craft[nd.item];
+      let times = nd.n;
+      const short = [];
+      for (const [q, name, lv] of rec.items) {
+        const have = mats_have(name, lv || 0);
+        times = Math.min(times, Math.floor(have / q));
+        if (have < q)
+          short.push(q - have + " more " + name + (lv ? " +" + lv : ""));
+      }
+      if (
+        rec.cost > 0 &&
+        rec.cost * Math.max(1, times) > character.gold - keep_gold()
+      )
+        times = 0;
+      if (times > 0) plan.push({ item: nd.item, rec, times });
+      else {
+        const sig = nd.item + ":" + short.join(",");
+        if (S.craft_sig !== sig)
+          say(
+            "Crafting " +
+              nd.item +
+              " for the Rangers is waiting for materials: " +
+              (short.join(", ") || "gold"),
+            "#CF575F"
+          );
+        S.craft_sig = sig;
+        S.craft_next = now() + CFG.CRAFT_EMPTY_BACKOFF_MS;
+      }
+    }
+    if (!plan.length) return go_home();
+    // take what the recipes need out of the bank (a retrieve takes a whole stack)
+    for (const x of plan) {
+      for (const [q, name, lv0] of x.rec.items) {
+        const lv = lv0 || 0;
+        const need = q * x.times;
+        for (const st of bank_stacks(name, lv).sort((a, b) => b.q - a.q)) {
+          if (bag_qty(name, lv) >= need || free_slots() <= 2) break;
+          const before = bag_qty(name, lv);
+          const res = await call(() => bank_retrieve(st.pack, st.i));
+          const ok = await call(() =>
+            wait_for(() => bag_qty(name, lv) > before, 4000)
+          );
+          if (res.failed || ok.failed) {
+            say(
+              "Could not take " +
+                name +
+                " out of the bank: " +
+                (res.reason || ok.reason),
+              "#CF575F"
+            );
+            break;
+          }
+        }
+        x.times = Math.min(x.times, Math.floor(bag_qty(name, lv) / q));
+      }
+    }
+    for (const x of plan) {
+      const who = x.rec.quest || "craftsman";
+      let npc = find_npc(who);
+      if (!npc) npc = CFG.CRAFT_NPC_FALLBACK[who];
+      if (!npc) {
+        say(
+          "Crafting: cannot place the NPC " + who + " - skipping " + x.item,
+          "#CF575F"
+        );
+        continue;
+      }
+      if (x.times <= 0) continue;
+      if (yield_now()) {
+        say("Crafting: a job is waiting - stopping");
+        S.craft_next = now() + 3000;
+        break;
+      }
+      act("Craft " + x.item, 60 + x.times * 10, true);
+      const r = await travel(
+        { map: npc.map, x: npc.x, y: npc.y },
+        0,
+        "crafting " + x.item
+      );
+      if (r.failed) {
+        say("Crafting: could not reach " + who + ": " + r.reason, "#CF575F");
+        break;
+      }
+      // the game's auto_craft ignores locked / bound / giveaway items and wants the exact level: say which ingredient it will refuse
+      const blocked = [];
+      for (const [q, name, lv] of x.rec.items) {
+        let usable = false;
+        const seen = [];
+        for (let i = 0; i < character.isize; i++) {
+          const it = character.items[i];
+          if (!it || it.name !== name) continue;
+          const bad =
+            (it.l ? "locked " : "") +
+            (it.b ? "bound " : "") +
+            (it.giveaway ? "giveaway " : "") +
+            ((it.level || 0) !== (lv || 0)
+              ? "level +" + (it.level || 0) + " "
+              : "") +
+            ((it.q || 1) < q ? "only " + (it.q || 1) + " in the stack " : "");
+          if (!bad) usable = true;
+          else seen.push(bad.trim());
+        }
+        if (!usable)
+          blocked.push(
+            name +
+              " x" +
+              q +
+              " (" +
+              (seen.length ? seen.join("; ") : "not in the bag") +
+              ")"
+          );
+      }
+      if (blocked.length) {
+        say(
+          "Crafting " +
+            x.item +
+            ": the game will not use " +
+            blocked.join(", ") +
+            ". Locked items need unlocking in the game; bound items cannot be crafted.",
+          "#CF575F"
+        );
+        S.craft_next = now() + CFG.CRAFT_EMPTY_BACKOFF_MS;
+        continue;
+      }
+      for (let k = 0; k < x.times; k++) {
+        const before = bag_qty(x.item);
+        const res = await call(() => auto_craft(x.item));
+        const ok = await call(() =>
+          wait_for(() => bag_qty(x.item) > before, 6000)
+        );
+        if (res.failed || ok.failed) {
+          say(
+            "Crafting " + x.item + " failed: " + (res.reason || ok.reason),
+            "#CF575F"
+          );
+          S.craft_next = now() + CFG.CRAFT_EMPTY_BACKOFF_MS;
+          break;
+        }
+        say("Crafted a " + x.item + " (" + who + ")", "#5BCB5B");
+      }
+    }
+    return go_home();
+  }
+
+  // ===== Christmas event exchange: bank -> NPCs (Winterland) -> sell/bank the rewards. The upgrade / compound rounds then work on what came out. =====
+  const exch_over = () => {
+    if (!CFG.EXCHANGE_END) return false;
+    const t = Date.parse(CFG.EXCHANGE_END);
+    return Number.isFinite(t) && Date.now() > t;
+  };
+  // v5 (Sean 2026-11-18): the two exchange rounds take turns. When both are due, the one whose turn it is goes first, and a round that started (even if a potion / junk job interrupted it) hands the turn to the other.
+  const exch_time_ready = (rd) =>
+    now() >= S[rd === 2 ? "exch2_next" : "exch_next"] &&
+    now() >= S[rd === 2 ? "exch2_empty_until" : "exch_empty_until"];
+  const exch_due = (rd) =>
+    CFG.EXCHANGE_ENABLED &&
+    !exch_over() &&
+    !is_paused() &&
+    !has_jobs() &&
+    exch_time_ready(rd) &&
+    ((S.exch_turn || 1) === rd || !exch_time_ready(rd === 2 ? 1 : 2)) &&
+    exch_space_ok();
+  // not enough bag space: no bank trip at all (logged at most every 30 minutes)
+  function exch_space_ok() {
+    if (free_slots() >= CFG.EXCHANGE_MIN_FREE_SLOTS) return true;
+    if (now() - (S.exch_space_warn || 0) > 30 * 60000) {
+      S.exch_space_warn = now();
+      say(
+        "Exchange run waits: only " +
+          free_slots() +
+          " free bag slots, it needs " +
+          CFG.EXCHANGE_MIN_FREE_SLOTS +
+          " (up to that many non-stackable rewards can land in the bag)",
+        "#CF575F"
+      );
+    }
+    return false;
+  }
+  // lv (optional): only items of exactly that level (recipes need the exact level)
+  const bag_qty = (name, lv) => {
+    let n = 0;
+    for (let i = 0; i < character.isize; i++) {
+      const it = character.items[i];
+      if (
+        it &&
+        it.name === name &&
+        (lv === undefined || (it.level || 0) === lv)
+      )
+        n += it.q || 1;
+    }
+    return n;
+  };
+  const bank_stacks = (name, lv) => {
+    const out = [];
+    for (const pack of CFG.UPGRADE_PACKS) {
+      const arr = character.bank && character.bank[pack];
+      if (Array.isArray(arr))
+        arr.forEach((it, i) => {
+          if (
+            it &&
+            it.name === name &&
+            (lv === undefined || (it.level || 0) === lv)
+          )
+            out.push({ pack, i, q: it.q || 1 });
+        });
+    }
+    return out;
+  };
+  const bag_tally = () => {
+    const t = {};
+    for (let i = 0; i < character.isize; i++) {
+      const it = character.items[i];
+      if (it) t[it.name] = (t[it.name] || 0) + (it.q || 1);
+    }
+    return t;
+  };
+  // exchange one stack that holds exactly the amount wanted; returns how many items were used up
+  async function exchange_stack(slot, name, cap) {
+    let used = 0;
+    for (let n = 0; n < cap + 2; n++) {
+      const it = character.items[slot];
+      if (!it || it.name !== name) break;
+      const q0 = it.q || 1;
+      const res = await paced(() => call(() => exchange(slot)));
+      if (res.failed) {
+        say(
+          "Exchange of " +
+            name +
+            " failed: " +
+            (res.reason || res.response || "unknown"),
+          "#CF575F"
+        );
+        break;
+      }
+      await call(() =>
+        wait_for(() => !(character.q && character.q.exchange), 15000)
+      );
+      await wait(300);
+      const now_it = character.items[slot];
+      const q1 = now_it && now_it.name === name ? now_it.q || 1 : 0;
+      if (q1 >= q0) {
+        say("Exchange of " + name + " used nothing up - stopping", "#CF575F");
+        break;
+      }
+      used += q0 - q1;
+      if (q1 === 0) break;
+    }
+    return used;
+  }
+  // Takes one of each ingredient of the Xmas Box recipe out of the bank (the bank is open), crafts at Leo, returns to the bank and puts
+  // the leftover pieces back. Returns the set of ingredient names (to put back later), or null when the bank could not be reopened.
+  async function xbox_step() {
+    const names = {};
+    const rec = G.craft && G.craft.xbox;
+    if (!CFG.XBOX_ENABLED || !rec || !rec.items) return names;
+    for (const [, name] of rec.items) names[name] = true;
+    let sets = CFG.XBOX_PER_RUN;
+    const short = [];
+    for (const [q, name] of rec.items) {
+      const have = mats_have(name);
+      sets = Math.min(sets, Math.floor(have / q));
+      if (have < q) short.push(name);
+    }
+    if (rec.cost > 0)
+      sets = Math.min(
+        sets,
+        Math.floor((character.gold - keep_gold()) / rec.cost)
+      );
+    if (sets <= 0) {
+      const sig = "xbox:" + short.join(",");
+      if (S.xbox_sig !== sig)
+        say(
+          "Xmas Box: not enough quantum pieces yet (missing " +
+            (short.join(", ") || "gold") +
+            ")"
+        );
+      S.xbox_sig = sig;
+      return names;
+    }
+    if (free_slots() < rec.items.length + 2) {
+      // the pieces are back in the bank before any exchange reward can land, so only the pieces and the box need room here
+      say(
+        "Xmas Box skipped: needs " +
+          (rec.items.length + 2) +
+          " free bag slots, has " +
+          free_slots(),
+        "#CF575F"
+      );
+      return names;
+    }
+    for (const [q, name] of rec.items) {
+      const need = q * sets;
+      for (const st of bank_stacks(name).sort((a, b) => b.q - a.q)) {
+        if (bag_qty(name) >= need) break;
+        const before = bag_qty(name);
+        const res = await call(() => bank_retrieve(st.pack, st.i));
+        const ok = await call(() =>
+          wait_for(() => bag_qty(name) > before, 4000)
+        );
+        if (res.failed || ok.failed) {
+          say(
+            "Xmas Box: could not take " +
+              name +
+              " out of the bank: " +
+              (res.reason || ok.reason),
+            "#CF575F"
+          );
+          break;
+        }
+      }
+      sets = Math.min(sets, Math.floor(bag_qty(name) / q));
+    }
+    if (sets > 0) {
+      const who = rec.quest || "craftsman";
+      const npc = find_npc(who) || CFG.CRAFT_NPC_FALLBACK[who];
+      if (!npc) say("Xmas Box: cannot place the NPC " + who, "#CF575F");
+      else {
+        act("Craft xbox", 60, true);
+        const r = await travel(
+          { map: npc.map, x: npc.x, y: npc.y },
+          0,
+          "crafting a Xmas Box"
+        );
+        if (r.failed)
+          say("Xmas Box: could not reach " + who + ": " + r.reason, "#CF575F");
+        else
+          for (let k = 0; k < sets; k++) {
+            const before = bag_qty("xbox");
+            const res = await call(() => auto_craft("xbox"));
+            const ok = await call(() =>
+              wait_for(() => bag_qty("xbox") > before, 6000)
+            );
+            if (res.failed || ok.failed) {
+              say(
+                "Xmas Box: crafting failed: " +
+                  (res.reason || ok.reason) +
+                  " (locked or bound pieces cannot be crafted)",
+                "#CF575F"
+              );
+              break;
+            }
+            say("Crafted a Xmas Box (" + who + ")", "#5BCB5B");
+          }
+      }
+    }
+    // back to the bank: the pieces left over go home, and the exchange plan below reads the bank again
+    if (!(await open_bank_for_compound())) {
+      go_home();
+      return null;
+    }
+    await put_back_in_bank((it) => !!names[it.name]);
+    return names;
+  }
+  async function exchange_round(rd) {
+    rd = rd === 2 ? 2 : 1; // round 1 = the Christmas NPCs (Winterland), round 2 = everything at Xyn (plan entries with round: 2) + the Xmas Box crafting
+    const KN = rd === 2 ? "exch2_next" : "exch_next";
+    const KE = rd === 2 ? "exch2_empty_until" : "exch_empty_until";
+    const L = rd === 2 ? "Exchange round 2" : "Exchange run";
+    S[KN] = now() + (rd === 2 ? CFG.EXCHANGE2_EVERY_MS : CFG.EXCHANGE_EVERY_MS);
+    S.exch_turn = rd === 2 ? 1 : 2; // the other round is next, whatever happens to this one
+    await drain_stand("an exchange run");
+    if (!(await open_bank_for_compound())) return go_home();
+    if (free_slots() < CFG.EXCHANGE_MIN_FREE_SLOTS) {
+      say(
+        L +
+          " skipped: only " +
+          free_slots() +
+          " free bag slots, it needs " +
+          CFG.EXCHANGE_MIN_FREE_SLOTS,
+        "#CF575F"
+      );
+      return go_home();
+    }
+    const xnames = rd === 2 ? await xbox_step() : {}; // quantum pieces -> Xmas Box at Leo (back to the bank afterwards)
+    if (xnames === null) return go_home();
+    // what is there to do?
+    const plan = [];
+    let soonest = Infinity; // timed entries (every_ms) that are not due yet
+    for (const p of CFG.EXCHANGE_PLAN.filter((q) => (q.round || 1) === rd)) {
+      const def = G.items[p.item];
+      if (!def || !(def.e > 0)) continue;
+      if (
+        p.every_ms &&
+        now() - ((S.exch_last || {})[p.item] || 0) < p.every_ms
+      ) {
+        soonest = Math.min(
+          soonest,
+          ((S.exch_last || {})[p.item] || 0) + p.every_ms - now()
+        );
+        continue;
+      }
+      const have =
+        bag_qty(p.item) + bank_stacks(p.item).reduce((a, b) => a + b.q, 0);
+      const times = Math.min(p.times, Math.floor(have / def.e));
+      if (times > 0) plan.push({ p, def, times, amount: times * def.e });
+    }
+    if (!plan.length) {
+      const back = Math.max(
+        60000,
+        Math.min(CFG.EXCHANGE_EMPTY_BACKOFF_MS, soonest)
+      );
+      S[KE] = now() + back;
+      say(
+        L +
+          ": no event items left in the bag or bank (or the hourly ones are not due yet) - looking again in " +
+          Math.round(back / 60000) +
+          " min"
+      );
+      return go_home();
+    }
+    // the stacks taken out of the bank use bag slots too: 30 must still be free once they are in the bag
+    let stack_slots_needed = 0;
+    for (const x of plan) {
+      let got = bag_qty(x.p.item);
+      for (const st of bank_stacks(x.p.item).sort((a, b) => b.q - a.q)) {
+        if (got >= x.amount) break;
+        got += st.q;
+        stack_slots_needed++;
+      }
+    }
+    if (free_slots() - stack_slots_needed < CFG.EXCHANGE_MIN_FREE_SLOTS) {
+      say(
+        L +
+          " skipped: " +
+          free_slots() +
+          " free bag slots, " +
+          stack_slots_needed +
+          " needed for the event stacks and " +
+          CFG.EXCHANGE_MIN_FREE_SLOTS +
+          " kept free for the rewards",
+        "#CF575F"
+      );
+      return go_home();
+    }
+    const plan_names = {};
+    for (const x of plan) plan_names[x.p.item] = true;
+    for (const p of CFG.EXCHANGE_PLAN) plan_names[p.item] = true;
+    const base_names = {}; // everything he carries now (potions, scrolls, stand stock...) is left alone
+    for (let i = 0; i < character.isize; i++) {
+      const it = character.items[i];
+      if (it && !plan_names[it.name]) base_names[it.name] = true;
+    }
+    // take what the plan needs out of the bank (a retrieve takes a whole stack)
+    for (const x of plan) {
+      let got = bag_qty(x.p.item);
+      for (const st of bank_stacks(x.p.item).sort((a, b) => b.q - a.q)) {
+        if (got >= x.amount || free_slots() <= CFG.EXCHANGE_MIN_FREE_SLOTS)
+          break;
+        const before = bag_qty(x.p.item);
+        const res = await call(() => bank_retrieve(st.pack, st.i));
+        const ok = await call(() =>
+          wait_for(() => bag_qty(x.p.item) > before, 4000)
+        );
+        if (res.failed || ok.failed) {
+          say(
+            "Could not take " +
+              x.p.item +
+              " out of the bank: " +
+              (res.reason || ok.reason),
+            "#CF575F"
+          );
+          break;
+        }
+        got = bag_qty(x.p.item);
+      }
+      x.amount = Math.min(x.amount, Math.floor(got / x.def.e) * x.def.e);
+    }
+    say(L + ": " + plan.map((x) => x.amount + " " + x.p.item).join(", "));
+    const t_before = bag_tally();
+    let yielded = false;
+    for (const x of plan) {
+      if (x.amount <= 0) continue;
+      if (yield_now()) {
+        say(L + ": a job is waiting - stopping before " + x.p.item);
+        yielded = true;
+        S[KN] = now() + 3000;
+        break;
+      }
+      let npc = find_npc(x.p.npc);
+      if (!npc) npc = CFG.EXCHANGE_NPC_FALLBACK[x.p.npc];
+      if (!npc) {
+        say(
+          L + ": cannot place the NPC " + x.p.npc + " - skipping " + x.p.item,
+          "#CF575F"
+        );
+        continue;
+      }
+      act("Exchange " + x.p.item, 50 + x.times * 4, true);
+      if (x.p.every_ms) (S.exch_last = S.exch_last || {})[x.p.item] = now(); // timed entry: the hour starts now, even if the trip fails
+      const r = await travel(
+        { map: npc.map, x: npc.x, y: npc.y },
+        0,
+        "exchanging " + x.p.item
+      );
+      if (r.failed) {
+        say(L + ": could not reach " + x.p.npc + ": " + r.reason, "#CF575F");
+        continue;
+      }
+      let left = x.amount;
+      for (const slot0 of bag_list((it) => it.name === x.p.item).sort(
+        (a, b) => (character.items[b].q || 1) - (character.items[a].q || 1)
+      )) {
+        if (left < x.def.e) break;
+        if (free_slots() < 3) {
+          say(L + ": the bag is nearly full - stopping", "#CF575F");
+          left = 0;
+          break;
+        }
+        let slot = slot0;
+        const it = character.items[slot];
+        if (!it || it.name !== x.p.item) continue;
+        const take = Math.min(it.q || 1, left);
+        const use = Math.floor(take / x.def.e) * x.def.e;
+        if (use < x.def.e) continue;
+        if (use < (it.q || 1)) {
+          const had = bag_list((y) => y.name === x.p.item);
+          const res = await call(() => split(slot, use));
+          const ok = await call(() =>
+            wait_for(
+              () => bag_list((y) => y.name === x.p.item).length > had.length,
+              4000
+            )
+          );
+          if (res.failed || ok.failed) {
+            say(
+              "Could not split " + x.p.item + ": " + (res.reason || ok.reason),
+              "#CF575F"
+            );
+            break;
+          }
+          slot = bag_list(
+            (y) => y.name === x.p.item && (y.q || 1) === use
+          ).find((i) => had.indexOf(i) === -1);
+          if (slot === undefined) break;
+        }
+        left -= await exchange_stack(slot, x.p.item, use);
+      }
+      say("Exchanged " + (x.amount - left) + " " + x.p.item);
+    }
+    // what came out
+    const t_after = bag_tally();
+    const got = [];
+    for (const n in t_after) {
+      if (base_names[n] || plan_names[n]) continue;
+      got.push(t_after[n] - (t_before[n] || 0) + "x " + n);
+    }
+    if (got.length) say("Exchange rewards: " + got.join(", "), "#5BCB5B");
+    const is_reward = (it) =>
+      !!it && !it.l && !base_names[it.name] && !plan_names[it.name];
+    const is_gear = (it) =>
+      !!G.items[it.name] && !!SLOT_OF_TYPE[G.items[it.name].type];
+    const is_sell = (it) =>
+      is_reward(it) &&
+      !is_keeper(it) &&
+      (CFG.EXCHANGE_SELL.indexOf(it.name) !== -1 ||
+        (is_gear(it) &&
+          !(gear_wearable(it) && !!best_target(it, potential_score(it)))));
+    if (bag_list(is_sell).length) {
+      const gnpc = find_npc(CFG.JUNK_SELL_NPC);
+      const r =
+        gnpc &&
+        (await travel(
+          { map: gnpc.map, x: gnpc.x, y: gnpc.y },
+          0,
+          "selling event rewards"
+        ));
+      if (gnpc && !r.failed) {
+        const res = await sell_junk_here(() => bag_list(is_sell));
+        say(
+          "Sold " + res.sold + " event reward(s); gold is now " + character.gold
+        );
+      }
+    }
+    // the rest goes into the bank; the next upgrade / compound round finds it there
+    if (await open_bank_for_compound()) {
+      const n = await put_back_in_bank(
+        (it) =>
+          !!plan_names[it.name] ||
+          !!xnames[it.name] ||
+          (is_reward(it) && !is_sell(it))
+      );
+      if (n) {
+        say("Put " + n + " item(s) from the exchange run into the bank");
+        S.upgrade_next = Math.min(S.upgrade_next, now() + 60000);
+        S.compound_next = Math.min(S.compound_next, now() + 60000);
+      }
+    }
+    return go_home();
+  }
+
+  // ===== budgets survive a reload (compound / upgrade scroll spend), expiring after BUDGET_PERSIST_MS =====
+  function load_budgets() {
+    try {
+      const b = JSON.parse(get("merchant_budgets") || "null");
+      if (b && now() - b.at < CFG.BUDGET_PERSIST_MS) {
+        S.compound_cap = b.cc;
+        S.compound_spent = b.cs || 0;
+        S.upgrade_cap = b.uc;
+        S.upgrade_spent = b.us || 0;
+        say(
+          "Restored scroll budgets: compound " +
+            b.cs +
+            "/" +
+            b.cc +
+            ", upgrade " +
+            b.us +
+            "/" +
+            b.uc
+        );
+      }
+    } catch (e) {}
+  }
+  let budgets_json = "";
+  function persist_budgets() {
+    if (S.compound_cap === null && S.upgrade_cap === null) return;
+    const j = JSON.stringify({
+      cc: S.compound_cap,
+      cs: S.compound_spent,
+      uc: S.upgrade_cap,
+      us: S.upgrade_spent,
+    });
+    if (j === budgets_json) return;
+    budgets_json = j;
+    try {
+      set(
+        "merchant_budgets",
+        JSON.stringify(Object.assign(JSON.parse(j), { at: now() }))
+      );
+    } catch (e) {}
+  }
+
+  // waits at the main-town safe spot for the Ranger after he announced travel_to_main; a new job ends the wait
+  async function hold_at_safe() {
+    if (!at_spot(CFG.MAIN_SAFE_SPOT, 60)) {
+      S.idle_walk = true;
+      try {
+        const r = await travel(
+          CFG.MAIN_SAFE_SPOT,
+          0,
+          "waiting for the Ranger at the main-town safe spot"
+        );
+        if (r.failed && r.reason !== "aborted") await wait(2000);
+      } finally {
+        S.idle_walk = false;
+      }
+      return;
+    }
+    await wait(500);
+  }
+
+  // ============================ SCHEDULER (v5) ============================
+  // The Merchant is ONE sequential loop: a round runs to its next atomic boundary, so two rounds never overlap. What can go
+  // wrong is ORDER and STARVATION (a round that is always due ahead of another one). v5 keeps the v4 order in one table, so the
+  // order is visible in one place, and records per task: runs, last duration, errors, and how often it was due but had to wait.
+  // Order of SCHED.tasks = priority (first due task runs). Ranger jobs, healing, shop, bank stay in the main loop above it.
+  const SCHED = { tasks: [], log_at: Date.now() - 25 * 60000, collide_at: 0 };
+  function sched_add(t) {
+    t.stats = {
+      runs: 0,
+      deferred: 0,
+      errors: 0,
+      last_start: 0,
+      last_end: 0,
+      last_ms: 0,
+      last_err: "",
+    };
+    SCHED.tasks.push(t);
+    return t;
+  }
+  const gear_warn_pre = () => {
+    if (
+      CFG.UPGRADE_ENABLED &&
+      !gear_fresh() &&
+      now() - S.gear_warn_at > 10 * 60000
+    ) {
+      S.gear_warn_at = now();
+      say(
+        S.ranger_gear
+          ? "Upgrade rounds are paused: the last gear report from " +
+              CFG.RANGER_NAME +
+              " is older than 10 minutes"
+          : "Upgrade rounds are waiting for a gear report from " +
+              CFG.RANGER_NAME +
+              " - is he running the newest AutoRanger v4.js?",
+        "#CF575F"
+      );
+    }
+  };
+  const bag_warn_pre = () => {
+    if (
+      free_slots() <= 3 &&
+      !tidy_due() &&
+      now() - (S.tidy_warn || 0) > 10 * 60000
+    ) {
+      // the bag is nearly full but the tidy is not starting: say which condition holds it back
+      S.tidy_warn = now();
+      say(
+        "Bag nearly full (" +
+          free_slots() +
+          " free) but no tidy yet: " +
+          (!CFG.BAG_TIDY
+            ? "BAG_TIDY is off"
+            : has_jobs()
+            ? "a Ranger job is queued"
+            : is_paused()
+            ? "paused (compound_paused is set)"
+            : now() < (S.tidy_next || 0)
+            ? "next tidy in " +
+              Math.round(((S.tidy_next || 0) - now()) / 1000) +
+              " s"
+            : "unknown"),
+        "#CF575F"
+      );
+    }
+  };
+  // PRIORITY ORDER (Sean, 2026-11-15): Ranger jobs, healing, shop and bank runs stay in the main loop above this table; then
+  //   1 manual test button, 2 bag tidy, 3 gear sweep + copy limit, 4 event exchange (time-limited, needs the space the tidy makes),
+  //   5 compound, 6 upgrade, 7 crafting, 8 donation, 9 lottery, 10 Merchant's Luck (off).
+  // v4 ran exchange, donation, lottery, crafting and compound BEFORE the tidy and sweep, and a compound chain (3 s between rounds)
+  // could starve them. A task that has waited longer than CFG.SCHED_MAX_WAIT_MS while others ran jumps the queue (see main loop).
+  // ---- v5: private sale (set("sell_item", "name:level[:price]") in the game console) ----
+  function sale_poll() {
+    if (S.sale_req) return true;
+    try {
+      const v = String(get("sell_item") || "").trim();
+      if (!v) return false;
+      set("sell_item", "");
+      const m = v.match(/^([a-z0-9_]+):(\d+)(?::(\d+))?$/i);
+      if (!m) {
+        say(
+          "sell_item: '" +
+            v +
+            "' is not name:level or name:level:price (example: firebow:4)",
+          "#CF575F"
+        );
+        return false;
+      }
+      S.sale_req = {
+        name: m[1],
+        level: Number(m[2]),
+        price: m[3] ? Number(m[3]) : 0,
+      };
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+  async function private_sale() {
+    const rq = S.sale_req;
+    S.sale_req = null;
+    if (!rq) return;
+    const label = rq.name + " +" + rq.level;
+    const fits = (x) =>
+      !!x &&
+      x.name === rq.name &&
+      (x.level || 0) === rq.level &&
+      !x.l &&
+      !(x.q > 1);
+    const slots = character.slots || {};
+    for (let n = 1; n <= 16; n++)
+      if (fits(slots["trade" + n])) {
+        say("Private sale: " + label + " is already listed on trade" + n);
+        return;
+      }
+    let idx = bag_list(fits)[0];
+    if (idx === undefined) {
+      if (!(await open_bank_for_compound())) return;
+      let found = null;
+      for (const pack of CFG.COMPOUND_PACKS) {
+        const arr = character.bank && character.bank[pack];
+        if (!Array.isArray(arr)) continue;
+        const i = arr.findIndex(fits);
+        if (i >= 0) {
+          found = { pack, i };
+          break;
+        }
+      }
+      if (!found) {
+        say(
+          "Private sale: no unlocked " + label + " in the bag or the bank",
+          "#CF575F"
+        );
+        return;
+      }
+      const before = bag_list(fits).length;
+      const res = await call(() => bank_retrieve(found.pack, found.i));
+      const got = await call(() =>
+        wait_for(() => bag_list(fits).length > before, 4000)
+      );
+      if (res.failed || got.failed) {
+        say(
+          "Private sale: could not take " +
+            label +
+            " out of the bank: " +
+            (res.reason || got.reason),
+          "#CF575F"
+        );
+        return;
+      }
+      idx = bag_list(fits)[0];
+    }
+    let price = rq.price;
+    if (!price) {
+      const val = sell_value(rq.name, rq.level);
+      if (!(val > 0)) {
+        say(
+          'Private sale: this server has no item value function - give a price: set("sell_item", "' +
+            rq.name +
+            ":" +
+            rq.level +
+            ':PRICE"). ' +
+            label +
+            " stays in the bag",
+          "#CF575F"
+        );
+        return;
+      }
+      price = Math.max(1, Math.round(val - CFG.SALE_BELOW_NPC));
+      say(
+        "Private sale: Gabriel would pay about " +
+          Math.round(val) +
+          " for " +
+          label +
+          " (game value " +
+          Math.round(raw_value(rq.name, rq.level)) +
+          " x " +
+          Math.round(flip_factor() * 100) / 100 +
+          "); listing it at " +
+          price +
+          " (" +
+          CFG.SALE_BELOW_NPC +
+          " below)"
+      );
+    }
+    const r = await travel(
+      CFG.STAND_SPOT,
+      0,
+      "private sale: back to the stand"
+    );
+    if (r.failed) {
+      say(
+        "Private sale: could not reach the stand: " +
+          r.reason +
+          " - " +
+          label +
+          " stays in the bag",
+        "#CF575F"
+      );
+      return;
+    }
+    if (!character.stand) {
+      await call(() => open_stand());
+      await wait(500);
+    }
+    let slot = 0;
+    const cs = character.slots || {};
+    for (let n = CFG.SALE_FIRST_SLOT; n <= 16 && !slot; n++)
+      if (!(cs["trade" + n] && cs["trade" + n].name)) slot = n;
+    if (!slot) {
+      say(
+        "Private sale: no free stand slot from trade" +
+          CFG.SALE_FIRST_SLOT +
+          " up - " +
+          label +
+          " stays in the bag",
+        "#CF575F"
+      );
+      return;
+    }
+    const res = await call(() => trade(idx, slot, price, 1));
+    const listed = await call(() =>
+      wait_for(
+        () =>
+          !!(
+            character.slots["trade" + slot] &&
+            character.slots["trade" + slot].name === rq.name
+          ),
+        4000
+      )
+    );
+    if (res.failed || listed.failed)
+      say(
+        "Private sale: listing " +
+          label +
+          " failed: " +
+          (res.reason || listed.reason),
+        "#CF575F"
+      );
+    else
+      say(
+        "Private sale: " +
+          label +
+          " is on the stand (trade" +
+          slot +
+          ") for " +
+          price +
+          " gold",
+        "#58CF40"
+      );
+  }
+  // ---- v5 (Sean 2026-11-20): the Warrior has no basher -> bank trip, then hand it over at the stand where the group waits ----
+  sched_add({
+    name: "kit",
+    label: "Basher for the Warrior",
+    due: () => !!S.kit_call && now() - S.kit_call.at < 20 * 60000 && !has_jobs(),
+    run: async () => {
+      const who = S.kit_call.who;
+      const waiting = () => S.gear_pending.some((p) => p.kit && p.for === who);
+      if (!kit_missing(who)) {
+        S.kit_call = null; // his latest report shows one
+        return say("Basher call: " + who + " has a basher now", "#5BCB5B");
+      }
+      if (!waiting()) await gear_sweep(); // takes the basher out of the bank into the bag and marks it as his (the same sweep as always)
+      const had = waiting();
+      const t0 = now();
+      while (alive() && waiting() && now() - t0 < 150000) {
+        await give_pending_gear(who); // he is waiting at the meeting spot next to the stand
+        if (waiting()) await wait(3000);
+      }
+      if (had && !waiting()) say("Basher call: handed " + who + " his basher", "#5BCB5B");
+      else if (!had) say("Basher call: I have no basher to give " + who + " (none in the bag or the bank): buy a Wooden Basher from Gabriel (about 4,900 g) and put it in my bag", "#CF575F");
+      else say("Basher call: could not reach " + who + " to hand over the basher", "#CF575F");
+      S.kit_call = null;
+    },
+  });
+  sched_add({
+    name: "manual",
+    label: "Compound test",
+    due: () => !!(S.manual && !has_jobs()),
+    run: async () => {
+      const m = S.manual;
+      S.manual = null;
+      await manual_compound_test(m.real);
+    },
+  });
+  // ---- v5: market watch (Ponty) ----
+  const market_price = (it) => {
+    const f = Number(S.market_factor) > 0 ? S.market_factor : CFG.MARKET_MARKUP;
+    return Math.round(raw_value(it.name, it.level || 0) * f);
+  };
+  function market_due() {
+    if (!CFG.MARKET_ENABLED || has_jobs() || is_paused() || !gear_fresh())
+      return false;
+    try {
+      const v = String(get("market_check") || "");
+      if (v) {
+        set("market_check", "");
+        S.market_next = 0;
+      }
+    } catch (e) {}
+    return now() >= (S.market_next || 0);
+  }
+  async function market_round() {
+    S.market_next = now() + CFG.MARKET_EVERY_MS;
+    await drain_stand("the market check");
+    let npc = find_npc(CFG.MARKET_NPC) || CFG.MARKET_NPC_FALLBACK;
+    if (!npc) {
+      say(
+        "Market watch: cannot place " +
+          CFG.MARKET_NPC +
+          " (set MARKET_NPC_FALLBACK)",
+        "#CF575F"
+      );
+      return go_home();
+    }
+    if (
+      CFG.MARKET_BUY &&
+      character.gold - CFG.MARKET_GOLD_FLOOR < CFG.MARKET_MAX_SPEND &&
+      (await open_bank_for_compound())
+    ) {
+      // he carries little gold: take what a visit may spend out of the spare bank gold (leftovers go back with the normal banking)
+      const spare = Math.max(
+        0,
+        (Number(character.bank && character.bank.gold) || 0) -
+          CFG.MARKET_BANK_FLOOR
+      );
+      const amount = Math.floor(
+        Math.min(
+          CFG.MARKET_MAX_SPEND + CFG.MARKET_GOLD_FLOOR - character.gold,
+          spare
+        )
+      );
+      if (amount >= 100000) {
+        const before = character.gold;
+        const wd = await call(() => bank_withdraw(amount));
+        const done = await call(() =>
+          wait_for(() => character.gold >= before + amount - 1, 5000)
+        );
+        if (wd.failed || done.failed)
+          say(
+            "Market watch: withdrawal of " +
+              amount +
+              " failed: " +
+              (wd.reason || done.reason),
+            "#CF575F"
+          );
+        else
+          say(
+            "Market watch: took " +
+              amount +
+              " spare gold out of the bank for purchases"
+          );
+      } else
+        say(
+          "Market watch: no spare bank gold above " +
+            CFG.MARKET_BANK_FLOOR +
+            " for purchases"
+        );
+    }
+    act("Market watch", 60, true);
+    const r = await travel(
+      { map: npc.map, x: npc.x, y: npc.y },
+      0,
+      "market watch at Ponty"
+    );
+    if (r.failed) {
+      say("Market watch: could not reach Ponty: " + r.reason, "#CF575F");
+      return go_home();
+    }
+    const list = await sock_ask("secondhands", undefined, "secondhands", 8000);
+    if (!Array.isArray(list)) {
+      say("Market watch: Ponty gave no list", "#CF575F");
+      return go_home();
+    }
+    const by = {};
+    for (const it of list) {
+      const k =
+        it.name +
+        "|" +
+        (it.level || 0) +
+        "|" +
+        (it.stat_type || "") +
+        "|" +
+        (it.p || "");
+      (by[k] = by[k] || { it, rids: [] }).rids.push(it.rid);
+    }
+    // 1. wearable pieces: per Ranger and slot type ONE piece, the best real score (what he can wear right now, no Dexterity scroll counted);
+    //    among pieces within 5% of the best, the cheapest. Each copy at Ponty goes to one Ranger only.
+    const groups = [];
+    for (const k in by) {
+      const { it, rids } = by[k];
+      const def = G.items[it.name];
+      if (!def || it.l || !gear_wearable(it)) continue;
+      const lvl = it.level || 0;
+      const up = !!def.upgrade && lvl < upg_max(it.name);
+      groups.push({
+        it,
+        def,
+        left: rids.slice(),
+        n: rids.length,
+        real: gear_score(it.name, lvl, { stat_type: it.stat_type }),
+        at_cap: up
+          ? gear_score(it.name, upg_max(it.name), { stat_type: it.stat_type })
+          : null, // upgraded to the cap, no scroll
+        pot: up
+          ? potential_score(it)
+          : gear_score(it.name, lvl, {
+              stat_type: it.stat_type,
+              assume_dex: true,
+            }), // upgraded and with a Dexterity scroll
+        price: market_price(it),
+      });
+    }
+    const fmt = (v) => Math.round(v * 10) / 10;
+    const plan = [];
+    for (const who of roster()) {
+      if (!gear_fresh_for(who)) continue;
+      const types = [...new Set(groups.map((g) => g.def.type))];
+      for (const type of types) {
+        let cands = groups.filter(
+          (g) =>
+            g.def.type === type &&
+            g.left.length &&
+            g.real > worn_floor(g.it, who).score * CFG.GEAR_MARGIN
+        );
+        if (!cands.length) continue;
+        const top = Math.max(...cands.map((g) => g.real));
+        cands = cands
+          .filter((g) => g.real >= top * 0.95)
+          .sort((a, b) => a.price - b.price);
+        const g = cands[0];
+        plan.push({
+          who,
+          g,
+          rid: g.left.shift(),
+          floor: worn_floor(g.it, who).score,
+        });
+      }
+    }
+    plan.sort((a, b) => b.g.real - b.floor - (a.g.real - a.floor));
+    for (const pl of plan.slice(0, 12))
+      say(
+        "Market watch: for " +
+          pl.who +
+          ": " +
+          pl.g.it.name +
+          " +" +
+          (pl.g.it.level || 0) +
+          " (x" +
+          pl.g.n +
+          " at Ponty), score " +
+          fmt(pl.g.real) +
+          " as it is (" +
+          fmt(pl.g.pot) +
+          " fully upgraded with a Dexterity scroll), he wears " +
+          fmt(pl.floor) +
+          ", about " +
+          pl.g.price +
+          " gold",
+        "#58CF40"
+      );
+    // upgrade projects: not better as they are, but would be at +5 (reported only; the upgrade rounds need two copies)
+    const proj = [];
+    for (const g of groups) {
+      if (g.at_cap === null || plan.some((pl) => pl.g === g)) continue;
+      const tg = best_target(g.it, g.at_cap);
+      if (tg && !(g.real > tg.f.score * CFG.GEAR_MARGIN)) proj.push({ g, tg });
+    }
+    for (const pr of proj.slice(0, 4))
+      say(
+        "Market watch: upgrade project: " +
+          pr.g.it.name +
+          " +" +
+          (pr.g.it.level || 0) +
+          " (x" +
+          pr.g.n +
+          ", about " +
+          pr.g.price +
+          " each) would score " +
+          fmt(pr.g.at_cap) +
+          " at +" +
+          upg_max(pr.g.it.name) +
+          " vs " +
+          fmt(pr.tg.f.score) +
+          " worn by " +
+          pr.tg.who
+      );
+    // 2. compound sets
+    const sets = [];
+    for (const k in by) {
+      const { it, rids } = by[k];
+      if (
+        CFG.KEEP_FOR_COMPOUND.indexOf(it.name) === -1 ||
+        it.l ||
+        wc_done(it.name)
+      )
+        continue;
+      const held = upg_copies({ name: it.name, level: it.level || 0 });
+      if (held + rids.length < 3) continue;
+      sets.push({ it, rids, held, price: market_price(it) });
+    }
+    for (const s of sets)
+      say(
+        "Market watch: Ponty has " +
+          s.rids.length +
+          "x " +
+          s.it.name +
+          " +" +
+          (s.it.level || 0) +
+          ", about " +
+          s.price +
+          " each; " +
+          s.held +
+          " held - " +
+          Math.floor((s.held + s.rids.length) / 3) +
+          " compound(s) possible",
+        "#58CF40"
+      );
+    if (!plan.length && !sets.length)
+      say(
+        "Market watch: " +
+          list.length +
+          " item(s) at Ponty, nothing that beats what the Rangers wear and no compound set to complete"
+      );
+    if (!CFG.MARKET_BUY) {
+      if (plan.length || sets.length)
+        say("Market watch: report only (MARKET_BUY is false) - nothing bought");
+      return go_home();
+    }
+    // 3. buy within the limits
+    let spent = 0;
+    const buy = async (it, rid, est, why) => {
+      const g0 = character.gold;
+      const n0 = bag_list(
+        (x) => x.name === it.name && (x.level || 0) === (it.level || 0)
+      ).length;
+      await sock_ask("sbuy", { rid }, "sbuy", 3000);
+      const ok = await call(() =>
+        wait_for(
+          () =>
+            bag_list(
+              (x) => x.name === it.name && (x.level || 0) === (it.level || 0)
+            ).length > n0,
+          4000
+        )
+      );
+      if (ok.failed) {
+        say(
+          "Market watch: buying " +
+            it.name +
+            " +" +
+            (it.level || 0) +
+            " did not work (nothing arrived) - buying is switched off until restart",
+          "#CF575F"
+        );
+        CFG.MARKET_BUY = false;
+        return false;
+      }
+      const paid = g0 - character.gold;
+      const raw = raw_value(it.name, it.level || 0);
+      if (paid > 0 && raw >= 1000) S.market_factor = paid / raw;
+      say(
+        "Market watch: bought " +
+          it.name +
+          " +" +
+          (it.level || 0) +
+          " for " +
+          paid +
+          " gold (estimate " +
+          est +
+          ", game value " +
+          Math.round(raw) +
+          "; paid/value = " +
+          (raw ? Math.round((paid / raw) * 100) / 100 : "?") +
+          ") - " +
+          why,
+        "#58CF40"
+      );
+      spent += Math.max(0, paid);
+      return true;
+    };
+    for (const pl of plan) {
+      const price = pl.g.price;
+      const why_not =
+        price > CFG.MARKET_MAX_PRICE_EACH
+          ? "dearer than MARKET_MAX_PRICE_EACH"
+          : spent + price > CFG.MARKET_MAX_SPEND
+          ? "over MARKET_MAX_SPEND"
+          : character.gold - price < CFG.MARKET_GOLD_FLOOR
+          ? "not enough gold in the bag above MARKET_GOLD_FLOOR (" +
+            character.gold +
+            ")"
+          : "";
+      if (why_not) {
+        say(
+          "Market watch: not buying " +
+            pl.g.it.name +
+            " +" +
+            (pl.g.it.level || 0) +
+            " for " +
+            pl.who +
+            ": " +
+            why_not
+        );
+        continue;
+      }
+      if (!(await buy(pl.g.it, pl.rid, price, "for " + pl.who))) break;
+    }
+    if (CFG.MARKET_BUY && CFG.MARKET_COMPOUND_BUY) {
+      for (const s of sets) {
+        if ((s.it.level || 0) > CFG.MARKET_COMPOUND_MAX_LEVEL) {
+          say(
+            "Market watch: not buying " +
+              s.it.name +
+              " +" +
+              (s.it.level || 0) +
+              " for compounding: above MARKET_COMPOUND_MAX_LEVEL (+" +
+              CFG.MARKET_COMPOUND_MAX_LEVEL +
+              ")"
+          );
+          continue;
+        }
+        const want = Math.min(
+          s.rids.length,
+          CFG.MARKET_COMPOUND_MAX_COPIES,
+          Math.max(0, 3 - s.held)
+        );
+        for (let i = 0; i < want; i++) {
+          if (
+            s.price > CFG.MARKET_COMPOUND_MAX_EACH ||
+            spent + s.price > CFG.MARKET_MAX_SPEND ||
+            character.gold - s.price < CFG.MARKET_GOLD_FLOOR
+          )
+            break;
+          if (
+            !(await buy(s.it, s.rids[i], s.price, "to complete a compound set"))
+          )
+            break;
+        }
+      }
+    }
+    // 4. v5: ingredients of a CRAFT_TARGETS item (Venom Band: Verdant Core, Poison Sacks, Snake Fangs, Ring of Dexterity +2) - what is missing for this run's crafts
+    if (CFG.MARKET_BUY && CFG.MARKET_CRAFT_BUY) {
+      for (const nd of craft_needs().filter((x) => x.target)) {
+        const rec = G.craft && G.craft[nd.item];
+        if (!rec) continue;
+        for (const [q, name, lv0] of rec.items) {
+          const lv = lv0 || 0;
+          let missing = q * nd.n - mats_have(name, lv);
+          for (const e of list) {
+            if (missing <= 0) break;
+            if (!e || e.name !== name || (e.level || 0) !== lv || e.l) continue;
+            const units = e.q || 1;
+            const price = Math.round(
+              raw_value(name, lv) *
+                (Number(S.market_factor) > 0
+                  ? S.market_factor
+                  : CFG.MARKET_MARKUP) *
+                units
+            );
+            if (units > missing + CFG.MARKET_CRAFT_OVERBUY) continue; // a listing far bigger than the need: leave it
+            if (
+              price > CFG.MARKET_MAX_PRICE_EACH ||
+              spent + price > CFG.MARKET_MAX_SPEND ||
+              character.gold - price < CFG.MARKET_GOLD_FLOOR
+            ) {
+              say(
+                "Market watch: not buying " +
+                  units +
+                  "x " +
+                  name +
+                  (lv ? " +" + lv : "") +
+                  " for the " +
+                  nd.item +
+                  " (about " +
+                  price +
+                  "): over the price or spending limit"
+              );
+              continue;
+            }
+            const g0 = character.gold;
+            const n0 = bag_qty(name, lv);
+            await sock_ask("sbuy", { rid: e.rid }, "sbuy", 3000);
+            const ok = await call(() =>
+              wait_for(() => bag_qty(name, lv) > n0, 4000)
+            );
+            if (ok.failed) {
+              say(
+                "Market watch: buying " +
+                  name +
+                  " for the " +
+                  nd.item +
+                  " did not work (nothing arrived)",
+                "#CF575F"
+              );
+              break;
+            }
+            const paid = g0 - character.gold;
+            spent += Math.max(0, paid);
+            missing -= units;
+            e.l = true; // taken
+            say(
+              "Market watch: bought " +
+                units +
+                "x " +
+                name +
+                (lv ? " +" + lv : "") +
+                " for " +
+                paid +
+                " gold (estimate " +
+                price +
+                ") - for the " +
+                nd.item,
+              "#58CF40"
+            );
+          }
+        }
+      }
+    }
+    return go_home();
+  }
+  // ---- v5: manual sell round (top button "Sell round", or set("sell_round", "1")): the bank junk sweep, surplus copies and the bag tidy, now ----
+  function sell_now_poll() {
+    if (S.sell_now) return true;
+    try {
+      if (String(get("sell_round") || "")) {
+        set("sell_round", "");
+        S.sell_now = true;
+      }
+    } catch (e) {}
+    return !!S.sell_now;
+  }
+  async function sell_round_now() {
+    S.sell_now = false;
+    say(
+      "Manual sell round: bank junk and surplus first, then the bag",
+      "#51D2E1"
+    );
+    try {
+      await gear_sweep(); // opens the bank: bank junk to Gabriel, surplus copies, bank space; then walks home
+    } catch (e) {
+      say(
+        "Manual sell round: the bank part failed: " + ((e && e.message) || e),
+        "#CF575F"
+      );
+    }
+    if (has_jobs()) return;
+    S.tidy_next = 0;
+    await bag_tidy(); // the bag: junk, surplus, stackables to the bank
+    say("Manual sell round: done, gold is now " + character.gold, "#58CF40");
+  }
+  // ---- v5: manual hold (console only: set("hold_at", "lostandfound" | "ponty" | "release"); the "Go Lost&Found" and "Go Ponty" buttons were removed) ----
+  // He walks to the NPC and STAYS there (no rounds, no stand, no walking home) so Sean can run commands by hand. A Ranger job still takes
+  // him away; afterwards he walks back. "Release" (or Re-engage) ends it.
+  const HOLD_NPCS = {
+    lostandfound: "lostandfound",
+    ponty: "secondhands",
+    secondhands: "secondhands",
+  };
+  function hold_poll() {
+    try {
+      const v = String(get("hold_at") || "").toLowerCase();
+      if (v) {
+        set("hold_at", "");
+        if (v === "release" || v === "off") S.hold = null;
+        else if (HOLD_NPCS[v])
+          S.hold = {
+            npc: HOLD_NPCS[v],
+            label: v === "lostandfound" ? "Lost and Found" : "Ponty",
+          };
+        else
+          say(
+            "Manual hold: unknown place '" +
+              v +
+              "' (use lostandfound, ponty or release)",
+            "#CF575F"
+          );
+      }
+    } catch (e) {}
+    return !!S.hold;
+  }
+  async function hold_at_npc() {
+    const h = S.hold;
+    if (!h) return;
+    await drain_stand("a manual hold");
+    const npc =
+      find_npc(h.npc) ||
+      (h.npc === "secondhands" ? CFG.MARKET_NPC_FALLBACK : null);
+    if (!npc) {
+      say(
+        "Manual hold: cannot place the NPC " + h.npc + " (" + h.label + ")",
+        "#CF575F"
+      );
+      S.hold = null;
+      return;
+    }
+    const r = await travel(
+      { map: npc.map, x: npc.x, y: npc.y },
+      0,
+      "manual hold at " + h.label
+    );
+    if (r.failed) {
+      say(
+        "Manual hold: could not reach " + h.label + ": " + r.reason,
+        "#CF575F"
+      );
+      if (r.reason !== "aborted") S.hold = null;
+      return;
+    }
+    say(
+      "Manual hold: at " +
+        h.label +
+        " (" +
+        npc.map +
+        " " +
+        Math.round(npc.x) +
+        "," +
+        Math.round(npc.y) +
+        '). Staying here until \'Release\' (or set("hold_at", "release")). A Ranger job still takes him away and he walks back afterwards.',
+      "#58CF40"
+    );
+    while (alive() && S.hold === h && !has_jobs()) {
+      hold_poll();
+      await wait(1000);
+    }
+    if (S.hold === h) return; // a job interrupted: the task is due again afterwards
+    say("Manual hold: released - going home", "#51D2E1");
+    await go_home();
+  }
+  sched_add({
+    name: "hold",
+    label: "Manual hold",
+    due: () => !has_jobs() && hold_poll(),
+    run: () => hold_at_npc(),
+  });
+  // ---- v5: "Bank excess" (top button, or set("bank_excess", "1")): everything in the bag except the potions and the stand stock goes to the bank ----
+  function bank_excess_poll() {
+    if (S.bank_excess) return true;
+    try {
+      if (String(get("bank_excess") || "")) {
+        set("bank_excess", "");
+        S.bank_excess = true;
+      }
+    } catch (e) {}
+    return !!S.bank_excess;
+  }
+  const keeps_in_bag = (it) =>
+    /^stand\d/.test(it.name) || // the Merchant's Stand itself (bag slot 0) never leaves the bag
+    /^[hm]pot\d/.test(it.name) ||
+    [CFG.HP_POTION, CFG.MP_POTION].includes(it.name) ||
+    CFG.STAND_STOCK.some((x) => x.name === it.name) ||
+    CFG.STAND_LISTINGS.some((x) => x.name === it.name);
+  async function bank_excess_now() {
+    S.bank_excess = false;
+    await drain_stand("a bag emptying");
+    if (!(await open_bank_for_compound())) {
+      say("Bank excess: could not open the bank", "#CF575F");
+      return go_home();
+    }
+    const n = await put_back_in_bank((it) => !keeps_in_bag(it));
+    const left = [];
+    for (let i = 0; i < character.isize; i++) {
+      const it = character.items[i];
+      if (it && !keeps_in_bag(it))
+        left.push(it.name + (it.q > 1 ? " x" + it.q : ""));
+    }
+    say(
+      "Bank excess: " +
+        n +
+        " item stack(s) moved to the bank" +
+        (left.length
+          ? "; still in the bag (could not store): " + left.join(", ")
+          : "; the bag now holds only potions / stand stock"),
+      left.length ? "#CF575F" : "#58CF40"
+    );
+    S.upgrade_next = Math.min(S.upgrade_next, now() + 60000);
+    S.compound_next = Math.min(S.compound_next, now() + 60000);
+    return go_home();
+  }
+  sched_add({
+    name: "bankxs",
+    label: "Bank excess",
+    due: () => !has_jobs() && bank_excess_poll(),
+    run: () => bank_excess_now(),
+  });
+  sched_add({
+    name: "sellnow",
+    label: "Sell round",
+    due: () => !has_jobs() && sell_now_poll(),
+    run: () => sell_round_now(),
+  });
+  sched_add({
+    name: "sale",
+    label: "Private sale",
+    due: () => !has_jobs() && sale_poll(),
+    run: () => private_sale(),
+  });
+  sched_add({
+    name: "tidy",
+    label: "Bag tidy",
+    pre: bag_warn_pre,
+    due: () => tidy_due(),
+    run: () => bag_tidy(),
+    on: () => CFG.BAG_TIDY,
+    next: () => S.tidy_next || 0,
+  });
+  sched_add({
+    name: "sweep",
+    label: "Gear sweep",
+    due: () => sweep_due(),
+    run: () => gear_sweep(),
+    on: () => CFG.GEAR_SWEEP || (CFG.SURPLUS_SELL && CFG.SURPLUS_COPIES),
+    next: () =>
+      Math.min(
+        S.sweep_last + CFG.GEAR_SWEEP_STANDALONE_MS,
+        CFG.SURPLUS_COPIES
+          ? (S.copies_last || 0) + CFG.GEAR_SWEEP_STANDALONE_MS
+          : Infinity
+      ),
+  });
+  sched_add({
+    name: "mluck_town",
+    label: "Merchant's Luck (Grinch, town)",
+    due: () => mluck_town_due(),
+    run: () => mluck_town_round(),
+    on: () => CFG.MLUCK_GRINCH && grinch_live(),
+    next: () => S.mluck_town_next || 0,
+  });
+  sched_add({
+    name: "mluck_party",
+    label: "Merchant's Luck (party stop)",
+    due: () => mluck_party_due(),
+    run: () => mluck_party_round(),
+    on: () => CFG.MLUCK_PARTY,
+    next: () => 0,
+  });
+  sched_add({
+    name: "exchange",
+    label: "Exchange run",
+    due: () => exch_due(1),
+    run: () => exchange_round(1),
+    on: () => CFG.EXCHANGE_ENABLED,
+    next: () => Math.max(S.exch_next, S.exch_empty_until || 0),
+  });
+  sched_add({
+    name: "exchange2",
+    label: "Exchange round 2 (Xyn)",
+    due: () => exch_due(2),
+    run: () => exchange_round(2),
+    on: () => CFG.EXCHANGE_ENABLED,
+    next: () => Math.max(S.exch2_next, S.exch2_empty_until || 0),
+  });
+  sched_add({
+    name: "compound",
+    label: "Compound round",
+    due: () => comp_due(),
+    run: () => compound_round(),
+    on: () => CFG.COMPOUND_ENABLED,
+    next: () => S.compound_next,
+  });
+  sched_add({
+    name: "upgrade",
+    label: "Upgrade round",
+    pre: gear_warn_pre,
+    due: () => upg_due(),
+    run: () => upgrade_round(),
+    on: () => CFG.UPGRADE_ENABLED,
+    next: () => S.upgrade_next,
+  });
+
+  sched_add({
+    name: "craft",
+    label: "Crafting",
+    due: () => craft_due(),
+    run: () => craft_round(),
+    on: () => CFG.CRAFT_ENABLED,
+    next: () => S.craft_next,
+  });
+  sched_add({
+    name: "donate",
+    label: "Donation",
+    due: () => donate_due(),
+    run: () => donate_round(),
+    on: () => CFG.DONATE_ENABLED,
+    next: () => S.donate_next,
+  });
+  sched_add({
+    name: "lottery",
+    label: "Lottery",
+    due: () => lottery_due(),
+    run: () => lottery_round(),
+    on: () => CFG.LOTTERY_ENABLED,
+    next: () => S.lottery_next,
+  });
+  sched_add({
+    name: "market",
+    label: "Market watch",
+    due: () => market_due(),
+    run: () => market_round(),
+    on: () => CFG.MARKET_ENABLED,
+    next: () => S.market_next,
+  });
+  sched_add({
+    name: "mluck",
+    label: "Merchant's Luck",
+    due: () => mluck_due(),
+    run: () => mluck_round(),
+    on: () => mluck_on(),
+    next: () => S.mluck_next || 0,
+  });
+
+  // SIDE-EFFECT-FREE "could run now" checks, for the "also due" counters only (the real due() functions log or move timers).
+  const SCHED_READY = {
+    exchange: () =>
+      CFG.EXCHANGE_ENABLED &&
+      !exch_over() &&
+      !is_paused() &&
+      !has_jobs() &&
+      now() >= S.exch_next &&
+      now() >= S.exch_empty_until &&
+      free_slots() >= CFG.EXCHANGE_MIN_FREE_SLOTS,
+    exchange2: () =>
+      CFG.EXCHANGE_ENABLED &&
+      !exch_over() &&
+      !is_paused() &&
+      !has_jobs() &&
+      now() >= S.exch2_next &&
+      now() >= S.exch2_empty_until &&
+      free_slots() >= CFG.EXCHANGE_MIN_FREE_SLOTS,
+    donate: () => donate_due(),
+    lottery: () => lottery_due(),
+    craft: () =>
+      CFG.CRAFT_ENABLED &&
+      !is_paused() &&
+      !has_jobs() &&
+      now() >= S.craft_next &&
+      free_slots() >= CFG.CRAFT_MIN_FREE_SLOTS,
+    compound: () => comp_due(),
+    tidy: () => tidy_due(),
+    sweep: () =>
+      (CFG.GEAR_SWEEP || (CFG.SURPLUS_SELL && CFG.SURPLUS_COPIES)) &&
+      !has_jobs() &&
+      roster().every(gear_fresh_for) &&
+      now() >=
+        Math.min(
+          S.sweep_last + CFG.GEAR_SWEEP_STANDALONE_MS,
+          CFG.SURPLUS_COPIES
+            ? (S.copies_last || 0) + CFG.GEAR_SWEEP_STANDALONE_MS
+            : Infinity
+        ),
+    upgrade: () => upg_due(),
+  };
+  const sched_ready = (t) => {
+    const f = SCHED_READY[t.name];
+    try {
+      return !!f && !!f();
+    } catch (e) {
+      return false;
+    }
+  };
+  const sched_min = (ms) =>
+    ms < 60000 ? Math.round(ms / 1000) + "s" : Math.round(ms / 60000) + "m";
+  // ---- hourly status report (Sean 2026-11-20) ----
+  // every character adds a "stat" block to the gear report it sends every minute; the XP gained is summed from the samples (a level-up counts the rest of the old level plus the new XP)
+  function stat_note(name, st) {
+    if (!st || typeof st !== "object") return;
+    const num = (v, lo, hi) =>
+      Number.isFinite(+v) ? Math.max(lo, Math.min(hi, Math.floor(+v))) : 0;
+    const cur = {
+      level: num(st.level, 0, 200),
+      xp: num(st.xp, 0, 1e13),
+      max_xp: num(st.max_xp, 0, 1e13),
+      free: num(st.free, 0, 200),
+      deaths: num(st.deaths, 0, 1e6),
+      gold: num(st.gold, 0, 1e13),
+      farm: typeof st.farm === "string" ? st.farm.slice(0, 20) : "",
+    };
+    const dr = {}; // looted items, counted by the character since its script started
+    if (st.drops && typeof st.drops === "object")
+      for (const n of Object.keys(st.drops).slice(0, 60)) {
+        const q = num(st.drops[n], 0, 1e9);
+        if (q > 0 && /^[a-z0-9_]{1,40}$/i.test(n)) dr[n] = q;
+      }
+    // chest diagnostics the Warrior / Priest send (Sean 2026-11-20): chests seen, loot calls made with a chest in view, chests opened, items received, failed calls
+    let ch = null;
+    if (st.chests && typeof st.chests === "object") {
+      ch = {};
+      for (const k of ["seen", "tries", "opened", "items", "fails"]) ch[k] = num(st.chests[k], 0, 1e9);
+      ch.last_fail = typeof st.chests.last_fail === "string" ? st.chests.last_fail.replace(/[^\w .:,'-]/g, "").slice(0, 40) : "";
+    }
+    const p =
+      S.st[name] ||
+      (S.st[name] = {
+        gain: 0,
+        last: null,
+        cur: null,
+        deaths0: cur.deaths,
+        at: 0,
+        drops: {},
+        drops_last: null,
+      });
+    if (ch) {
+      // counted per hour from the changes between two reports (a smaller number = the script restarted: count from zero again)
+      p.ch = p.ch || { seen: 0, tries: 0, opened: 0, items: 0, fails: 0, last_fail: "" };
+      for (const k of ["seen", "tries", "opened", "items", "fails"]) {
+        const was = p.ch_last ? p.ch_last[k] : 0;
+        p.ch[k] += ch[k] >= was ? ch[k] - was : ch[k];
+      }
+      if (ch.last_fail) p.ch.last_fail = ch.last_fail;
+      p.ch_last = ch;
+    }
+    if (p.last) {
+      if (cur.level === p.last.level) p.gain += Math.max(0, cur.xp - p.last.xp);
+      else if (cur.level > p.last.level)
+        p.gain += Math.max(0, p.last.max_xp - p.last.xp) + cur.xp;
+    }
+    if (p.drops_last) {
+      // new since the last sample (a smaller count = the character's script restarted: count from zero again)
+      for (const n of Object.keys(dr)) {
+        const was = p.drops_last[n] || 0;
+        const d = dr[n] >= was ? dr[n] - was : dr[n];
+        if (d > 0) p.drops[n] = (p.drops[n] || 0) + d;
+      }
+    }
+    p.drops_last = dr;
+    if (cur.deaths < p.deaths0) p.deaths0 = cur.deaths; // the script restarted: its counter began again
+    p.last = { level: cur.level, xp: cur.xp, max_xp: cur.max_xp };
+    p.cur = cur;
+    p.at = now();
+  }
+  function bank_note() {
+    try {
+      if (character.bank && typeof character.bank.gold === "number")
+        S.bank_seen = {
+          gold: character.bank.gold,
+          free: bank_free_slots(),
+          at: now(),
+        };
+    } catch (e) {}
+  }
+  setInterval(bank_note, 20000);
+  const short_n = (n) => {
+    const a = Math.abs(n);
+    const t =
+      a >= 1e9
+        ? (n / 1e9).toFixed(2) + "B"
+        : a >= 1e6
+        ? (n / 1e6).toFixed(2) + "M"
+        : a >= 1e3
+        ? (n / 1e3).toFixed(1) + "k"
+        : String(Math.round(n));
+    return t;
+  };
+  const signed = (n) => (n >= 0 ? "+" : "-") + short_n(Math.abs(n));
+  const iso_now = () => {
+    try {
+      return new Date().toISOString();
+    } catch (e) {
+      return String(now());
+    }
+  };
+  // keep the report in the game's storage and post it to the Google Sheet (fire and forget: a no-cors POST cannot be read back)
+  function report_out(rows) {
+    try {
+      let hist = [];
+      try {
+        hist = JSON.parse(get("status_history") || "[]");
+        if (!Array.isArray(hist)) hist = [];
+      } catch (e) {
+        hist = [];
+      }
+      hist.push({ at: iso_now(), rows });
+      set("status_history", JSON.stringify(hist.slice(-CFG.REPORT_HISTORY)));
+    } catch (e) {}
+    let url = CFG.REPORT_URL;
+    let token = CFG.REPORT_TOKEN;
+    try {
+      url = String(get("report_url") || url || "");
+      token = String(get("report_token") || token || "");
+    } catch (e) {}
+    if (!url) return say("Report sheet: no URL set (REPORT_URL in the CFG, or set('report_url','...')) - the report stays in the game's storage only", "#E1A951");
+    say("Report sheet: sending " + rows.length + " row(s) to " + url.replace(/^https?:\/\//, "").slice(0, 40) + "... (token " + (token ? "set" : "EMPTY") + ")", "#8AB4D0");
+    const sent_at = now();
+    let answered = false;
+    setTimeout(() => {
+      if (!answered) say("Report sheet: no answer from the web app after 30 s - the request is still pending (check the network / the web app deployment)", "#E1A951");
+    }, 30000);
+    try {
+      const f =
+        typeof fetch === "function"
+          ? fetch
+          : parent && parent.fetch
+          ? parent.fetch.bind(parent)
+          : null;
+      if (!f)
+        return say(
+          "Report sheet: this browser has no fetch - the report stays in the game's storage only",
+          "#E1A951"
+        );
+      Promise.resolve(
+        f(url, {
+          method: "POST",
+          mode: "no-cors",
+          headers: { "Content-Type": "text/plain;charset=utf-8" },
+          body: JSON.stringify({ token, rows }),
+        })
+      ).then(
+        () => {
+          answered = true;
+          say(
+            "Report sheet: " +
+              rows.length +
+              " row(s) sent in " + Math.round((now() - sent_at) / 100) / 10 + " s (the answer cannot be read back: check the sheet)",
+            "#8AB4D0"
+          );
+        },
+        (e) => {
+          answered = true;
+          say(
+            "Report sheet: sending failed: " + ((e && e.message) || e),
+            "#E1A951"
+          );
+        }
+      );
+    } catch (e) {
+      say(
+        "Report sheet: sending failed: " + ((e && e.message) || e),
+        "#E1A951"
+      );
+    }
+  }
+  // looted items without the Christmas ones, most first: [[name, qty], ...]
+  function drops_list(o) {
+    const out = [];
+    for (const n of Object.keys(o || {})) {
+      if ((CFG.DROPS_SKIP || []).indexOf(n) !== -1) continue;
+      try {
+        if (CFG.DROPS_SKIP_HOLIDAYS && G.items[n] && G.items[n].set === "holidays") continue;
+      } catch (e) {}
+      if (o[n] > 0) out.push([n, o[n]]);
+    }
+    return out.sort((a, b) => b[1] - a[1]);
+  }
+  const drops_text = (l, max) =>
+    l
+      .slice(0, max || 99)
+      .map((x) => x[1] + "x " + x[0])
+      .join(", ") + (max && l.length > max ? ", +" + (l.length - max) + " more" : "");
+  function status_report() {
+    try {
+      bank_note();
+      const parts = [];
+      const rows = []; // one row per character for the sheet: time, who, level, xp gained, % of level, deaths, bag free, farm, gold, bank gold, bank free slots
+      const stamp = iso_now();
+      let farm = "";
+      for (const name of Object.keys(S.st)) {
+        const p = S.st[name];
+        if (!p.cur) continue;
+        const pct = p.cur.max_xp
+          ? Math.round((p.gain / p.cur.max_xp) * 1000) / 10
+          : 0;
+        const dead = p.cur.deaths - p.deaths0;
+        const silent = now() - p.at > CFG.STATUS_STALE_MS;
+        const dl = drops_list(p.drops);
+        if (p.cur.farm) farm = p.cur.farm;
+        parts.push(
+          name +
+            " L" +
+            p.cur.level +
+            " " +
+            signed(p.gain) +
+            " xp (" +
+            pct +
+            "% of a level)" +
+            ", " +
+            dead +
+            " death" +
+            (dead === 1 ? "" : "s") +
+            ", " +
+            p.cur.free +
+            " bag slots free" +
+            (dl.length ? ", drops: " + drops_text(dl, 8) : "") +
+            (p.ch
+              ? ", chests: seen " + p.ch.seen + " / loot calls " + p.ch.tries + " / opened " + p.ch.opened + " / items " + p.ch.items + (p.ch.fails ? " / failed " + p.ch.fails + (p.ch.last_fail ? " (" + p.ch.last_fail + ")" : "") : "")
+              : "") +
+            (silent
+              ? " [no report for " +
+                Math.round((now() - p.at) / 60000) +
+                " min]"
+              : "")
+        );
+        rows.push([
+          stamp,
+          name,
+          p.cur.level,
+          p.gain,
+          pct,
+          dead,
+          p.cur.free,
+          p.cur.farm,
+          p.cur.gold,
+          "",
+          "",
+          drops_text(dl), // column 12: what was looted (Christmas items left out), e.g. "12x beewings, 3x poison"
+        ]);
+        p.drops = {};
+        if (p.ch) p.ch = { seen: 0, tries: 0, opened: 0, items: 0, fails: 0, last_fail: "" };
+        p.gain = 0;
+        p.deaths0 = p.cur.deaths;
+      }
+      const gold = Math.floor(character.gold || 0);
+      const bank = S.bank_seen;
+      const prev = S.rep_prev;
+      const mins = S.rep_at ? Math.round((now() - S.rep_at) / 60000) : null;
+      const money =
+        "Goodies L" +
+        character.level +
+        " gold " +
+        short_n(gold) +
+        (prev ? " (" + signed(gold - prev.gold) + ")" : "") +
+        ", " +
+        free_slots() +
+        " bag slots free" +
+        (bank
+          ? "; bank " +
+            short_n(bank.gold) +
+            (prev && prev.bank != null
+              ? " (" + signed(bank.gold - prev.bank) + ")"
+              : "") +
+            ", " +
+            bank.free +
+            " item slots free (seen " +
+            Math.max(0, Math.round((now() - bank.at) / 60000)) +
+            " min ago)"
+          : "; bank not seen yet");
+      say(
+        "Hourly report" +
+          (mins ? " (last " + mins + " min)" : " (since the script started)") +
+          (farm ? " - farming " + farm : "") +
+          ": " +
+          (parts.length ? parts.join(" | ") : "no party reports yet") +
+          " | " +
+          money,
+        "#8AB4D0"
+      );
+      rows.push([
+        stamp,
+        "Goodies",
+        character.level,
+        "",
+        "",
+        "",
+        free_slots(),
+        "",
+        gold,
+        bank ? bank.gold : "",
+        bank ? bank.free : "",
+      ]);
+      S.rep_prev = { gold, bank: bank ? bank.gold : null };
+      S.rep_at = now();
+      report_out(rows);
+    } catch (e) {
+      say("Hourly report failed: " + ((e && e.message) || e), "#CF575F");
+    }
+  }
+  S.rep_at = now();
+  setInterval(() => {
+    if (CFG.STATUS_REPORT && alive()) status_report();
+  }, CFG.STATUS_REPORT_MS);
+  setInterval(() => {
+    try {
+      if (String(get("status_report") || "") === "1") {
+        set("status_report", "");
+        status_report();
+      }
+    } catch (e) {}
+  }, 10000);
+  function sched_status() {
+    const parts = [];
+    for (const t of SCHED.tasks) {
+      if (!t.next) continue;
+      if (t.on && !t.on()) {
+        parts.push(t.name + " off");
+        continue;
+      }
+      const n = t.next();
+      let s =
+        t.name +
+        " " +
+        (!Number.isFinite(n) || n <= now()
+          ? sched_ready(t) // timer is up: "ready" only if the round would really start now, otherwise "idle" (nothing to do / conditions not met)
+            ? "ready"
+            : "idle"
+          : "in " + sched_min(n - now()));
+      const st = t.stats;
+      if (st.runs)
+        s +=
+          " (ran " +
+          st.runs +
+          "x, last " +
+          sched_min(now() - st.last_end) +
+          " ago, took " +
+          sched_min(st.last_ms) +
+          (st.errors ? ", " + st.errors + " errors" : "") +
+          ")";
+      if (st.deferred) s += " [waited " + st.deferred + "x]";
+      parts.push(s);
+    }
+    if (PACE.n)
+      parts.push(
+        "paced requests " +
+          PACE.n +
+          " (held back " +
+          Math.round(PACE.held_ms / 1000) +
+          "s)"
+      );
+    say("Schedule: " + parts.join("; "), "#8AB4D0");
+  }
+  setInterval(() => {
+    try {
+      if (String(get("sched_status") || "") === "1") {
+        set("sched_status", "");
+        sched_status();
+      }
+    } catch (e) {}
+  }, 10000);
+  async function sched_run(t, sm) {
+    // note the tasks whose timers are also up: they wait their turn (data for tuning the order)
+    const waiting = SCHED.tasks.filter((o) => o !== t && sched_ready(o));
+    for (const o of SCHED.tasks) {
+      if (o === t) o.wait_since = 0;
+      else if (waiting.includes(o)) {
+        o.stats.deferred++;
+        if (!o.wait_since) o.wait_since = now();
+      } else o.wait_since = 0; // not due any more (paused, job queued, ...): the waiting clock starts again next time
+    }
+    if (waiting.length && now() - SCHED.collide_at > 10 * 60000) {
+      SCHED.collide_at = now();
+      say(
+        "Also due after " +
+          t.label +
+          ": " +
+          waiting.map((o) => o.name).join(", "),
+        "#8AB4D0"
+      );
+    }
+    sm(t.label, P.ETA_S.round_setup);
+    ACT.round = true;
+    const st = t.stats;
+    st.runs++;
+    st.last_start = now();
+    try {
+      await t.run();
+    } catch (e) {
+      st.errors++;
+      st.last_err = String((e && e.message) || e);
+      throw e;
+    } finally {
+      st.last_end = now();
+      st.last_ms = st.last_end - st.last_start;
+    }
+  }
+
+  async function main() {
+    say(
+      "v5 started (lib v" +
+        AL.VERSION +
+        ")" +
+        (CFG.RANGER_NAME.indexOf("REPLACE") === 0
+          ? " - RANGER_NAME is not set, deliveries are disabled!"
+          : ""),
+      "#51D2E1"
+    );
+    load_budgets();
+    add_test_buttons();
+    AL.reengage_button({
+      say,
+      slot: CFG.SELF_CODE_SLOT,
+      restart: AutoMerchantV5,
+      stop: async () => {
+        for (const j of S.jobs.slice()) {
+          AL.send(j.from, {
+            type: "job_failed",
+            id: j.id,
+            reason: "merchant_restarting",
+          });
+        }
+        abort();
+        if (character.stand) await call(() => close_stand());
+      },
+    });
+    const sm = (t, est) => {
+      if (ACT.label !== t || est !== undefined) act(t, est || 0);
+      set_message(t);
+    };
+    // restart handshake: tell the Ranger which jobs we hold; he re-sends the ones we lost, we kill the ghosts he does not know
+    setTimeout(() => alive() && send_hello(), CFG.HELLO_DELAY_MS);
+    // status ping while a job is waiting or running: {job, state, eta, doing}
+    const ping = setInterval(() => {
+      if (!alive()) return clearInterval(ping);
+      try {
+        for (const j of S.jobs) if (P.ACTIVE[j.state]) send_status(j);
+      } catch (e) {}
+    }, P.PING_MS);
+    // watchdog: a job that sits unserved for 20s+ reports what the Merchant is stuck on
+    const dog = setInterval(() => {
+      if (!alive()) return clearInterval(dog);
+      try {
+        const r = queued_jobs()[0];
+        if (
+          r &&
+          Date.now() - ACT.at > 20000 &&
+          Date.now() - r.created_at > 20000
+        )
+          say_raw(
+            busy_report(
+              "Job still waiting " +
+                Math.round((Date.now() - r.created_at) / 1000) +
+                "s"
+            ),
+            "#CF575F"
+          );
+      } catch (e) {}
+    }, 20000);
+    for (;;) {
+      if (!alive()) return;
+      try {
+        if (await survive()) continue;
+        persist_budgets();
+
+        if (needs_heal()) {
+          sm("Healing up", P.ETA_S.heal);
+          await heal_up();
+          continue;
+        }
+
+        // next job: restock first, then junk/stackables, FIFO inside a type. Gear rides along at the next meeting.
+        const job = queued_jobs()[0];
+        if (job) {
+          S.cur = job;
+          sm(
+            (job.jtype === "restock" ? "Delivering to " : "Collecting from ") +
+              job.from,
+            job_est(job)
+          );
+          try {
+            if (job.jtype === "restock") await serve_request(job);
+            else await serve_junk(job);
+          } finally {
+            if (job.jtype !== "restock") S.tidy_next = 0; // he just took a load from a Ranger: tidy the bag as soon as the queue is empty (no waiting for the 10 min timer)
+            if (!job.ended_at) {
+              if (job.cancelled) end_job(job, "CANCELLED");
+              else {
+                job.reason = job.reason || "aborted";
+                end_job(job, "FAILED");
+              }
+            }
+            S.cur = null;
+          }
+          continue;
+        }
+        if (now() < S.hold_until) {
+          sm("Waiting for the Ranger at the main safe spot");
+          await hold_at_safe();
+          continue;
+        }
+        if (too_poor_to_restock()) {
+          sm(
+            "Fetching gold from the bank",
+            P.ETA_S.bank_run + P.ETA_S.shop_run
+          );
+          await withdraw_and_shop();
+          continue;
+        }
+        if (
+          stock_low() &&
+          now() - S.last_poor > CFG.SHOP_RETRY_MS &&
+          now() - S.last_shop_fail > CFG.SHOP_RETRY_MS
+        ) {
+          sm("Restocking potions", P.ETA_S.shop_run);
+          await shop();
+          await go_home();
+          continue;
+        }
+        if (needs_bank()) {
+          sm("Banking", P.ETA_S.bank_run);
+          await bank_run();
+          continue;
+        }
+        if (courier_note_live() && !queued_jobs().length) {
+          // v5: the courier is on his way: no new round (they take minutes), wait at the stand with the potions ready
+          sm("Waiting for the courier");
+          await ensure_stand();
+          await wait(CFG.TICK_MS);
+          continue;
+        }
+        if (now() - SCHED.log_at > CFG.SCHED_STATUS_MS) {
+          SCHED.log_at = now();
+          sched_status();
+        }
+        let ran = false;
+        // a round that has waited too long (see SCHED_MAX_WAIT_MS) goes first, if it is really due
+        const starved = SCHED.tasks.filter(
+          (t) => t.wait_since && now() - t.wait_since > CFG.SCHED_MAX_WAIT_MS
+        );
+        for (const t of starved) {
+          if (!t.due()) continue;
+          say(
+            "Schedule: " +
+              t.label +
+              " has waited " +
+              sched_min(now() - t.wait_since) +
+              " behind other rounds - running it now",
+            "#8AB4D0"
+          );
+          await sched_run(t, sm);
+          ran = true;
+          break;
+        }
+        if (ran) continue;
+        for (const t of SCHED.tasks) {
+          if (t.pre) t.pre();
+          if (!t.due()) continue;
+          await sched_run(t, sm);
+          ran = true;
+          break;
+        }
+        if (ran) continue;
+        sm(IDLE_LABEL);
+        await ensure_stand();
+      } catch (e) {
+        say("ERROR: " + ((e && e.message) || e), "#CF575F");
+        await wait(2000);
+      }
+      await wait(CFG.TICK_MS);
+    }
+  }
+
+  main();
+})();

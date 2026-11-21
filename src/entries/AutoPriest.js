@@ -1,0 +1,349 @@
+var AL; // the shared library (code slot "lib"), read once each time this script starts - require_code runs the lib module again on every call, so never call it in a loop
+try {
+  AL = require_code("lib");
+} catch (e) {
+  try {
+    game_log("[Priest] [lib] require_code(\"lib\") failed: " + (e && e.message ? e.message : e) + ' - save "AL Libs v6.js" in a code slot named "lib" and restart', "#CF575F");
+  } catch (e2) {}
+}
+(function AutoPriestV5() {
+  "use strict";
+  if (!AL || AL.VERSION < 4) {
+    game_log(
+      '[Priest] shared library missing or old: save "AL Libs v6.js" (version 4+) in a code slot named "lib" and restart',
+      "#CF575F"
+    );
+    return;
+  }
+  // a newer copy of this script (re-engage / reload) makes this one stop all its loops, timers and handlers
+  const GEN = AL.new_generation();
+  const alive = () => AL.is_current(GEN);
+  const { now, d2, call, wait } = AL;
+  const say_log = AL.logger("Priest");
+  const say = (msg, color) => { ev_keep(msg); return say_log(msg, color); };
+  const ev_keep = AL.runtime.ev_keep; // the lines that matter for "why did that happen" are also kept in the game's storage: game_log(get("events")) shows the last 50
+
+  // ============================ CONFIG ============================
+  // names, code slots and the shared item lists come from the one config file (src/lib/config.js); the CFG keys keep their v5 names
+  const C = AL.config.for_script("Priest");
+  const CFG = {
+    SELF_CODE_SLOT: C.SELF_CODE_SLOT, // CODE slot (name or number) THIS script is saved in (SexyDexy starts the Priest from AutoRanger's PRIEST_CODE_SLOT: keep them equal)
+    PARTY_LEADER: C.PARTY_LEADER, // exact, case-sensitive: the Priest follows him and heals his party
+    PARTY_ACCEPT_FROM: C.PARTY_ACCEPT_FROM, // party invitations are accepted from these characters ONLY
+    PARTY_JOIN_MS: 20000, // not in the leader's party: ask to join this often (the leader accepts; the Merchant or the leader may also invite)
+    STATE_EVERY_MS: 4000, // report level / potions / bag to the leader this often (the Ranger courier serves the Priest like a Ranger)
+    MERCHANT_NAME: C.MERCHANT_NAME,
+    LOOT_MS: 400, // v5: pick up chests this often (loot is per character: nobody else can open hers; the game throttles the call)
+    // --- bag: the Priest loots like a Ranger, so the Ranger courier collects her bag the same way (junk, spare gear, stackables, gold) ---
+    BAG_KEEP: [], // item names she always keeps in her bag (besides potions, elixirs and scrolls)
+    BAG_KEEP_PREFIXES: C.BAG_KEEP_PREFIXES,
+    GEAR_HANDOFF_GRACE_MS: 180000, // gear the Merchant just handed her (to be worn) / the piece she replaced is left alone this long
+    CLEAN_WHEN_FREE_SLOTS: 10, // a courier trip starts for a full bag at this many free slots or fewer ...
+    SELL_MIN_JUNK: 3, // ... when at least this many items wait for the Merchant
+    COURIER_JUNK_EACH: 30,
+    BAG_SHARE_FROM: C.BAG_SHARE_FROM, // v6 (Sean 2026-11-20): who may hand her spare items: the Warrior and the Ranger leader (a Ranger follower: add its name)
+    BAG_SHARE_MIN_GAP: 6, // ... and only while he has at least this many more free slots than the Warrior
+    BAG_SHARE_KEEP_FREE: 16, // Sean 2026-11-19: he takes spare items from the Warrior (they go to the Merchant on his junk trips) but keeps at least this many slots free
+    COURIER_GOLD_KEEP: 5000, // gold above this goes to the courier so he can pay the Merchant
+    SWEEP_MIN: 2000,
+    PAY_RANGE: 150,
+    // --- gear: she tells the Merchant what she wears; he upgrades / hands over what beats it (see AutoMerchant SUPPORT_GEAR) ---
+    GEAR_SHARE: true,
+    GEAR_REPORT_MS: 60000,
+    COURIERS: C.COURIERS, // the Rangers: whichever is the courier asks for junk and delivers potions (SexyDexy, the leader, when no follower Ranger is online)
+    GRINCH_CIRCLE: true, // Sean 2026-11-19: while the leader says the Grinch is near the post and he is not in view, walk a small circle around where you stand (refreshes the view); stop when he shows up
+    GRINCH_CIRCLE_RADIUS: 60,
+    GRINCH_CIRCLE_STEP_MS: 1500,
+    GRINCH_CIRCLE_AFTER_MS: 4000,
+    STATE_STALE_MS: 20000, // no news from the leader for this long: stand still (never wander off)
+    TANK_FOLLOW: true, // v5 (Sean 2026-11-18 17:03): stay with the Warrior (TANK_NAME) when he moves up to a monster, so her heals reach him; the leader is followed only when the Warrior is not known (not in view, no fresh report, other map)
+    TANK_NEAR_PX: 80, // walk to the Warrior when farther than this (kept under her heal range)
+    TANK_POS_FRESH_MS: 6000, // a position the Warrior reported by message counts this long
+    FOLLOW_FAR_PX: 160, // farther than this from the leader -> walk to him (the Priest's heal range is about 120)
+    FOLLOW_SPREAD_PX: 60, // random offset around the leader so the party does not stack on one pixel
+    STAY_ON_TRIP: false, // Sean 2026-11-20: false = follow the leader everywhere, to town on his junk / potion trips too (alone they do too little damage to stay and fight at the farm); true = the old behaviour (stay at the farm position he reports)
+    FAR_NOTE_PX: 700, // not within this distance of the leader (or on another map) for 60 s: log why (NOT WITH THE LEADER ...)
+    BOAR_FLEE: true, // v5 (Sean 2026-11-18): a Wild Boar (they come in threes in Winterland) that targets anybody in the party: everybody leaves through the portal NPC for the main map and the party farms the normal bees for BOAR_HOLD_MS (no forced farm, hunt or goal) before going back
+    BOAR_MAPS: ["winterland"],
+    BOAR_TYPES: ["boar"],
+    BOAR_HOLD_MS: 10 * 60000,
+    BOAR_PORTAL: { x: -73, y: -393 }, // the portal NPC in Winterland (used when find_npc cannot name it)
+    FOLLOW_EVERY_MS: 3000,
+    TICK_MS: 250,
+    // --- healing ---
+    HEAL_BELOW_PCT: 0.75, // single-target heal for the party member with the lowest HP share, below this
+    TANK_NAME: C.TANK_NAME, // the Warrior takes most of the hits: in ordinary (non-boss) fights his heals come first ...
+    TANK_HEAL_BELOW_PCT: 0.88, // ... from this HP share (higher than the rest of the party) ...
+    TANK_YIELD_BELOW_PCT: 0.35, // ... unless somebody else is this low: then the weakest member is healed first
+    BOSS_MONSTER_HP: 100000, // a leader target with at least this much max HP counts as a boss fight: no tank priority, lowest HP first as before
+    PARTYHEAL_BELOW_PCT: 0.6, // party heal when at least PARTYHEAL_MIN_HURT members are below this
+    PARTYHEAL_MIN_HURT: 2,
+    PARTYHEAL_MIN_MP: 400,
+    // --- support and damage ---
+    DARK_BLESSING: true, // +25% damage for the party (level 70+, costs 900 MP): cast while the leader fights and MP is plentiful
+    DARK_BLESSING_MIN_MP_PCT: 0.7,
+    CURSE: true, // curse the main monster / boss when it is not cursed yet (5 s cooldown)
+    GRINCH_HEAL_BELOW_PCT: 0.92, // whoever the Grinch is targeting is healed first, at this higher threshold (he hits hard)
+    ATTACK_LEADER_TARGET: true, // when nobody needs healing, shoot what the leader shoots (staying in range)
+    // --- self care ---
+    HP_POTION: "hpot1",
+    MP_POTION: "mpot1",
+    DRINK_HP_PCT: 0.45,
+    DRINK_MP_PCT: 0.7, // v5 (Sean 2026-11-17): drink an MP potion below this share of max MP (she needs the MP for heals, Party Heal, Curse and Dark Blessing)
+    LOW_POTION_WARN: 20, // log a warning (every 10 min) at/below this many of either potion. She does NOT restock herself: hand her potions
+    RESPAWN_DELAY_MS: 3000,
+  };
+
+  const S = {
+    focus: null, // the Warrior's focus target {id, at}
+    leader: null, // last party_state {map,x,y,at}
+    follow_at: 0,
+    follow_block_until: 0,
+    boar_until: 0,
+    retreat_until: 0, // the leader's death retreat: follow him to town, no fighting until then
+    boar_next: 0,
+    boar_cm: false,
+    warn_at: 0,
+    join_at: 0,
+    loot_at: 0,
+    gear_recv_at: 0,
+    out_since: 0,
+    status_at: 0,
+    drink_at: 0,
+    died_at: 0,
+    deaths: 0, // deaths since this script started (for the Merchant's hourly report)
+    stats: { heals: 0, partyheals: 0, blessings: 0, attacks: 0 },
+  };
+
+  const mover = AL.mover({ say, default_ms: 60000 });
+  // the code the Warrior and the Priest share (party, following, boars, loot, bag hand-over, potions, gear report): src/lib/runtime.js
+  const R = AL.runtime.create({
+    CFG, S, say, alive, mover,
+    hooks: {
+      tank_pos: () => tank_pos(), // she walks to the Warrior when he is close to a monster (heal range)
+      boar_extra_names: [CFG.TANK_NAME],
+    },
+  });
+  const { hp_pct, leader_entity, leader_pos, party_members, in_range, party_has, is_online, party_join_tick, free_slots, handoff_slots, gear_slots, courier_give, drops_out, loot_tick, find_gear, send_gear_report, gear_receive, status_tick, drink, warn_potions, boar_check, far_check, follow_step, wiggle_step } = R;
+
+  // ============================ MESSAGES ============================
+  const LEAD = AL.lead.create(Object.assign(AL.config.lead_env(character.name, "priest"), { CFG, say, alive, busy: () => AL.lead.fight_near([CFG.PARTY_LEADER, CFG.TANK_NAME].filter(Boolean), 500), hooks: { reload: () => AL.reengage({ say, slot: CFG.SELF_CODE_SLOT, restart: AutoPriestV5 }) } })); // stage 4: hello heartbeats, hand-over messages, Hold from the lead
+  setInterval(() => { try { LEAD.tick(); } catch (e) {} }, 5000);
+  character.on("cm", function (m) {
+    if (!alive()) return;
+    try {
+      if (LEAD.handle(m)) return;
+      const d = AL.parse_job(m, (n) => n === CFG.PARTY_LEADER || n === CFG.TANK_NAME || n === CFG.MERCHANT_NAME || CFG.COURIERS.indexOf(n) !== -1);
+      if (!d) return;
+      if (d.type === "focus") {
+        if (m.name === CFG.TANK_NAME) {
+          S.focus = { id: typeof d.tid === "string" || typeof d.tid === "number" ? String(d.tid) : null, at: now() };
+          if (typeof d.map === "string" && Number.isFinite(+d.x) && Number.isFinite(+d.y)) S.tank_at = { map: d.map.slice(0, 40), x: +d.x, y: +d.y, at: now() }; // v5: where the Warrior stands (he sends it with every focus message)
+        }
+        return;
+      }
+      if (d.type === "courier_collect" && CFG.COURIERS.indexOf(m.name) !== -1) {
+        courier_give(m.name, d);
+        return;
+      }
+      if (d.type === "gear_give" && (m.name === CFG.MERCHANT_NAME || CFG.COURIERS.indexOf(m.name) !== -1 || m.name === CFG.PARTY_LEADER)) {
+        if (!d.to || d.to === character.name) gear_receive(d); // (the Merchant also announces gear he hands to a courier for the others: not for her)
+        return;
+      }
+      if (d.type === "boar_flee" && m.name === CFG.PARTY_LEADER) { S.boar_cm = true; return; }
+      if (d.type === "retreat" && m.name === CFG.PARTY_LEADER) { S.retreat_until = now() + Math.max(0, Math.min(600000, Number(d.ms) || 0)); say("RETREAT: the leader is leaving for town - no fighting for " + Math.round((S.retreat_until - now()) / 1000) + " s, following him", "#CF575F"); return; }
+      if (d.type === "bag_room" && CFG.BAG_SHARE_FROM.indexOf(m.name) !== -1) {
+        // the Warrior (or the Ranger, v6) asks how many spare items he may hand over: half the difference in free slots, never below BAG_SHARE_KEEP_FREE left here
+        const want = Math.max(0, Math.floor(Number(d.want) || 0));
+        const theirs = Math.max(0, Math.floor(Number(d.free) || 0));
+        const room = Math.min(want, Math.floor((free_slots() - theirs) / 2), free_slots() - CFG.BAG_SHARE_KEEP_FREE);
+        if (room > 0 && free_slots() - theirs >= CFG.BAG_SHARE_MIN_GAP) call(() => send_cm(m.name, { type: "bag_room_ok", max: room }));
+        return;
+      }
+      if (d.type !== "party_state" || m.name !== CFG.PARTY_LEADER) return;
+      const str = (v) => (typeof v === "string" && v.length <= 40 ? v : null);
+      S.leader = {
+        map: str(d.map) || "main",
+        x: Number(d.x) || 0,
+        y: Number(d.y) || 0,
+        at: now(),
+        wiggle: !!d.wiggle, // the Grinch is listed near the post: walk a small circle while he is not in view
+        trip: !!d.trip, // the leader is on a town trip: stay at the field position he reports (farm) and keep fighting
+        farm: d.farm && typeof d.farm === "object" && str(d.farm.map) ? { map: str(d.farm.map), x: Number(d.farm.x) || 0, y: Number(d.farm.y) || 0 } : null,
+      };
+    } catch (e) {}
+  });
+  globalThis.on_party_invite = function (name) {
+    if (!alive() || CFG.PARTY_ACCEPT_FROM.indexOf(name) === -1) return;
+    say("Accepting the party invitation from " + name, "#51D2E1");
+    accept_party_invite(name);
+  };
+  setInterval(party_join_tick, 5000);
+  setInterval(loot_tick, 200);
+
+  // ============================ GEAR (worn items shared with the Merchant) ============================
+  setTimeout(() => alive() && send_gear_report(), 20000);
+  const gear_timer = setInterval(() => (alive() ? send_gear_report() : clearInterval(gear_timer)), CFG.GEAR_REPORT_MS);
+
+  setInterval(status_tick, 1000);
+
+
+
+
+  // ============================ FOLLOW ============================
+  // true = she is walking to the leader (do not stand around shooting from far away)
+  // v5: where the Warrior is: in view (live), else his last report; null when unknown / on another map
+  function tank_pos() {
+    if (!CFG.TANK_FOLLOW || !CFG.TANK_NAME) return null;
+    const e = parent.entities && parent.entities[CFG.TANK_NAME];
+    if (e && !e.dead && !e.rip && e.visible !== false && e.x !== undefined) return { map: character.map, x: e.x, y: e.y, live: true, tank: true };
+    const t = S.tank_at;
+    if (t && now() - t.at < CFG.TANK_POS_FRESH_MS && t.map === character.map) return { map: t.map, x: t.x, y: t.y, tank: true };
+    return null;
+  }
+  setInterval(far_check, 15000);
+
+  // ============================ HEAL + SUPPORT ============================
+  async function support() {
+    const mp = character.max_mp ? character.mp / character.max_mp : 1;
+    const members = party_members();
+    const hurt = members.filter((e) => hp_pct(e) < CFG.PARTYHEAL_BELOW_PCT);
+    if (
+      hurt.length >= CFG.PARTYHEAL_MIN_HURT &&
+      character.mp >= CFG.PARTYHEAL_MIN_MP &&
+      !is_on_cooldown("partyheal")
+    ) {
+      const r = await call(() => use_skill("partyheal"));
+      if (!r.failed) {
+        S.stats.partyheals++;
+        return true;
+      }
+    }
+    // Grinch: heal whoever he is hitting before anybody else, and attack him directly
+    const grinch = Object.values(parent.entities).find(
+      (e) => e && e.type === "monster" && e.mtype === "grinch" && !e.dead && e.visible !== false
+    );
+    const grinch_victim = grinch && grinch.target
+      ? grinch.target === character.name ? character : parent.entities[grinch.target]
+      : null;
+    if (grinch_victim && grinch_victim.max_hp && !grinch_victim.rip && hp_pct(grinch_victim) < CFG.GRINCH_HEAL_BELOW_PCT &&
+        (grinch_victim === character || in_range(grinch_victim))) {
+      // a party member being hit: party heal; anybody else (the Merchant, strangers): the single-target heal
+      let in_party = grinch_victim === character;
+      try { in_party = in_party || Object.keys(get_party() || {}).indexOf(grinch_victim.name) !== -1; } catch (e) {}
+      if (in_party && character.mp >= CFG.PARTYHEAL_MIN_MP && !is_on_cooldown("partyheal")) {
+        const r = await call(() => use_skill("partyheal"));
+        if (!r.failed) {
+          S.stats.partyheals++;
+          return true;
+        }
+      }
+      if (!is_on_cooldown("attack")) {
+        const r = await call(() => heal(grinch_victim));
+        if (!r.failed) {
+          S.stats.heals++;
+          reduce_cooldown("attack", (character.ping || 0) * 0.95);
+        }
+      }
+      return true;
+    }
+    let worst = members
+      .filter((e) => hp_pct(e) < CFG.HEAL_BELOW_PCT)
+      .sort((a, b) => hp_pct(a) - hp_pct(b))[0];
+    // ordinary fight: the tank first (he holds the aggro), unless somebody else is in real trouble
+    const lead_e = leader_entity();
+    const lead_t = lead_e && lead_e.target ? parent.entities[lead_e.target] : null;
+    const boss_fight = !!grinch || (!!lead_t && lead_t.type === "monster" && Number(lead_t.max_hp || (G.monsters[lead_t.mtype] || {}).hp) >= CFG.BOSS_MONSTER_HP);
+    if (!boss_fight && CFG.TANK_NAME) {
+      const tank = members.find((e) => e.name === CFG.TANK_NAME);
+      if (tank && hp_pct(tank) < CFG.TANK_HEAL_BELOW_PCT && (tank === character || in_range(tank)) && !(worst && worst !== tank && hp_pct(worst) < CFG.TANK_YIELD_BELOW_PCT)) worst = tank;
+    }
+    if (worst && (worst === character || in_range(worst))) {
+      if (!is_on_cooldown("attack")) {
+        const r = await call(() => heal(worst));
+        if (!r.failed) {
+          S.stats.heals++;
+          reduce_cooldown("attack", (character.ping || 0) * 0.95);
+        }
+      }
+      return true; // healing comes first, even while the cooldown runs
+    }
+    const le = leader_entity();
+    const fz = S.focus && S.focus.id && now() - S.focus.at < 5000 ? parent.entities[S.focus.id] : null;
+    const fz_ok = fz && fz.type === "monster" && !fz.dead && !fz.rip && fz.visible !== false ? fz : null;
+    const target = grinch ? grinch : fz_ok ? fz_ok : le && le.target ? parent.entities[le.target] : null;
+    const fighting = !!target && target.type === "monster" && !target.dead && target.visible !== false;
+    const curse_def = (G.skills && G.skills.curse) || null;
+    if (
+      CFG.CURSE &&
+      fighting &&
+      curse_def &&
+      character.level >= (Number(curse_def.level) || 0) &&
+      character.mp >= (Number(curse_def.mp) || 0) &&
+      in_range(target) &&
+      !(target.s && target.s.curse) &&
+      !is_on_cooldown("curse")
+    ) {
+      const r = await call(() => use_skill("curse", target));
+      if (!r.failed) return true;
+    }
+    if (
+      CFG.DARK_BLESSING &&
+      fighting &&
+      character.level >= 70 &&
+      (mp >= CFG.DARK_BLESSING_MIN_MP_PCT || !!grinch) &&
+      character.mp >= 900 &&
+      !is_on_cooldown("darkblessing")
+    ) {
+      const r = await call(() => use_skill("darkblessing"));
+      if (!r.failed) {
+        S.stats.blessings++;
+        return true;
+      }
+    }
+    if (CFG.ATTACK_LEADER_TARGET && fighting && in_range(target) && !is_on_cooldown("attack")) {
+      const r = await call(() => attack(target));
+      if (!r.failed) {
+        S.stats.attacks++;
+        reduce_cooldown("attack", (character.ping || 0) * 0.95);
+      }
+      return true;
+    }
+    return false;
+  }
+
+  // ============================ MAIN LOOP ============================
+  let busy = false;
+  async function tick() {
+    if (!alive() || busy) return;
+    busy = true;
+    try {
+      if (character.rip) {
+        if (!S.died_at) { S.died_at = now(); S.deaths++; call(() => send_cm(CFG.PARTY_LEADER, { type: "died" })); } // v5: the leader drops a forced farm on any death
+        if (now() - S.died_at >= CFG.RESPAWN_DELAY_MS) {
+          say("Dead - respawning", "#CF575F");
+          S.died_at = 0;
+          await call(() => respawn());
+        }
+        return;
+      }
+      S.died_at = 0;
+      await drink();
+      warn_potions();
+      if (LEAD.held()) return; // Hold from the lead: no fight, no follow (drinking still runs)
+      if (await boar_check()) return;
+      if (now() < S.retreat_until) { follow_step(); return; }
+      const wig = wiggle_step();
+      await support();
+      if (!wig) follow_step();
+    } catch (e) {
+      say("Tick error: " + ((e && e.message) || e), "#CF575F");
+    } finally {
+      busy = false;
+    }
+  }
+  setInterval(tick, CFG.TICK_MS);
+
+  say("Priest ready: following " + CFG.PARTY_LEADER + ", accepting party invites from " + CFG.PARTY_ACCEPT_FROM.join("/"), "#51D2E1");
+  AL.reengage_button({ say, slot: CFG.SELF_CODE_SLOT, restart: AutoPriestV5 });
+})();
