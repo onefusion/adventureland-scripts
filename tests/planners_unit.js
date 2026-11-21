@@ -75,4 +75,29 @@ ok(sp.sell.length === 0 && sp.held.length === 1, "an expensive surplus item is h
 sp = AL.planners.surplus(senv({ sell_value: (n, l) => l * 100, cands: [cand(1, 0, 0), cand(3, 1, 0), cand(2, 2, 0)] }));
 ok(sp.sell.map((c) => c.value).join() === "300,200,100", "the most valuable surplus is listed first");
 
+// ---- ladder ----
+const lg = { ring: { type: "ring", compound: 1 }, book: { type: "source", compound: 1 } };
+const lcfg = { COMPOUND_TARGET_LEVEL: 3, SURPLUS_COPIES_PER_RANGER: { ring: 2 } };
+const lenv = (o) => Object.assign({ n_chars: 1, pieces: [], cfg: lcfg, G_items: lg,
+  fn: { focus_of: () => null, wearable: () => true, gear_score: () => 10, would_wear: () => false } }, o);
+const ring = (lv) => ({ name: "ring", level: lv });
+
+let ld = AL.planners.ladder(lenv({ pieces: [ring(0), ring(0), ring(0)] }));
+ok(ld.demand("ring") === 2 && ld.preferred("ring"), "demand is characters x slots; the only ring is the preferred one");
+ok(ld.ladder_ok("ring", 0) && ld.take_triples("ring", 0, 1) === 1 && ld.held("ring", 1) === 1, "a triple at +0 is compounded once; the result counts at +1");
+
+ld = AL.planners.ladder(lenv({ pieces: [ring(1), ring(1), ring(1)] }));
+ok(!ld.ladder_ok("ring", 1), "lower tiers must stay covered: 3 copies at +1 (demand 2) cannot lose 3 to a compound");
+ld = AL.planners.ladder(lenv({ pieces: [ring(1), ring(1), ring(1), ring(1), ring(1), ring(1)] }));
+ok(ld.ladder_ok("ring", 1), "6 copies at +1 leave demand + 2 spare behind, so a triple may be compounded");
+
+ld = AL.planners.ladder(lenv({ pieces: [ring(3), ring(3), ring(0), ring(0), ring(0)] }));
+ok(!ld.ladder_ok("ring", 0), "nothing is compounded once every slot already holds the target level");
+
+ld = AL.planners.ladder(lenv({ fn: { focus_of: (n) => (n === "book" ? { target: 2 } : null), wearable: () => false, gear_score: () => 0, would_wear: () => false }, pieces: [{ name: "book", level: 0 }, { name: "book", level: 0 }, { name: "book", level: 0 }] }));
+ok(ld.ladder_ok("book", 1) && !ld.ladder_ok("book", 2) && ld.useful({ name: "book", level: 0 }), "focus items are funnelled up to their own target and are never dead stock");
+
+ld = AL.planners.ladder(lenv({ cfg: Object.assign({}, lcfg), pieces: [ring(0), ring(0)] }));
+ok(ld.useful({ name: "ring", level: 0 }) && !ld.useful({ name: "ring", level: 3 }), "a piece is useful while a tier above it is still open, not once it is at the target");
+
 process.exit(fails ? 1 : 0);

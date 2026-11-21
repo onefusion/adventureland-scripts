@@ -3316,107 +3316,32 @@ try {
   const scroll_for = (it) => "cscroll" + scroll_grade(it);
   // ---- compound ladder: what the Rangers still lack, per accessory ----
   // held(name, t) = copies at +t or better that the Rangers wear or the Merchant holds (bag + bank); demand D = Rangers x slots.
+  // The compound ladder lives in AL.planners.ladder (src/lib/planners.js, pure); this wrapper hands it the pieces held.
   function comp_state() {
     const who_list = roster();
-    const target = CFG.COMPOUND_TARGET_LEVEL;
-    const levels = {};
-    const add = (it) => {
-      if (!it || it.l || !it.name) return;
-      const def = G.items[it.name];
-      if (
-        !def ||
-        !def.compound ||
-        (!focus_of(it.name) && !gear_wearable({ name: it.name }))
-      )
-        return;
-      (levels[it.name] = levels[it.name] || []).push(it.level || 0);
-    };
+    const pieces = [];
     for (const who of who_list) {
       const g = gear_of(who);
-      for (const sl in (g && g.slots) || {}) add(g.slots[sl]);
+      for (const sl in (g && g.slots) || {}) pieces.push(g.slots[sl]);
     }
-    for (let i = 0; i < character.isize; i++) add(character.items[i]);
+    for (let i = 0; i < character.isize; i++) pieces.push(character.items[i]);
     for (const pack of CFG.COMPOUND_PACKS) {
       const arr = character.bank && character.bank[pack];
-      if (Array.isArray(arr)) arr.forEach(add);
+      if (Array.isArray(arr)) arr.forEach((it) => pieces.push(it));
     }
-    const demand = (name) =>
-      who_list.length *
-      (CFG.SURPLUS_COPIES_PER_RANGER[G.items[name].type] || 1);
-    const held = (name, t) => (levels[name] || []).filter((l) => l >= t).length;
-    // the preferred item of each kind: the best score at the target level
-    const best = {};
-    for (const name in levels) {
-      const type = G.items[name].type;
-      const sc = gear_score(name, target, {});
-      if (sc > 0 && (!best[type] || sc > best[type].sc))
-        best[type] = { name, sc };
-    }
-    const preferred = (name) =>
-      !!G.items[name] &&
-      !!best[G.items[name].type] &&
-      best[G.items[name].type].name === name;
-    // may a triple of `name` at level L be compounded now?
-    const ladder_ok = (name, L) => {
-      if (focus_of(name)) return L + 1 <= focus_of(name).target; // focus items: funnel everything up to the target
-      if (!preferred(name)) return false;
-      const R = L + 1;
-      if (R > target) return false;
-      const D = demand(name);
-      let open = false;
-      for (let t = R; t <= target; t++) if (held(name, t) < D) open = true;
-      if (!open) return false;
-      for (let t = 1; t <= L; t++) if (held(name, t) - 2 < D) return false; // lower tiers must stay covered
-      return true;
-    };
-    // is this item still useful as compound material or as a worn piece?
-    const useful = (it) => {
-      const name = it.name;
-      const L = it.level || 0;
-      if (!G.items[name] || !G.items[name].compound) return false;
-      if (focus_of(name)) return true; // books are never dead stock
-      if (roster().some((w) => gear_fresh_for(w) && beats_worn(it, L, w)))
-        return true; // a Ranger would wear it
-      if (!preferred(name)) return false;
-      for (let t = L + 1; t <= target; t++)
-        if (held(name, t) < demand(name)) return true;
-      return false;
-    };
-    const report = () =>
-      Object.keys(levels)
-        .filter(preferred)
-        .map((n) => {
-          const D = demand(n);
-          const row = [];
-          for (let t = 1; t <= target; t++)
-            row.push("+" + t + " " + Math.min(held(n, t), D) + "/" + D);
-          return n + ": " + row.join(", ");
-        })
-        .join(" | ");
-    // plan up to `avail` triples at level L: each one consumes three copies and adds one at L+1, so later triples see the new state
-    const take_triples = (name, L, avail) => {
-      let k = 0;
-      const arr = levels[name] || [];
-      while (k < avail && ladder_ok(name, L)) {
-        for (let i = 0; i < 3; i++) {
-          const idx = arr.indexOf(L);
-          if (idx >= 0) arr.splice(idx, 1);
-        }
-        arr.push(L + 1);
-        k++;
-      }
-      return k;
-    };
-    return {
-      levels,
-      demand,
-      held,
-      preferred,
-      ladder_ok,
-      take_triples,
-      useful,
-      report,
-    };
+    return AL.planners.ladder({
+      n_chars: who_list.length,
+      pieces,
+      cfg: CFG,
+      G_items: G.items,
+      fn: {
+        focus_of,
+        wearable: (name) => gear_wearable({ name }),
+        gear_score: (name, level) => gear_score(name, level, {}),
+        would_wear: (it, L) =>
+          roster().some((w) => gear_fresh_for(w) && beats_worn(it, L, w)),
+      },
+    });
   }
 
   function plan_groups() {

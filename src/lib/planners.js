@@ -1,7 +1,7 @@
 // ============================== AL.planners: pure Merchant planners (stage 5 of the refactor, 2026-11-21) ==============================
 // A planner decides; it does not walk, open the bank or send anything. It reads a plain input object and returns a plan, so it can be tested
 // without the game. The Merchant builds the input from its live state (`env`) and acts on the plan.
-// Planners so far: sweep (which finished / stuck gear goes to which character), copies (the copy limit), surplus (the bank-full seller).
+// Planners so far: sweep (which finished / stuck gear goes to which character), copies (the copy limit), surplus (the bank-full seller), ladder (the compound ladder).
 AL.planners = (function () {
   "use strict";
 
@@ -187,5 +187,83 @@ AL.planners = (function () {
     return out;
   }
 
-  return { sweep, copies, surplus };
+  // ---- ladder (compound state): what the compound ladder wants, from the copies held ----
+  // Rangers always wear the highest compounded gear; the preferred item of each kind is built up level by level until every slot is covered.
+  // env.n_chars          how many characters count (the Rangers)
+  // env.pieces           every piece to count, in order: worn (all reports), bag, bank   [{ name, level, l }]
+  // env.cfg              { COMPOUND_TARGET_LEVEL, SURPLUS_COPIES_PER_RANGER }, env.G_items
+  // env.fn               focus_of(name) -> { target } | null, wearable(name), gear_score(name, level), would_wear(it, level) (a character would wear it)
+  // Returns { levels, demand, held, preferred, ladder_ok, take_triples, useful, report } (the shape the Merchant has always used).
+  function ladder(env) {
+    const { cfg, G_items, fn } = env;
+    const target = cfg.COMPOUND_TARGET_LEVEL;
+    const levels = {};
+    for (const it of env.pieces) {
+      if (!it || it.l || !it.name) continue;
+      const def = G_items[it.name];
+      if (!def || !def.compound || (!fn.focus_of(it.name) && !fn.wearable(it.name))) continue;
+      (levels[it.name] = levels[it.name] || []).push(it.level || 0);
+    }
+    const demand = (name) => env.n_chars * (cfg.SURPLUS_COPIES_PER_RANGER[G_items[name].type] || 1);
+    const held = (name, t) => (levels[name] || []).filter((l) => l >= t).length;
+    // the preferred item of each kind: the best score at the target level
+    const best = {};
+    for (const name in levels) {
+      const type = G_items[name].type;
+      const sc = fn.gear_score(name, target);
+      if (sc > 0 && (!best[type] || sc > best[type].sc)) best[type] = { name, sc };
+    }
+    const preferred = (name) => !!G_items[name] && !!best[G_items[name].type] && best[G_items[name].type].name === name;
+    // may a triple of `name` at level L be compounded now?
+    const ladder_ok = (name, L) => {
+      if (fn.focus_of(name)) return L + 1 <= fn.focus_of(name).target; // focus items: funnel everything up to the target
+      if (!preferred(name)) return false;
+      const R = L + 1;
+      if (R > target) return false;
+      const D = demand(name);
+      let open = false;
+      for (let t = R; t <= target; t++) if (held(name, t) < D) open = true;
+      if (!open) return false;
+      for (let t = 1; t <= L; t++) if (held(name, t) - 2 < D) return false; // lower tiers must stay covered
+      return true;
+    };
+    // is this item still useful as compound material or as a worn piece?
+    const useful = (it) => {
+      const name = it.name;
+      const L = it.level || 0;
+      if (!G_items[name] || !G_items[name].compound) return false;
+      if (fn.focus_of(name)) return true; // books are never dead stock
+      if (fn.would_wear(it, L)) return true; // a Ranger would wear it
+      if (!preferred(name)) return false;
+      for (let t = L + 1; t <= target; t++) if (held(name, t) < demand(name)) return true;
+      return false;
+    };
+    const report = () =>
+      Object.keys(levels)
+        .filter(preferred)
+        .map((n) => {
+          const D = demand(n);
+          const row = [];
+          for (let t = 1; t <= target; t++) row.push("+" + t + " " + Math.min(held(n, t), D) + "/" + D);
+          return n + ": " + row.join(", ");
+        })
+        .join(" | ");
+    // plan up to `avail` triples at level L: each one consumes three copies and adds one at L+1, so later triples see the new state
+    const take_triples = (name, L, avail) => {
+      let k = 0;
+      const arr = levels[name] || [];
+      while (k < avail && ladder_ok(name, L)) {
+        for (let i = 0; i < 3; i++) {
+          const idx = arr.indexOf(L);
+          if (idx >= 0) arr.splice(idx, 1);
+        }
+        arr.push(L + 1);
+        k++;
+      }
+      return k;
+    };
+    return { levels, demand, held, preferred, ladder_ok, take_triples, useful, report };
+  }
+
+  return { sweep, copies, surplus, ladder };
 })();
