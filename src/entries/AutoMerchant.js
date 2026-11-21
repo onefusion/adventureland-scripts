@@ -4184,16 +4184,16 @@ try {
       return out;
     }
     const L = CFG.SURPLUS_COPY_LEVEL;
-    const by = {}; // item name -> { worn, owned: [] }
-    const grp = (n) => (by[n] = by[n] || { worn: 0, owned: [] });
+    const worn_names = [];
     for (const who of who_list) {
       const g = gear_of(who);
       for (const sl in (g && g.slots) || {}) {
         const w = g.slots[sl];
-        if (w && w.name && (w.level || 0) >= L) grp(w.name).worn++;
+        if (w && w.name && (w.level || 0) >= L) worn_names.push(w.name);
       }
     }
     const pend = S.gear_pending.slice();
+    const owned = [];
     const add = (it, where) => {
       const def = it && G.items[it.name];
       if (!def || it.l || it.q > 1 || (!def.upgrade && !def.compound)) return;
@@ -4207,7 +4207,7 @@ try {
         pend.splice(k, 1);
         waiting = true;
       }
-      grp(it.name).owned.push(Object.assign({ it, waiting, kb }, where));
+      owned.push(Object.assign({ it, waiting, kb }, where));
     };
     for (let i = 0; i < character.isize; i++)
       add(character.items[i], { bag: i });
@@ -4215,39 +4215,18 @@ try {
       const arr = character.bank && character.bank[pack];
       if (Array.isArray(arr)) arr.forEach((it, i) => add(it, { pack, i }));
     }
-    for (const name in by) {
-      const def = G.items[name];
-      const per = CFG.SURPLUS_COPIES_PER_RANGER[def.type] || 1;
-      const allow =
-        CFG.KEEP_BEST_COPIES[name] !== undefined
-          ? CFG.KEEP_BEST_COPIES[name]
-          : Math.max(0, per * who_list.length - by[name].worn);
-      // keep: items waiting for a Ranger first, then the highest level, then the ones with a Dexterity scroll on them
-      const ranked = by[name].owned.sort(
-        (a, b) =>
-          (b.waiting ? 1 : 0) - (a.waiting ? 1 : 0) ||
-          (b.it.level || 0) - (a.it.level || 0) ||
-          (b.it.stat_type ? 1 : 0) - (a.it.stat_type ? 1 : 0)
-      );
-      ranked.forEach((c, n) => {
-        if (n < allow) return void out.kept++;
-        c.value = Math.round(sell_value(c.it.name, c.it.level || 0));
-        if (c.it.p)
-          out.held.push({
-            it: c.it,
-            value: c.value,
-            why: "special (" + c.it.p + ")",
-          });
-        else if (c.value > CFG.SURPLUS_MAX_VALUE_EACH)
-          out.held.push({
-            it: c.it,
-            value: c.value,
-            why: "worth more than SURPLUS_MAX_VALUE_EACH",
-          });
-        else out.sell.push(c);
-      });
-    }
-    out.sell.sort((a, b) => b.value - a.value);
+    // the decisions live in AL.planners.copies (src/lib/planners.js, pure)
+    const plan = AL.planners.copies({
+      n_chars: who_list.length,
+      worn_names,
+      owned,
+      cfg: CFG,
+      G_items: G.items,
+      sell_value,
+    });
+    out.sell = plan.sell;
+    out.held = plan.held;
+    out.kept = plan.kept;
     return out;
   }
   // The bank must be open. Sells the extra copies (dry run only logs). Leaves the Merchant at the bank.
