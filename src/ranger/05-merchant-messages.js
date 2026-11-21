@@ -156,6 +156,10 @@
         return;
       }
       if (m.name !== CFG.MERCHANT_NAME) return; // everything below is Merchant traffic
+      if (d.type === "scroll_swap") {
+        scroll_swap(d);
+        return;
+      }
       if (d.type === "gear_pass") {
         if (m.name === CFG.MERCHANT_NAME) gear_pass(d);
         return;

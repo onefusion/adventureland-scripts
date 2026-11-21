@@ -17,7 +17,9 @@
     "COMPOUND_MAX_INPUT_LEVEL": "stage 6: removed (only used by the pre-ladder path)",
     "SELF_CODE_SLOT": "2026-11-21: code slots moved (lib 1, Merchant 2, Ranger 3, Warrior 4, Priest 5)",
     "UPGRADE_GAMBLE_NAMES": "2026-11-21: + firestaff (Priest), fireblade (Warrior)",
-    "SUPPORT_GEAR": "2026-11-21: Warrior weapon_types + short_sword (Fiery Blade)"
+    "SUPPORT_GEAR": "2026-11-21: Warrior weapon_types + short_sword (Fiery Blade)",
+    "STAT_SCROLL_WORN": "2026-11-21: new, scroll worn Ranger gear",
+    "STAT_SCROLL_WORN_GAP_MS": "2026-11-21: new"
   },
   "AutoRanger": {
     "BAG_SHARE": "stage 2: Ranger hands spare items to the Priest",
@@ -32,7 +34,8 @@
     "PRIEST_CODE_SLOT": "2026-11-21: code slots moved (lib 1, Merchant 2, Ranger 3, Warrior 4, Priest 5)",
     "DEFEND_PARTY": "2026-11-21: new, the leader helps a party member under attack instead of walking on",
     "DEFEND_RANGE_PX": "2026-11-21: new, range for DEFEND_PARTY",
-    "GOALS": "2026-11-21: the Phoenix goal is switched off (enabled: false) until the party-separation problem is fixed"
+    "GOALS": "2026-11-21: the Phoenix goal is switched off (enabled: false) until the party-separation problem is fixed",
+    "SCROLL_SWAP": "2026-11-21: new, take a worn piece off for the Merchant's stat scroll"
   },
   "AutoPriest": {
     "BAG_SHARE_FROM": "stage 2: who may hand her spare items",

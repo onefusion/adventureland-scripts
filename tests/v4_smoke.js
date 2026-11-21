@@ -257,6 +257,7 @@ function make_char(world, name, o, script, overrides) {
   if (script) {
     let text = (global.USE_NEW_RJ ? src : src_legacy)(script);
     if (/AutoMerchant/.test(script) && !(overrides && overrides.fire_on)) { text = text.replace("UPGRADE_MAX_LEVEL_BY_ITEM: { firebow: 8, firestaff: 8, fireblade: 8 }", "UPGRADE_MAX_LEVEL_BY_ITEM: {}"); text = text.replace('UPGRADE_GAMBLE_NAMES: ["firebow", "firestaff", "fireblade"]', "UPGRADE_GAMBLE_NAMES: []"); } // v5: the per-item upgrade cap (Fire Bow +7) is tested on its own (UPF1)
+    if (/AutoMerchant/.test(script) && !(overrides && overrides.ranger_scroll)) text = text.replace("STAT_SCROLL_APPLY: { ranger: true", "STAT_SCROLL_APPLY: { ranger: false"); // 2026-11-21: the Ranger stat scroll is ON in the real config; the older scenarios run with it off, SW1-SW3 turn it on
     if (/AutoMerchant/.test(script) && !(overrides && overrides.layout_on)) text = text.replace("BANK_LAYOUT: true", "BANK_LAYOUT: false"); // v5: the bank layout (packs per kind of item) is tested on its own (BL1-BL6)
     if (global.MERCHANT_PARTY) overrides = (overrides || []).concat(/AutoMerchant/.test(script) ? [[/PARTY_ENABLED: C\.PARTY_ENABLED/, "PARTY_ENABLED: true", true]] : /AutoRanger/.test(script) ? [[/PARTY_ACCEPT_FROM: C\.PARTY_ACCEPT_FROM/, 'PARTY_ACCEPT_FROM: "Goodies"', true]] : [[/PARTY_ACCEPT_FROM: C\.PARTY_ACCEPT_FROM/, 'PARTY_ACCEPT_FROM: ["Goodies", "SexyDexy"]', true]]); // the v5 way: the Merchant leads the game party (roster.merchant_in_party), for PA1 / PR4
     for (const [re, to, optional] of overrides || []) { if (!re.test(text)) { if (optional) continue; throw new Error("override did not match: " + re); } text = text.replace(re, to); }
@@ -3539,6 +3540,40 @@ T("SS1 stat scroll for the Warrior: his Strength Scroll goes on a cap with a sta
   await w.clock.run(400);
   const got = m.items.filter((x) => x && x.stat_type);
   return [[logged(w, "Goodies", /STAT SCROLL applied to dexcap \+0 for SexyWexy \(strscroll\)/), "str scroll applied: " + w.logs.filter((l) => /STAT SCROLL|scroll/i.test(l.msg)).map((l) => l.msg).slice(0, 3).join(" | ")], [got.length === 1 && got[0].stat_type === "str", "the cap carries str"], [!logged(w, "Goodies", /STAT SCROLL.*plaincap/), "plaincap got no scroll"]];
+});
+T("SW1 worn gear scroll, Merchant side: a Ranger's worn piece with a stat value and no scroll gets a scroll_swap request, once", async (w) => {
+  if (!/STAT_SCROLL_WORN/.test(MERCH_SRC)) return skip_r4;
+  w.bank.items0.push({ name: "plaincap", level: 0 });
+  const ovr = Object.assign(SW_OVR.slice(), { ranger_scroll: true });
+  const m = merchant_char(w, { gold: 50000 }, ovr);
+  const L = fake_ranger(w); const F = make_char(w, "Dexy2", { x: -110, y: 25 });
+  const send = () => { gear_rep(L, { helmet: { name: "dexcap", level: 9 } }); gear_rep(F, {}); };
+  send(); w.clock.every(send, 60000);
+  await w.clock.run(900);
+  const req = msgs(L, "scroll_swap");
+  return [[req.length === 1 && req[0].slot === "helmet" && req[0].name === "dexcap" && req[0].level === 9, "one scroll_swap request for the helmet: " + JSON.stringify(req)], [logged(w, "Goodies", /Stat scroll for the worn dexcap \+9/), "logged"]];
+});
+T("SW2 worn gear scroll, Merchant side: the piece comes back in the bag, gets its scroll and goes to the Ranger", async (w) => {
+  if (!/STAT_SCROLL_WORN/.test(MERCH_SRC)) return skip_r4;
+  w.bank.items0.push({ name: "plaincap", level: 0 });
+  const ovr = Object.assign(SW_OVR.slice(), { ranger_scroll: true });
+  const m = merchant_char(w, { gold: 50000 }, ovr);
+  add_item(m, "dexcap", 1, 9);
+  const L = fake_ranger(w); const F = make_char(w, "Dexy2", { x: -110, y: 25 });
+  const send = () => { gear_rep(L, {}); gear_rep(F, {}); };
+  send(); w.clock.every(send, 60000);
+  await w.clock.run(900);
+  const got = m.items.filter((x) => x && x.name === "dexcap");
+  return [[logged(w, "Goodies", /STAT SCROLL applied to dexcap \+9 for SexyDexy \(dexscroll\)/) || (got.length === 1 && got[0].stat_type === "dex"), "dex scroll applied: " + w.logs.filter((l) => /STAT SCROLL|dexcap/i.test(l.msg)).map((l) => l.msg).slice(0, 3).join(" | ")], [msgs(L, "gear_ready").length >= 1 && got.length === 1 && got[0].stat_type === "dex", "kept in the bag with the scroll on, and the Ranger is told it is waiting (gear_ready)"]];
+});
+T("SW3 worn gear scroll, Ranger side: scroll_swap takes the piece off and it becomes spare gear for the next trip", async (w) => {
+  const r = ranger_char(w, { attack: 440, frequency: 2, x: 387, y: 1066 }, [["hpot1", 100], ["mpot1", 100]]);
+  r.slots = r.slots || {}; r.slots.helmet = { name: "dexcap", level: 9 };
+  const M = fake_merchant(w);
+  await w.clock.run(30);
+  M.send(ROSTER.ranger.name, { type: "scroll_swap", slot: "helmet", name: "dexcap", level: 9 });
+  await w.clock.run(60);
+  return [[!r.slots.helmet, "the helmet is off"], [r.items.some((x) => x && x.name === "dexcap" && x.level === 9), "it is in the bag"], [logged(w, "SexyDexy", /Took off dexcap \+9/), "logged"]];
 });
 T("SS2 STAT_SCROLL_APPLY switches one class off: with priest: false the Priest's cap is handed over without a scroll", async (w) => {
   if (!IS_R5) return skip_r4;

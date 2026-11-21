@@ -164,7 +164,7 @@
     const jobs = [];
     for (const p of S.gear_pending) {
       const sup = support_cfg(p.for);
-      if (!sup || !stat_scroll_on(p.for)) continue;
+      if (!stat_scroll_on(p.for)) continue; // (the Rangers too since 2026-11-21)
       const sc = stat_scroll_of(p.for);
       if (!sc) continue;
       const def = G.items[p.name];
@@ -177,8 +177,9 @@
           !x.l
       )[0];
       if (idx === undefined) continue;
-      const w =
-        (sup.weights && sup.weights[sc.stat]) || (sup.main === sc.stat ? 1 : 0);
+      const w = sup
+        ? (sup.weights && sup.weights[sc.stat]) || (sup.main === sc.stat ? 1 : 0)
+        : 1; // a Ranger: Dexterity is his main stat
       if (!(w > 0)) continue;
       jobs.push({
         name: p.name,
@@ -193,7 +194,40 @@
     const scrollNpc = find_npc(CFG.UPGRADE_SCROLL_NPC);
     const upNpc = find_npc(CFG.UPGRADE_NPC);
     for (const j of jobs) {
-      if ((await apply_stat_scroll(j, scrollNpc, upNpc)) === "fail") return;
+      const r = await apply_stat_scroll(j, scrollNpc, upNpc);
+      if (S.swap && S.swap.name === j.name && S.swap.level === j.level && S.swap.who === j.who) {
+        if (r !== "done") S.swap_fail[j.name + "|" + j.level] = now(); // it did not take: the piece goes back as it was and is never taken off again
+        S.swap = null;
+      }
+      if (r === "fail") return;
+    }
+  }
+  // v6 (Sean 2026-11-21): a Ranger's WORN piece with a stat value and no scroll yet. Applying a stat scroll never breaks gear, so the Merchant asks him to take it off (scroll_swap);
+  // the courier trip brings it to the Merchant like any spare gear, the gear sweep sees it beat the empty slot, apply_support_scrolls puts the scroll on, and the normal hand-over returns it.
+  async function request_scroll_swap() {
+    if (!CFG.STAT_SCROLL_WORN || CFG.UPGRADE_DRY_RUN || !stat_scroll_on(CFG.RANGER_NAME)) return;
+    if (S.swap && now() - S.swap.at > 2 * CFG.STAT_SCROLL_WORN_GAP_MS) S.swap = null; // the piece never came: forget it (it stays in his bag as spare gear, or he still wears it)
+    if (S.swap || now() - S.swap_last < CFG.STAT_SCROLL_WORN_GAP_MS) return;
+    const sc = stat_scroll_of(CFG.RANGER_NAME);
+    if (!sc || unit_cost(sc.name) > CFG.STAT_SCROLL_MAX_GOLD) return;
+    for (const who of roster()) {
+      if (!gear_fresh_for(who)) continue;
+      const rep = gear_of(who);
+      let best = null;
+      for (const slot of Object.keys((rep && rep.slots) || {})) {
+        const it = rep.slots[slot];
+        const def = it && G.items[it.name];
+        if (!def || !(Number(def.stat) > 0) || it.stat_type || S.swap_fail[it.name + "|" + (it.level || 0)]) continue;
+        if (slot === "mainhand" || slot === "offhand") continue; // weapons are not swapped off in the field
+        const v = Number(def.stat) * (1 + (it.level || 0));
+        if (!best || v > best.v) best = { slot, name: it.name, level: it.level || 0, v };
+      }
+      if (!best) continue;
+      S.swap = { who, name: best.name, level: best.level, slot: best.slot, at: now() };
+      S.swap_last = now();
+      say("Stat scroll for the worn " + best.name + " +" + best.level + ": asking " + who + " to take it off and bring it on the next trip (" + sc.name + " does not break gear)", "#8AB4D0");
+      await reply(who, { type: "scroll_swap", slot: best.slot, name: best.name, level: best.level });
+      return;
     }
   }
   async function gear_sweep() {
@@ -204,6 +238,7 @@
       await free_bank_space(); // no-op while the bank has enough free item slots
     }
     await apply_support_scrolls();
+    await request_scroll_swap();
     return go_home();
   }
   const BOOT_AT = now();

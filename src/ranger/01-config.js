@@ -211,6 +211,7 @@
     // handed to the Merchant, who banks them. (Without a Merchant they simply stay in the bag.)
     // v5: spare equipment in the bag (not worn, not locked) that the game lets you upgrade or compound goes to the Merchant too (the Fire Bows the bees drop):
     // he upgrades it, and the gear sweep gives it to whoever it beats. GEAR_KEEP lists item names a Ranger keeps in his bag instead.
+    SCROLL_SWAP: true, // 2026-11-21: take a worn piece off when the Merchant asks (stat scroll, comes back scrolled)
     GEAR_HANDOFF: true,
     GEAR_KEEP: [],
     HANDOFF_ALL_ITEMS: true, // v5: EVERY unlocked, unworn item that is not a potion/elixir goes to the Merchant, who sorts it (sells junk, banks the rest). false = only upgradeable gear (see above)

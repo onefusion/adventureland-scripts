@@ -40,6 +40,9 @@
     bank_seen: null, // {gold, free, at}: the bank as last seen (character.bank only exists at the bank)
     rep_at: 0,
     party_at: 0, // last party check
+    swap: null, // a worn piece taken off for a stat scroll: { who, name, level, slot, at }
+    swap_fail: {}, // name|level of pieces that did not take a scroll: never asked for again
+    swap_last: 0,
     gear_pending: [], // upgraded items kept in the bag for the Ranger
     sweep_last: 0,
     sweep_sig: "",

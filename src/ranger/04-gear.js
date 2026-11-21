@@ -165,6 +165,28 @@
       R.gear_busy = false;
     }
   }
+  // The Merchant wants a stat scroll on a piece we WEAR (a scroll never breaks gear): take it off, it goes to him as spare gear on the next courier trip and comes back scrolled
+  async function scroll_swap(d) {
+    const slot = String(d.slot || "");
+    const name = String(d.name || "");
+    const level = Number(d.level) || 0;
+    if (!CFG.SCROLL_SWAP || GEAR_SLOTS.indexOf(slot) === -1 || slot === "mainhand" || slot === "offhand" || !name) return;
+    const it = character.slots && character.slots[slot];
+    if (!it || it.name !== name || (it.level || 0) !== level || it.stat_type) return; // not worn like that any more
+    if (R.boss || R.retreat || character.rip || free_slots() < 1) return;
+    R.gear_busy = true;
+    try {
+      const res = await call(() => unequip(slot));
+      const got = await call(() => wait_for(() => find_gear(name, level) >= 0, 8000));
+      if (res.failed || got.failed) return say("Could not take off " + name + " +" + level + " for a stat scroll: " + (res.reason || got.reason), "#CF575F");
+      R.gear_recv_at = 0; // spare gear is handed over at once (no wait after a recent gift)
+      R.scroll_swap = { name, level, slot, at: now() };
+      say("Took off " + name + " +" + level + " (" + slot + ") for the Merchant's stat scroll - it goes to him on the next trip and comes back scrolled", "#8AB4D0");
+      send_gear_report();
+    } finally {
+      R.gear_busy = false;
+    }
+  }
   if (CFG.GEAR_SHARE) {
     setTimeout(() => alive() && send_gear_report(), 20000);
     const gear_timer = setInterval(
