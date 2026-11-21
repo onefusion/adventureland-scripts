@@ -6,7 +6,8 @@
     "STAT_SCROLL_APPLY": "stage 1 (D5): new, per class",
     "STAT_SCROLL_MAX_GOLD": "stage 1 (D5): new, any class",
     "GEAR_TRACE": "stage 1: scorer trace switch",
-    "PARTY_ENABLED": "stage 4 (D14): the Merchant is not in the game party (roster.merchant_in_party false)"
+    "PARTY_ENABLED": "stage 4 (D14): the Merchant is not in the game party (roster.merchant_in_party false)",
+    "COMPOUND_FOCUS_OLD": "stage 6: removed (unused backup copy of the Book of Cheer focus; the re-enable recipe stays in the COMPOUND_FOCUS comment)"
   },
   "AutoRanger": {
     "BAG_SHARE": "stage 2: Ranger hands spare items to the Priest",

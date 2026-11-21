@@ -142,15 +142,6 @@ AL.config = (function () {
       COMPOUND_FOCUS: {
         /* OFF: Rangers cannot wear Books of Cheer (live). To re-enable: wbookhs: { target: 3, keep: 0, max_grade: 2, min_chance: 0.3, budget: 30000000 } */
       },
-      COMPOUND_FOCUS_OLD: {
-        wbookhs: {
-          target: 3,
-          keep: 0,
-          max_grade: 2,
-          min_chance: 0.3,
-          budget: 30000000,
-        },
-      },
       // v5 (Sean 2026-11-17): the Warrior's compound set. Compound these (everything funnels up to `level`) until the Warrior has `count` of each at that level
       // (worn, handed over, or held in the bag / bank); from then on no more are compounded or bought, and every other copy is SOLD as it is, whatever its level.
       // The Rangers get nothing from the HP items (a +3 Amulet of HP is worth 0.6 points to them against 13 for a +3 Amulet of Dexterity).

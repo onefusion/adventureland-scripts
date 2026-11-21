@@ -136,7 +136,6 @@ try {
       "orbg",
     ], // v5 (Sean 2026-11-18): + the Orb of Beginnings ingredients (Armadillo Scale, Porcupine Leather, Croc Scale, Bee Fur) and the orb itself; // never sold, junked or dropped by any sale path: the offerings (Primling, Primordial Essence, Primordial X) that raise compound / upgrade odds
     COMPOUND_FOCUS: C.COMPOUND_FOCUS,
-    COMPOUND_FOCUS_OLD: C.COMPOUND_FOCUS_OLD,
     WARRIOR_COMPOUND: C.WARRIOR_COMPOUND,
     RANGER_COMPOUND: C.RANGER_COMPOUND,
     KEEP_FOR_COMPOUND: C.KEEP_FOR_COMPOUND, // received from the Ranger but NOT sold: banked for compounding
