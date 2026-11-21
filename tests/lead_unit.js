@@ -108,3 +108,19 @@ console.log('lead_unit OK');
   assert.ok(out.some((l)=>/^\[status\] R \| script build/.test(l)),'status prints a console line even when not the lead');
   console.log('lead_unit status OK');
 }
+
+// a plain "fight nearby" no longer holds a reload back forever; a boss / goal still does
+{
+  const T0=T;
+  global.character={level:50,hp:900,max_hp:1000,slots:{},map:'main',x:1,y:1,xp:5,gold:9,rip:false};
+  const store={};global.get=(k)=>store[k];global.set=(k,v)=>{store[k]=v};
+  const mk=(busy)=>{const o={reloads:0};o.L=lead.create({CFG:{PARTY_LEADER:'R'},say:()=>{},alive:()=>true,me:{name:'R',cls:'ranger'},members:[{name:'R',cls:'ranger'},{name:'W',cls:'warrior'}],can_lead:{ranger:true},busy,quiet_ms:1000,soft_wait_ms:60000,hooks:{reload:()=>{o.reloads++}}});return o};
+  let o=mk(()=>'a hawk is fighting W');o.L.request_reload('t');
+  for(let i=0;i<10;i++){T+=5000;o.L.tick()}assert.strictEqual(o.reloads,0,'a plain fight still waits at first (50 s)');
+  for(let i=0;i<5;i++){T+=5000;o.L.tick()}assert.strictEqual(o.reloads,1,'after soft_wait_ms a plain fight no longer blocks the reload');
+  o=mk(()=>'a hawk is fighting W');character.hp=300;o.L.request_reload('t');
+  for(let i=0;i<30;i++){T+=5000;o.L.tick()}assert.strictEqual(o.reloads,0,'hurt: keeps waiting');character.hp=900;
+  o=mk(()=>'farm goal phoenix');o.L.request_reload('t');
+  for(let i=0;i<60;i++){T+=5000;o.L.tick()}assert.strictEqual(o.reloads,0,'a goal / boss / forced farm still blocks it');
+  console.log('lead_unit soft wait OK');
+}

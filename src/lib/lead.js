@@ -216,6 +216,7 @@ AL.lead = (function () {
     // ---- reload (rule from Sean 2026-11-21): an automatic reload never fires mid-fight. It is only REQUESTED; tick() runs it after QUIET_MS without hunt / goal / boss / forced farm / Try monster
     // (env.busy() returns a reason string while something is going on, "" when quiet). A button press (the Re-engage button) is immediate and does not come through here.
     const QUIET_MS = env.quiet_ms || 10000;
+    const SOFT_WAIT_MS = env.soft_wait_ms || 120000; // a plain fight may delay a reload at most this long (see reload_tick)
     // ---- automatic reload triggers (Sean 2026-11-21): all three only REQUEST a reload, so it waits for a quiet moment (above); each is switchable and a guard allows the same trigger once per min_gap_ms
     //   build: my script build id differs from the lead's   lib: my lib build id differs from the lead's   idle: no move / xp / gold change for idle_ms while not on Hold
     const AR = Object.assign({ build: true, lib: true, idle: true, idle_ms: 15 * 60000, min_gap_ms: 60 * 60000 }, env.auto_reload || {});
@@ -265,13 +266,17 @@ AL.lead = (function () {
     function request_reload(why) {
       if (L.reload) return;
       L.reload = why;
+      L.reload_at = now();
       L.reload_quiet_since = 0;
       lead_log("RELOAD requested (" + why + ") - it waits for a quiet moment (no fight, hunt, goal, boss or forced farm for " + Math.round(QUIET_MS / 1000) + " s)", "#E0A040");
     }
     function reload_tick() {
       if (!L.reload) return;
       const why = env.busy ? String(env.busy() || "") : "";
-      if (why) {
+      // Sean 2026-11-21: ordinary farming is a fight all day, so "a fight is going on" alone must not hold a reload back forever. After SOFT_WAIT_MS of waiting, a plain fight (not a boss, Grinch, forced farm, goal or trip) no longer blocks it as long as I am healthy.
+      const soft_ok = !!why && /^a .* is fighting /.test(why) && now() - (L.reload_at || now()) >= SOFT_WAIT_MS && character.hp >= character.max_hp * 0.6;
+      if (soft_ok) L.reload_quiet_since = L.reload_quiet_since || now() - QUIET_MS;
+      if (why && !soft_ok) {
         L.reload_quiet_since = 0;
         if (now() - L.reload_said >= 60000) {
           L.reload_said = now();

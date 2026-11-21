@@ -92,7 +92,18 @@
         L("[goals] " + who + " biggest gaps: " + gaps.filter((x) => x.gap > 0).slice(0, 5).map((x) => x.type + " +" + fmt(x.gap) + (x.best ? " (" + x.best + ")" : "")).join(", "));
       }
       L("[goals] ===== END =====");
-      try { console.log(out.join("\n")); } catch (e) {}
+      // one console message per character (a single huge message gets cut off when it is copied from the console)
+      try {
+        let chunk = [];
+        for (const line of out) {
+          if (/^\[goals\] --- /.test(line) && chunk.length) {
+            console.log(chunk.join("\n"));
+            chunk = [];
+          }
+          chunk.push(line);
+        }
+        if (chunk.length) console.log(chunk.join("\n"));
+      } catch (e) {}
       say("Gear goals report: " + who_all.length + " characters, " + out.length + " lines - copy it from the browser console (F12)", "#E0A040");
     } catch (e) {
       say("Gear goals report failed: " + ((e && e.message) || e), "#CF575F");
