@@ -21,7 +21,7 @@ const norm = (v) => (Array.isArray(v) && v.every((x) => typeof x === "string") ?
 const same = (a, b) => JSON.stringify(norm(a)) === JSON.stringify(norm(b));
 let bad = 0;
 for (const [n] of PAIRS) {
-  const v5 = cfg_of(path.join(ROOT, n + " v5.js"), null), v6 = cfg_of(path.join(ROOT, "src/entries", n + ".js"), n.replace("Auto", ""));
+  const v5 = cfg_of(path.join(ROOT, n + " v5.js"), null), v6 = cfg_of(path.join(ROOT, "dist", n + " v6.js"), n.replace("Auto", ""));
   const allowed = ALLOWED[n] || {};
   const changed = Object.keys(v5).filter((k) => k in v6 && !same(v5[k], v6[k]));
   const only5 = Object.keys(v5).filter((k) => !(k in v6)), only6 = Object.keys(v6).filter((k) => !(k in v5));
