@@ -1,0 +1,13 @@
+{
+  "name": "adventureland-scripts",
+  "private": true,
+  "description": "Adventure Land party automation. src/ is built into dist/ (the files uploaded into the game code slots) by build/build.js - no dependencies.",
+  "scripts": {
+    "build": "node build/build.js",
+    "check": "node build/build.js && node tests/build_check.js",
+    "test": "node build/build.js && node tests/build_check.js && node tests/config_equiv.js && node tests/golden_gear.js && node tests/gear_score.js && bash tests/run_suite.sh v6",
+    "test:v5": "bash tests/run_suite.sh v5",
+    "golden": "node tests/golden_gear.js",
+    "one": "bash tests/one.sh"
+  }
+}
