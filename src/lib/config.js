@@ -84,7 +84,7 @@ AL.config = (function () {
   // ---------------------------------------------------- per-script views (the CFG keys keep their v5 names)
   const view = {
     Merchant() {
-      return {
+      return Object.assign(gear_settings(), {
         RANGER_NAME: roster.leader.name,
         SUPPORT_NAMES: [roster.priest.name, roster.warrior.name],
         TRUSTED_NAMES: names(roster.followers),
@@ -95,7 +95,7 @@ AL.config = (function () {
         BOSS_GEAR: boss_gear.slice(),
         JUNK_ANY_LEVEL: junk_any_level.slice(),
         JUNK_SELL_MAX_LEVEL: junk_max_level,
-      };
+      });
     },
     Ranger() {
       return {
@@ -130,6 +130,202 @@ AL.config = (function () {
       });
     },
   };
+  // ---------------------------------------------------- gear settings (stage 5, 2026-11-21): the Merchant's per-class gear rules
+  // Compound focuses, the Warrior's / Ranger's compound sets, the gear profiles of the support classes, the scoring weights and the bank packs.
+  // They were Merchant-only, so moving them removed no duplication; they live here so every class setting is in one file and the names come from the roster.
+  // A function: every call returns fresh objects (the Merchant may change its CFG).
+  function gear_settings() {
+    return {
+      // Items pushed up the compound ladder on their own terms (ignores the Rangers' demand ladder and the preferred-kind rule):
+      // target = highest level, keep = copies that stay behind (0 = funnel everything), max_grade = highest scroll tier to buy,
+      // min_chance = lowest odds accepted, budget = scroll budget per round for this item (overrides the session share)
+      COMPOUND_FOCUS: {
+        /* OFF: Rangers cannot wear Books of Cheer (live). To re-enable: wbookhs: { target: 3, keep: 0, max_grade: 2, min_chance: 0.3, budget: 30000000 } */
+      },
+      COMPOUND_FOCUS_OLD: {
+        wbookhs: {
+          target: 3,
+          keep: 0,
+          max_grade: 2,
+          min_chance: 0.3,
+          budget: 30000000,
+        },
+      },
+      // v5 (Sean 2026-11-17): the Warrior's compound set. Compound these (everything funnels up to `level`) until the Warrior has `count` of each at that level
+      // (worn, handed over, or held in the bag / bank); from then on no more are compounded or bought, and every other copy is SOLD as it is, whatever its level.
+      // The Rangers get nothing from the HP items (a +3 Amulet of HP is worth 0.6 points to them against 13 for a +3 Amulet of Dexterity).
+      WARRIOR_COMPOUND: {
+        who: roster.warrior.name,
+        items: {
+          strring: { count: 2, level: 3 },
+          hpamulet: { count: 1, level: 3 },
+          hpbelt: { count: 1, level: 3 },
+        },
+      }, // strring (Sean 2026-11-18): Rings of Strength from the arctic bees replace the Rings of Joy;
+      // v5 (Sean 2026-11-18 17:28): the Ranger's compound focus. Rings of Dexterity (arctic bees drop them) are pushed up the ladder on their own terms (everything funnels to `level`,
+      // ahead of the demand ladder) until `who` has `count` of them at that level or better (worn, on the way to him, or held in the bag / bank). Then the focus ends and the normal ladder takes over
+      // (nothing is sold, nothing is blocked). Empty {} turns it off.
+      RANGER_COMPOUND: {
+        who: roster.leader.name,
+        items: {
+          dexring: { count: 2, level: 3 },
+          orbg: { count: 1, level: 3 },
+          intring: { count: 2, level: 3, who: roster.priest.name },
+        },
+      }, // intring: for the Priest (a per-item "who" overrides the Ranger default); // orbg: the Ranger wears ONE orb
+      COMPOUND_PACKS: [
+        "items0",
+        "items1",
+        "items2",
+        "items3",
+        "items4",
+        "items5",
+        "items6",
+        "items7",
+      ], // bank packs to take items from (v5: all 8 packs of the main Bank; a pack that is not unlocked yet has no item array and is skipped)
+      UPGRADE_PACKS: [
+        "items0",
+        "items1",
+        "items2",
+        "items3",
+        "items4",
+        "items5",
+        "items6",
+        "items7",
+      ], // (same list as COMPOUND_PACKS)
+      // v5 (Sean 2026-11-17): support characters that run AutoPriest v5 (or a later Warrior script) report what they wear (gear_report) and get gear handed over like the Rangers do.
+      // The sweep gives them what beats their worn slot (Rangers are served first); items they would wear are never sold. UNVERIFIED defaults: tune the weights with Sean (like the Ranger ranking).
+      // main = the class's attack stat: its weight is raised to (attack weight x weapon attack / 20) from the worn weapon, as for the Ranger's dex.
+      // weapon_types: weapon kinds she can use (an item whose class list names her class always counts). Offhand: books (source) and shields.
+      // Not covered yet for them: upgrade / compound rounds, copy limits and demand counts (those only count the Rangers).
+      SUPPORT_GEAR: {
+        // v5 (Sean 2026-11-17): the Warrior TANK: vitality, armor, resistance and max hp first (his weapon matters little). Class rules from data/classes.json: mainhand spear / short_sword / sword / fist / mace,
+        // two-handed rapier / bow / axe / scythe / basher / great_sword, offhand shield or a second one-hander (no Books). Targets and sources: warrior-priest-upgradeable-gear-targets.md.
+        // SexyWexy = the Warrior (confirmed by Sean 2026-11-17), code slot 8. Needs AutoWarrior (not written yet) so he reports gear. No report = no effect.
+        // v5 (Sean 2026-11-18): the Warrior wears the best SWORD (main hand) and the best SHIELD (off hand), both ranked by: vitality, hp, courage (the game's aggro stats: courage / pcourage / mcourage),
+        // armor, resistance, in that order. A basher stays in his BAG (never worn): Stomp needs one, and he swaps it in for the stun and back (AutoWarrior with_basher). One Wooden Basher is enough
+        // (the Merchant hands one over and never sells bashers while he has none; a Basher works too). Two-handed types (two_hand_types) replace the shield, so they are compared against sword + shield.
+        [roster.warrior.name]: {
+          cls: "warrior",
+          main: "str",
+          main_from_weapon: false,
+          skip_types: ["source"],
+          scroll: "strscroll", // Strength is now his main stat (Sean 2026-11-18); use "vitscroll" for Vitality
+          weapon_types: ["sword"],
+          two_hand_types: [
+            "rapier",
+            "bow",
+            "axe",
+            "scythe",
+            "basher",
+            "great_sword",
+          ],
+          bag_kit: ["wbasher", "basher"], // kept in his bag: the first listed is preferred
+          // Sean's order (2026-11-18): strength (hp, armor, speed), vitality (hp by level), evasion (physical attacks miss: only helps against physical monsters), armor, damage return (dreturn), lifesteal, courage (aggro). UNVERIFIED numbers.
+          weights: {
+            str: 6,
+            vit: 5.5,
+            evasion: 5,
+            armor: 0.6,
+            dreturn: 1.5,
+            lifesteal: 1,
+            courage: 0.5,
+            pcourage: 0.5,
+            mcourage: 0.5,
+            hp: 0.04,
+            resistance: 0.4,
+            attack: 0.05,
+            range: 0,
+            dex: 0.02,
+            int: 0,
+            speed: 0.05,
+            frequency: 0.1,
+            crit: 0.01,
+            reflection: 0.02,
+            manasteal: 0.01,
+            mp: 0.0002,
+          },
+        },
+        // v5 (Sean 2026-11-18): the Warrior's SECOND set for MAGICAL bosses (Grinch, Franky, Dragold, Rudolph ...): resistance first. It is a pseudo character "SexyWexy+": his gear_report lists what he
+        // carries in his bag for it (report.alt, slot -> item), the sweep fills every empty / weaker slot and hands the pieces over like the basher (they stay in his bag; AutoWarrior swaps the set in
+        // when the focus target is a big magical monster and back afterwards). No weapon (his sword stays). Needs more bank space long-term (Sean accepts). UNVERIFIED weights.
+        [roster.warrior.name + "+"]: {
+          cls: "warrior",
+          main: "resistance",
+          main_from_weapon: false,
+          skip_types: ["source", "weapon"],
+          scroll: "strscroll",
+          weapon_types: [],
+          weights: {
+            resistance: 4,
+            vit: 3,
+            str: 6,
+            hp: 0.08,
+            reflection: 1,
+            armor: 0.2,
+            lifesteal: 0.5,
+            courage: 0.5,
+            pcourage: 0.5,
+            mcourage: 0.5,
+            speed: 0.05,
+            mp: 0.0002,
+          },
+        },
+        // v5 (Sean 2026-11-18): the Priest wants the best MACE or STAFF (ranked: attack = damage, intelligence, MP cost per attack (mp_cost, negative = cheaper heals: the Ornament Staff has -40), max MP).
+        // Heal is based on the attack value. Game data (classes.json): staff and pmace are one-handed (a Book / shield fits the off hand); the WAND is two-handed for the Priest (frequency +40), so it
+        // is compared against weapon + off hand together (two_hand_types). UNVERIFIED weights: tune with Sean.
+        [roster.priest.name]: {
+          cls: "priest",
+          main: "int",
+          scroll: "intscroll", // stat scroll applied to her gear before it is handed over (adds the item's "stat" value as Intelligence)
+          weapon_types: ["staff", "pmace", "wand"],
+          two_hand_types: ["wand"],
+          weights: {
+            attack: 3,
+            int: 1,
+            mp_cost: -1.2,
+            mp: 0.002,
+            mp_reduction: 0.2,
+            range: 0.3,
+            vit: 0.1,
+            str: 0.05,
+            dex: 0.1,
+            speed: 0.02,
+            crit: 0.04,
+            hp: 0.0006,
+            armor: 0.05,
+            resistance: 0.05,
+            evasion: 0.01,
+            reflection: 0.006,
+            lifesteal: 0.02,
+            manasteal: 0.02,
+            frequency: 0,
+          },
+        },
+      },
+      GEAR_WEIGHTS: {
+        dex: 1,
+        attack: 3,
+        range: 0.5,
+        int: 0.2,
+        vit: 0.2,
+        str: 0.2,
+        speed: 0.02,
+        crit: 0.04,
+        apiercing: 0.01,
+        rpiercing: 0.01,
+        hp: 0.0006,
+        mp: 0.0002,
+        armor: 0.05,
+        resistance: 0.05,
+        evasion: 0.01,
+        reflection: 0.006,
+        lifesteal: 0.02,
+        manasteal: 0.01,
+      },
+      SET_WEIGHTS: { phresistance: 0.05, stresistance: 0.05 }, // weights for set-bonus stats that GEAR_WEIGHTS does not list (dex, speed, apiercing, resistance... use GEAR_WEIGHTS)
+    };
+  }
   // the Warrior and the Priest see the party the same way
   function support_view(slot) {
     return {

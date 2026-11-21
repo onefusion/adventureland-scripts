@@ -2,7 +2,14 @@
 const fs = require("fs"), path = require("path"), vm = require("vm");
 const src = fs.readFileSync(path.join(__dirname, "..", process.env.MERCHANT_FILE || "dist/AutoMerchant v6.js"), "utf8");
 const lib_src = fs.readFileSync(path.join(__dirname, "..", process.env.LIB_FILE || "dist/AL Libs v6.js"), "utf8"); // the scorer itself lives in the lib (AL.gear)
-const cfg = src.match(/GEAR_WEIGHTS: \{[\s\S]*?\n    \},/)[0];
+// the weights live in AL.config (stage 5); the v5 files (old lib) still carry them in the Merchant text
+let cfg;
+try {
+  const tmp = vm.createContext({ console });
+  vm.runInContext(lib_src + "\nthis.__w = AL.config && AL.config.for_script(\"Merchant\").GEAR_WEIGHTS;", tmp);
+  if (tmp.__w) cfg = "GEAR_WEIGHTS: " + JSON.stringify(tmp.__w) + ",";
+} catch (e) {}
+if (!cfg) cfg = src.match(/GEAR_WEIGHTS: \{[\s\S]*?\n    \},/)[0];
 const block = src.match(/\/\/ <gear-scoring>[\s\S]*?\/\/ <\/gear-scoring>/)[0];
 const ctx = {
   game_log() {},

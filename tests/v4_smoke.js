@@ -51,7 +51,7 @@ src = (f) => norm_src(_read0(f));
 const _src0 = _read0;
 const src_legacy = (f) => {
   const patch = (t) => {
-  t = t.replace('FARM_ROTATION: ["poisio", "armadillo", "croc", "porcupine", "arcticbee"],', 'FARM_ROTATION: [],').replace('FARM_MONSTER: "poisio", //', 'FARM_MONSTER: "", //').replace('"beewings", // Bee Wings', '// Bee Wings').replace('JUNK_ITEMS: ["beewings", ', "JUNK_ITEMS: [").replace('"ringsj", // Ring of Joy', '// Ring of Joy').replace(/JUNK_ANY_LEVEL: \["ringsj"\]/, "JUNK_ANY_LEVEL: []").replace("items: { strring: { count: 2, level: 3 }, hpamulet", "items: { ringsj: { count: 2, level: 3 }, hpamulet").replace('KEEP_FOR_COMPOUND: ["strring", "intring", "dexring"', 'KEEP_FOR_COMPOUND: ["ringsj", "dexring"').replace('JUNK_ITEMS: ["wattire", "ringsj", ', 'JUNK_ITEMS: ["wattire", ').replace(/JUNK_ANY_LEVEL: \["ringsj"\]/, "JUNK_ANY_LEVEL: []").replace('const junk_any_level = ["ringsj"];', "const junk_any_level = [];").replace('const compound_core = ["strring", "intring", "dexring"', 'const compound_core = ["ringsj", "dexring"'); // (the last two: the same old behaviour in the shared config file, src/lib/config.js)
+  t = t.replace('FARM_ROTATION: ["poisio", "armadillo", "croc", "porcupine", "arcticbee"],', 'FARM_ROTATION: [],').replace('FARM_MONSTER: "poisio", //', 'FARM_MONSTER: "", //').replace('"beewings", // Bee Wings', '// Bee Wings').replace('JUNK_ITEMS: ["beewings", ', "JUNK_ITEMS: [").replace('"ringsj", // Ring of Joy', '// Ring of Joy').replace(/JUNK_ANY_LEVEL: \["ringsj"\]/, "JUNK_ANY_LEVEL: []").replace(/items: \{\s*strring: \{ count: 2, level: 3 \},\s*hpamulet/, "items: { ringsj: { count: 2, level: 3 }, hpamulet").replace('KEEP_FOR_COMPOUND: ["strring", "intring", "dexring"', 'KEEP_FOR_COMPOUND: ["ringsj", "dexring"').replace('JUNK_ITEMS: ["wattire", "ringsj", ', 'JUNK_ITEMS: ["wattire", ').replace(/JUNK_ANY_LEVEL: \["ringsj"\]/, "JUNK_ANY_LEVEL: []").replace('const junk_any_level = ["ringsj"];', "const junk_any_level = [];").replace('const compound_core = ["strring", "intring", "dexring"', 'const compound_core = ["ringsj", "dexring"'); // (the last two: the same old behaviour in the shared config file, src/lib/config.js)
   return t;
   };
   return patch(norm_src(patch(_src0(f)))); // the patches match the raw text (comments inside multi-line lists) AND the joined one-line text
@@ -266,8 +266,8 @@ function make_char(world, name, o, script, overrides) {
 }
 
 const RANGER_OVR = [[/PARTY_MEMBERS: (?:\[[^\]]*\]|C\.PARTY_MEMBERS)/, "PARTY_MEMBERS: []"], [/HUNT_ENABLED: true/, "HUNT_ENABLED: false"], [/GEAR_SHARE: true/, "GEAR_SHARE: false"], [/LUCK_STOP: true/, "LUCK_STOP: false"]]; // v5: the Merchant's Luck stop is tested on its own (FL1-FL4)
-const WC_OFF = [/WARRIOR_COMPOUND: \{[^\n]*\n/, "WARRIOR_COMPOUND: null,\n", true]; // v5: the Warrior compound set is tested on its own (WC1, WC2)
-const RC_OFF = [/RANGER_COMPOUND: \{[^\n]*\n/, "RANGER_COMPOUND: {},\n", true]; // v5: the Ranger compound focus (dexring) is tested on its own (CF1, CF2)
+const WC_OFF = [/WARRIOR_COMPOUND: (?:\{[^\n]*\n|C\.WARRIOR_COMPOUND,\n)/, "WARRIOR_COMPOUND: null,\n", true]; // v5: the Warrior compound set is tested on its own (WC1, WC2)
+const RC_OFF = [/RANGER_COMPOUND: (?:\{[^\n]*\n|C\.RANGER_COMPOUND,\n)/, "RANGER_COMPOUND: {},\n", true]; // v5: the Ranger compound focus (dexring) is tested on its own (CF1, CF2)
 const MERCH_OVR = [WC_OFF, RC_OFF, [/COMPOUND_ENABLED: true/, "COMPOUND_ENABLED: false"], [/UPGRADE_ENABLED: true/, "UPGRADE_ENABLED: false"], [/CRAFT_ENABLED: true/, "CRAFT_ENABLED: false"], [/LOTTERY_ENABLED: true/, "LOTTERY_ENABLED: false"]];
 const MERCH_OVR_COMPOUND = [WC_OFF, RC_OFF, [/UPGRADE_ENABLED: true/, "UPGRADE_ENABLED: false"], [/CRAFT_ENABLED: true/, "CRAFT_ENABLED: false"], [/LOTTERY_ENABLED: true/, "LOTTERY_ENABLED: false"]];
 
@@ -2432,8 +2432,8 @@ T("RT2 farm rotation: after the Crocs comes the Porcupines (desertland), and aft
 });
 T("RJ2 Rings of Joy are no longer in the Warrior compound set or the keep lists", async (w) => {
   const M = src("AutoMerchant v4.js");
-  const wc = M.match(/WARRIOR_COMPOUND: \{[^\n]*/)[0];
   const cfg = lib_config();
+  const wc = cfg ? JSON.stringify(cfg.for_script("Merchant").WARRIOR_COMPOUND) : M.match(/WARRIOR_COMPOUND: \{[^\n]*/)[0];
   const km = cfg ? cfg.for_script("Merchant").KEEP_FOR_COMPOUND : (M.match(/KEEP_FOR_COMPOUND: \[[^\]]*\]/) || [""])[0], kr = cfg ? cfg.for_script("Ranger").KEEP_FOR_COMPOUND : ((src("AutoRanger v4.js").match(/KEEP_FOR_COMPOUND: \[[^\]]*\]/) || [""])[0]);
   return [[!/ringsj/.test(wc), "not in WARRIOR_COMPOUND"], [!/ringsj/.test(JSON.stringify(km)), "not in Merchant keep list"], [!IS_R5 || !/ringsj/.test(JSON.stringify(kr)), "not in Ranger keep list"]];
 });

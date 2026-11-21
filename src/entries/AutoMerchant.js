@@ -135,43 +135,10 @@ try {
       "bfur",
       "orbg",
     ], // v5 (Sean 2026-11-18): + the Orb of Beginnings ingredients (Armadillo Scale, Porcupine Leather, Croc Scale, Bee Fur) and the orb itself; // never sold, junked or dropped by any sale path: the offerings (Primling, Primordial Essence, Primordial X) that raise compound / upgrade odds
-    // Items pushed up the compound ladder on their own terms (ignores the Rangers' demand ladder and the preferred-kind rule):
-    // target = highest level, keep = copies that stay behind (0 = funnel everything), max_grade = highest scroll tier to buy,
-    // min_chance = lowest odds accepted, budget = scroll budget per round for this item (overrides the session share)
-    COMPOUND_FOCUS: {
-      /* OFF: Rangers cannot wear Books of Cheer (live). To re-enable: wbookhs: { target: 3, keep: 0, max_grade: 2, min_chance: 0.3, budget: 30000000 } */
-    },
-    COMPOUND_FOCUS_OLD: {
-      wbookhs: {
-        target: 3,
-        keep: 0,
-        max_grade: 2,
-        min_chance: 0.3,
-        budget: 30000000,
-      },
-    },
-    // v5 (Sean 2026-11-17): the Warrior's compound set. Compound these (everything funnels up to `level`) until the Warrior has `count` of each at that level
-    // (worn, handed over, or held in the bag / bank); from then on no more are compounded or bought, and every other copy is SOLD as it is, whatever its level.
-    // The Rangers get nothing from the HP items (a +3 Amulet of HP is worth 0.6 points to them against 13 for a +3 Amulet of Dexterity).
-    WARRIOR_COMPOUND: {
-      who: "SexyWexy",
-      items: {
-        strring: { count: 2, level: 3 },
-        hpamulet: { count: 1, level: 3 },
-        hpbelt: { count: 1, level: 3 },
-      },
-    }, // strring (Sean 2026-11-18): Rings of Strength from the arctic bees replace the Rings of Joy;
-    // v5 (Sean 2026-11-18 17:28): the Ranger's compound focus. Rings of Dexterity (arctic bees drop them) are pushed up the ladder on their own terms (everything funnels to `level`,
-    // ahead of the demand ladder) until `who` has `count` of them at that level or better (worn, on the way to him, or held in the bag / bank). Then the focus ends and the normal ladder takes over
-    // (nothing is sold, nothing is blocked). Empty {} turns it off.
-    RANGER_COMPOUND: {
-      who: "SexyDexy",
-      items: {
-        dexring: { count: 2, level: 3 },
-        orbg: { count: 1, level: 3 },
-        intring: { count: 2, level: 3, who: "SexyHexy" },
-      },
-    }, // intring: for the Priest (a per-item "who" overrides the Ranger default); // orbg: the Ranger wears ONE orb
+    COMPOUND_FOCUS: C.COMPOUND_FOCUS,
+    COMPOUND_FOCUS_OLD: C.COMPOUND_FOCUS_OLD,
+    WARRIOR_COMPOUND: C.WARRIOR_COMPOUND,
+    RANGER_COMPOUND: C.RANGER_COMPOUND,
     KEEP_FOR_COMPOUND: C.KEEP_FOR_COMPOUND, // received from the Ranger but NOT sold: banked for compounding
     // Grinch / Snowman gear drops (the Rangers hand them over: their KEEP_FOR_COMPOUND has the same keys). At level 0, not locked, worth at most
     // SURPLUS_MAX_VALUE_EACH and NOT better than what any Ranger wears (all three gear reports fresh) they are SOLD at Gabriel;
@@ -209,16 +176,7 @@ try {
     COMPOUND_UPGRADE_NPC: "newupgrade", // compounds are done standing next to this NPC (Cue)
     COMPOUND_SESSION_PCT: 0.1, // scroll budget per session = this share of the bank's gold when the first round starts
     COMPOUND_BANK_FLOOR: 5000000, // hard stop: no compounding while the bank holds less gold than this
-    COMPOUND_PACKS: [
-      "items0",
-      "items1",
-      "items2",
-      "items3",
-      "items4",
-      "items5",
-      "items6",
-      "items7",
-    ], // bank packs to take items from (v5: all 8 packs of the main Bank; a pack that is not unlocked yet has no item array and is skipped)
+    COMPOUND_PACKS: C.COMPOUND_PACKS,
     BANKFULL_SELL: true, // when the bank is nearly full, sell the low-value compoundable items to make room
     BANKFULL_TRIGGER_FREE: 10, // "full" = fewer free slots than this in COMPOUND_PACKS
     BANKFULL_TARGET_FREE: 12, // sell until about this many slots are free
@@ -327,16 +285,7 @@ try {
     UPGRADE_SESSION_PCT: 0.1, // separate scroll budget: this share of the bank's gold when the first upgrade round starts
     UPGRADE_SCROLL_NPC: "scrolls",
     UPGRADE_NPC: "newupgrade",
-    UPGRADE_PACKS: [
-      "items0",
-      "items1",
-      "items2",
-      "items3",
-      "items4",
-      "items5",
-      "items6",
-      "items7",
-    ], // (same list as COMPOUND_PACKS)
+    UPGRADE_PACKS: C.UPGRADE_PACKS,
     SUPPORT_UPGRADE_ANY: true, // (Sean 2026-11-18) the upgrade round matches ANY upgradable item against what the Warrior and the Priest wear too (not only SUPPORT_UPGRADE_NAMES); false = only the names below
     SUPPORT_UPGRADE_NAMES: ["sweaterhs", "xmassweater", "xmaspants"], // v5 (Sean 2026-11-18): Super Sweater / Xmas Sweater / Xmas Pants ("Winter Pants") are no longer junk: stop-gap chests and legs for the Warrior (and Priest) until Heavy Armor / Rugged Coat turn up. The upgrade round also upgrades these (up to UPGRADE_MAX_LEVEL, same two-copies and scroll rules as for the Rangers) when the piece would beat what a support character wears
     UPGRADE_MAX_ITEMS: 4, // items taken out of the bank per round
@@ -354,116 +303,7 @@ try {
     FLIP_KEEP_NAMES: [], // item names never flipped (e.g. gear you plan for the Priest/Warrior)
     GEAR_CLASS: "ranger", // whose gear this is (items restricted to other classes are ignored)
     GEAR_WEAPON_TYPES: ["bow"], // weapon kinds the Ranger can use
-    // v5 (Sean 2026-11-17): support characters that run AutoPriest v5 (or a later Warrior script) report what they wear (gear_report) and get gear handed over like the Rangers do.
-    // The sweep gives them what beats their worn slot (Rangers are served first); items they would wear are never sold. UNVERIFIED defaults: tune the weights with Sean (like the Ranger ranking).
-    // main = the class's attack stat: its weight is raised to (attack weight x weapon attack / 20) from the worn weapon, as for the Ranger's dex.
-    // weapon_types: weapon kinds she can use (an item whose class list names her class always counts). Offhand: books (source) and shields.
-    // Not covered yet for them: upgrade / compound rounds, copy limits and demand counts (those only count the Rangers).
-    SUPPORT_GEAR: {
-      // v5 (Sean 2026-11-17): the Warrior TANK: vitality, armor, resistance and max hp first (his weapon matters little). Class rules from data/classes.json: mainhand spear / short_sword / sword / fist / mace,
-      // two-handed rapier / bow / axe / scythe / basher / great_sword, offhand shield or a second one-hander (no Books). Targets and sources: warrior-priest-upgradeable-gear-targets.md.
-      // SexyWexy = the Warrior (confirmed by Sean 2026-11-17), code slot 8. Needs AutoWarrior (not written yet) so he reports gear. No report = no effect.
-      // v5 (Sean 2026-11-18): the Warrior wears the best SWORD (main hand) and the best SHIELD (off hand), both ranked by: vitality, hp, courage (the game's aggro stats: courage / pcourage / mcourage),
-      // armor, resistance, in that order. A basher stays in his BAG (never worn): Stomp needs one, and he swaps it in for the stun and back (AutoWarrior with_basher). One Wooden Basher is enough
-      // (the Merchant hands one over and never sells bashers while he has none; a Basher works too). Two-handed types (two_hand_types) replace the shield, so they are compared against sword + shield.
-      SexyWexy: {
-        cls: "warrior",
-        main: "str",
-        main_from_weapon: false,
-        skip_types: ["source"],
-        scroll: "strscroll", // Strength is now his main stat (Sean 2026-11-18); use "vitscroll" for Vitality
-        weapon_types: ["sword"],
-        two_hand_types: [
-          "rapier",
-          "bow",
-          "axe",
-          "scythe",
-          "basher",
-          "great_sword",
-        ],
-        bag_kit: ["wbasher", "basher"], // kept in his bag: the first listed is preferred
-        // Sean's order (2026-11-18): strength (hp, armor, speed), vitality (hp by level), evasion (physical attacks miss: only helps against physical monsters), armor, damage return (dreturn), lifesteal, courage (aggro). UNVERIFIED numbers.
-        weights: {
-          str: 6,
-          vit: 5.5,
-          evasion: 5,
-          armor: 0.6,
-          dreturn: 1.5,
-          lifesteal: 1,
-          courage: 0.5,
-          pcourage: 0.5,
-          mcourage: 0.5,
-          hp: 0.04,
-          resistance: 0.4,
-          attack: 0.05,
-          range: 0,
-          dex: 0.02,
-          int: 0,
-          speed: 0.05,
-          frequency: 0.1,
-          crit: 0.01,
-          reflection: 0.02,
-          manasteal: 0.01,
-          mp: 0.0002,
-        },
-      },
-      // v5 (Sean 2026-11-18): the Warrior's SECOND set for MAGICAL bosses (Grinch, Franky, Dragold, Rudolph ...): resistance first. It is a pseudo character "SexyWexy+": his gear_report lists what he
-      // carries in his bag for it (report.alt, slot -> item), the sweep fills every empty / weaker slot and hands the pieces over like the basher (they stay in his bag; AutoWarrior swaps the set in
-      // when the focus target is a big magical monster and back afterwards). No weapon (his sword stays). Needs more bank space long-term (Sean accepts). UNVERIFIED weights.
-      "SexyWexy+": {
-        cls: "warrior",
-        main: "resistance",
-        main_from_weapon: false,
-        skip_types: ["source", "weapon"],
-        scroll: "strscroll",
-        weapon_types: [],
-        weights: {
-          resistance: 4,
-          vit: 3,
-          str: 6,
-          hp: 0.08,
-          reflection: 1,
-          armor: 0.2,
-          lifesteal: 0.5,
-          courage: 0.5,
-          pcourage: 0.5,
-          mcourage: 0.5,
-          speed: 0.05,
-          mp: 0.0002,
-        },
-      },
-      // v5 (Sean 2026-11-18): the Priest wants the best MACE or STAFF (ranked: attack = damage, intelligence, MP cost per attack (mp_cost, negative = cheaper heals: the Ornament Staff has -40), max MP).
-      // Heal is based on the attack value. Game data (classes.json): staff and pmace are one-handed (a Book / shield fits the off hand); the WAND is two-handed for the Priest (frequency +40), so it
-      // is compared against weapon + off hand together (two_hand_types). UNVERIFIED weights: tune with Sean.
-      SexyHexy: {
-        cls: "priest",
-        main: "int",
-        scroll: "intscroll", // stat scroll applied to her gear before it is handed over (adds the item's "stat" value as Intelligence)
-        weapon_types: ["staff", "pmace", "wand"],
-        two_hand_types: ["wand"],
-        weights: {
-          attack: 3,
-          int: 1,
-          mp_cost: -1.2,
-          mp: 0.002,
-          mp_reduction: 0.2,
-          range: 0.3,
-          vit: 0.1,
-          str: 0.05,
-          dex: 0.1,
-          speed: 0.02,
-          crit: 0.04,
-          hp: 0.0006,
-          armor: 0.05,
-          resistance: 0.05,
-          evasion: 0.01,
-          reflection: 0.006,
-          lifesteal: 0.02,
-          manasteal: 0.02,
-          frequency: 0,
-        },
-      },
-    },
+    SUPPORT_GEAR: C.SUPPORT_GEAR,
     // --- Christmas event exchange (items turned in at their quest NPCs; each exchange gives a random reward) ---
     // --- manual compound test (top buttons "Compound odds" / "Compound test") ---
     OFFERING_ITEMS: ["offeringp", "offering"], // an offering / Primling in the bag is shown in the odds check and used by the real test
@@ -589,29 +429,10 @@ try {
       shatter: 0.1,
       secondchance: 0.05,
     },
-    GEAR_WEIGHTS: {
-      dex: 1,
-      attack: 3,
-      range: 0.5,
-      int: 0.2,
-      vit: 0.2,
-      str: 0.2,
-      speed: 0.02,
-      crit: 0.04,
-      apiercing: 0.01,
-      rpiercing: 0.01,
-      hp: 0.0006,
-      mp: 0.0002,
-      armor: 0.05,
-      resistance: 0.05,
-      evasion: 0.01,
-      reflection: 0.006,
-      lifesteal: 0.02,
-      manasteal: 0.01,
-    },
+    GEAR_WEIGHTS: C.GEAR_WEIGHTS,
     STAT_AS_MAIN: true, // Sean 2026-11-20: stat scrolls are cheap, so an item's stat counts as applied: Dexterity for the Ranger, Strength for the Warrior, Intelligence for the Priest
     SET_BONUS: true, // Sean 2026-11-20: item set bonuses (G.sets, e.g. the Hunter Ranger set: dex +3 at 2 pieces, +6 and speed at 3, armor piercing at 4, resistance at 5) count in the Ranger's gear score: a piece is worth what it adds to the set bonus of the pieces already worn in the other slots
-    SET_WEIGHTS: { phresistance: 0.05, stresistance: 0.05 }, // weights for set-bonus stats that GEAR_WEIGHTS does not list (dex, speed, apiercing, resistance... use GEAR_WEIGHTS)
+    SET_WEIGHTS: C.SET_WEIGHTS,
     SELF_HEAL_UNTIL_PCT: 0.7, // keep drinking until at least this fraction of max HP
     HEAL_RETRY_MS: 60000, // after a failed heal attempt (no gold, unreachable shop), wait this long
     TICK_MS: 400,

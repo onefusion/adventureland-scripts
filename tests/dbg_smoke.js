@@ -199,7 +199,7 @@ function make_char(world, name, o, script, overrides) {
 }
 
 const RANGER_OVR = [[/PARTY_MEMBERS: \[[^\]]*\]/, "PARTY_MEMBERS: []"], [/HUNT_ENABLED: true/, "HUNT_ENABLED: false"], [/GEAR_SHARE: true/, "GEAR_SHARE: false"], [/LUCK_STOP: true/, "LUCK_STOP: false"]]; // v5: the Merchant's Luck stop is tested on its own (FL1-FL4)
-const WC_OFF = [/WARRIOR_COMPOUND: \{[^\n]*\},\n/, "WARRIOR_COMPOUND: null,\n", true]; // v5: the Warrior compound set is tested on its own (WC1, WC2)
+const WC_OFF = [/WARRIOR_COMPOUND: (?:\{[^\n]*\},\n|C\.WARRIOR_COMPOUND,\n)/, "WARRIOR_COMPOUND: null,\n", true]; // v5: the Warrior compound set is tested on its own (WC1, WC2)
 const MERCH_OVR = [WC_OFF, [/COMPOUND_ENABLED: true/, "COMPOUND_ENABLED: false"], [/UPGRADE_ENABLED: true/, "UPGRADE_ENABLED: false"], [/CRAFT_ENABLED: true/, "CRAFT_ENABLED: false"], [/LOTTERY_ENABLED: true/, "LOTTERY_ENABLED: false"]];
 const MERCH_OVR_COMPOUND = [WC_OFF, [/UPGRADE_ENABLED: true/, "UPGRADE_ENABLED: false"], [/CRAFT_ENABLED: true/, "CRAFT_ENABLED: false"], [/LOTTERY_ENABLED: true/, "LOTTERY_ENABLED: false"]];
 
