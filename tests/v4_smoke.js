@@ -3575,6 +3575,19 @@ T("SW3 worn gear scroll, Ranger side: scroll_swap takes the piece off and it bec
   await w.clock.run(60);
   return [[!r.slots.helmet, "the helmet is off"], [r.items.some((x) => x && x.name === "dexcap" && x.level === 9), "it is in the bag"], [logged(w, "SexyDexy", /Took off dexcap \+9/), "logged"]];
 });
+T("FC1 Fiery Cape: a Fiery Cape in the bank beats the Grinch's Cape the Ranger wears, goes to him, and is never sold", async (w) => {
+  if (!/STAT_SCROLL_WORN/.test(MERCH_SRC)) return skip_r4;
+  w.G.items.fcape = { name: "Fiery Cape", type: "cape", armor: 10, resistance: 8, stat: 6, upgrade: { armor: 2, resistance: 2, stat: 0.1, firesistance: 4 }, grades: [0, 0, 10, 12], g: 16000000 };
+  w.G.items.gcape = { name: "Grinch's Cape", type: "cape", resistance: 8, stat: 4, upgrade: { resistance: 4, pnresistance: 1, stat: 0.1 }, grades: [0, 7, 10, 12], g: 8008 };
+  w.bank.items0.push({ name: "fcape", level: 0 });
+  const m = merchant_char(w, { gold: 50000 }, SW_OVR);
+  const L = fake_ranger(w); const F = make_char(w, "Dexy2", { x: -110, y: 25 });
+  const send = () => { gear_rep(L, { cape: { name: "gcape", level: 0 } }); gear_rep(F, {}); };
+  send(); w.clock.every(send, 60000);
+  await w.clock.run(600);
+  const all = [].concat(w.bank.items0, w.bank.items1, w.bank.items3, m.items);
+  return [[all.some((i) => i && i.name === "fcape"), "the Fiery Cape was not sold"], [msgs(L, "gear_ready").length >= 1 || logged(w, "Goodies", /fcape/), "the Ranger is told it is waiting: " + w.logs.filter((l) => /fcape/.test(l.msg)).map((l) => l.msg).slice(0, 2).join(" | ")]];
+});
 T("SS2 STAT_SCROLL_APPLY switches one class off: with priest: false the Priest's cap is handed over without a scroll", async (w) => {
   if (!IS_R5) return skip_r4;
   if (!/STAT_SCROLL_APPLY/.test(MERCH_SRC)) return skip_r4;
