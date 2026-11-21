@@ -113,6 +113,11 @@ AL.gear = (function () {
       if (credit) this.trace("set " + def.set + ": " + name + " adds " + credit + " with " + others + " other piece(s) worn");
       return credit;
     }
+    // items nobody may wear (AL.config.lists.never_wear): a score far below an empty slot, so they are never handed out and always replaced
+    banned(name) {
+      const l = AL.config && AL.config.lists && AL.config.lists.never_wear;
+      return !!l && l.indexOf(name) !== -1;
+    }
     // the score of an item at a level; opts: { who, stat_type: the stat scroll already applied, assume_dex: count a scroll that could still be applied }
     score(name, level, opts) {
       return 0;
@@ -160,6 +165,7 @@ AL.gear = (function () {
       return CFG.GEAR_WEIGHTS[p] !== undefined ? CFG.GEAR_WEIGHTS[p] : (CFG.SET_WEIGHTS || {})[p] || 0;
     }
     score(name, level, opts) {
+      if (this.banned(name)) return -1000000;
       const def = this.G.items[name];
       if (!def) return 0;
       opts = opts || {};
@@ -211,6 +217,7 @@ AL.gear = (function () {
       return p === sup.main ? main_w : sup.weights[p] || 0;
     }
     score(name, level, opts) {
+      if (this.banned(name)) return -1000000;
       const def = this.G.items[name];
       if (!def) return 0;
       opts = opts || {};

@@ -29,6 +29,9 @@ AL.config = (function () {
   const names = (a) => a.map((x) => x.name);
 
   // ---------------------------------------------------- item lists
+  // NEVER WEAR (Sean 2026-11-21): no character may wear these. Ice Skates (speed -10) leave the character far behind the group on long walks. The scorers rate them far below an empty slot, so the
+  // Merchant never hands them out and gives any other piece for the slot; a character that already wears one takes it off (AL.runtime.strip_never_wear).
+  const never_wear = ["iceskates"];
   // JUNK: the Merchant sells these (JUNK_SELLABLE); the Rangers hand them over (JUNK_ITEMS), plus the support gear below that is handed over but never sold:
   const junk_both = [
     "hbow", // Hunting Bow (Sean 2026-11-19 16:00)
@@ -342,5 +345,5 @@ AL.config = (function () {
     if (!me) members.push({ name, cls, slot: "" });
     return { me: { name, cls: me ? me.cls : cls }, members: members.map((x) => ({ name: x.name, cls: x.cls, slot: x.slot })), order: roster.lead_order.slice(), can_lead: Object.assign({}, roster.can_lead), merchant: Object.assign({ name: roster.merchant.name, slot: roster.merchant.slot }, roster.merchant_autostart), auto_reload: Object.assign({}, roster.auto_reload) };
   }
-  return { lead_env, roster, lists: { junk_both, junk_merchant_only, handover_support_gear, compound_core, boss_gear, orb, prefixes_consumables, prefixes_scrolls, junk_any_level, junk_max_level }, for_script };
+  return { lead_env, roster, lists: { never_wear, junk_both, junk_merchant_only, handover_support_gear, compound_core, boss_gear, orb, prefixes_consumables, prefixes_scrolls, junk_any_level, junk_max_level }, for_script };
 })();

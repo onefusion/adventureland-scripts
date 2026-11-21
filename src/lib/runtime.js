@@ -343,6 +343,7 @@ AL.runtime = (function () {
       return -1;
     };
     R.send_gear_report = function () {
+      strip_never_wear(say);
       if (!CFG.GEAR_SHARE) return;
       const slots = {};
       for (const sl of GEAR_SLOTS) {
@@ -460,5 +461,19 @@ AL.runtime = (function () {
     }
     return { share_tick, share_give };
   }
-  return { GEAR_SLOTS, EVENT_RE, ev_keep, create, bag_share };
+  // takes off any worn piece on the never-wear list (Ice Skates). Each report calls it, so a piece worn from before is removed within a report interval; the Merchant then fills the slot.
+  function strip_never_wear(say_fn) {
+    try {
+      const l = AL.config && AL.config.lists && AL.config.lists.never_wear;
+      if (!l || !character.slots) return;
+      for (const sl of Object.keys(character.slots)) {
+        const it = character.slots[sl];
+        if (it && l.indexOf(it.name) !== -1) {
+          if (say_fn) say_fn("[gear] taking off " + it.name + " (" + sl + "): it is on the never-wear list (it slows the character too much)", "#E0A040");
+          AL.call(() => unequip(sl));
+        }
+      }
+    } catch (e) {}
+  }
+  return { GEAR_SLOTS, EVENT_RE, ev_keep, create, bag_share, strip_never_wear };
 })();

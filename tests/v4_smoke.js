@@ -402,6 +402,18 @@ T("G1 gear goes to the leader first when he would gain", async (w) => {
   await w.clock.run(400);
   return [[logged(w, "Goodies", /Keeping plaincap \+1 for SexyDexy/), "kept for the leader"], [!logged(w, "Goodies", /Keeping plaincap.*for Dexy2/), "not for the follower"]];
 });
+T("NW1 never wear (Sean 2026-11-21): a Ranger that wears Ice Skates gets any other shoes from the sweep, and Ice Skates in the bank are never handed out", async (w) => {
+  if (!HAS_LEAD) return skip_lead;
+  w.G.items.iceskates = { type: "shoes", name: "Ice Skates", speed: -10, dex: 3, armor: 8, compound: {}, grades: [0, 7, 10, 12], g: 920000 };
+  w.G.items.plainshoes = { type: "shoes", name: "Plain Shoes", dex: 1, armor: 1, compound: {}, grades: [0, 7, 10, 12], g: 100 };
+  w.bank.items0.push({ name: "plainshoes", level: 0 }, { name: "iceskates", level: 3 });
+  const m = merchant_char(w, { gold: 50000 }, UPG_FAST);
+  const L = fake_ranger(w);
+  const send = () => gear_rep(L, { shoes: { name: "iceskates", level: 2 } });
+  send(); w.clock.every(send, 60000);
+  await w.clock.run(400);
+  return [[logged(w, "Goodies", /Gear sweep: plainshoes \+0 for SexyDexy/), "the plain shoes replace the worn Ice Skates"], [!logged(w, "Goodies", /Gear sweep: iceskates/), "Ice Skates are never handed out"]];
+});
 T("OB3 an Orb of Beginnings +1 in the bank beats the Orb of Testing (poison proc) the Ranger wears: the gear sweep picks it for him", async (w) => {
   w.G.items.orbg = { type: "orb", name: "Orb of Beginnings", str: 2, int: 2, dex: 2, compound: { str: 1, int: 1, dex: 1 }, grades: [4, 6, 6, 7], g: 60000 };
   w.G.items.test_orb = { type: "orb", name: "Orb of Testing", ability: "poison", attr0: 50, compound: {}, grades: [0, 0, 6, 7], g: 1 };

@@ -17,6 +17,7 @@
     "offhand",
   ];
   function send_gear_report() {
+    AL.runtime.strip_never_wear(say);
     if (!CFG.GEAR_SHARE) return;
     const slots = {};
     for (const s of GEAR_SLOTS) {
