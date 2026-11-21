@@ -163,11 +163,8 @@ try {
     COMPOUND_DRY_RUN: false, // true = only look: fetch triples, ask the server for the odds, log them, put everything back. Set to false to really compound
     // Need-driven compounding ("ladder"): accessories are compounded for the Rangers, tier by tier. Every Ranger slot (2 rings, 2 earrings,
     // 1 of each other accessory per Ranger) gets a +1 first, then the surplus is compounded to +2 for all slots, then +3, up to the target.
-    // Only the best accessory of each kind is compounded; the rest is surplus (sold when the bank is nearly full). false = old behaviour
-    // (compound every triple, lowest level first).
-    COMPOUND_NEED_DRIVEN: true,
+    // Only the best accessory of each kind is compounded; the rest is surplus (sold when the bank is nearly full).
     COMPOUND_TARGET_LEVEL: 5, // the ladder stops here (the scroll grade limit and the session budget stop it earlier when scrolls get dear)
-    COMPOUND_MAX_INPUT_LEVEL: 2, // old behaviour only: three +2 (or lower) items are combined, so nothing above +3 is produced // only three +2 (or lower) items are ever combined, so nothing above +3 is produced
     COMPOUND_KEEP_COPIES: 3, // a compound only runs while this many copies of the same item and level stay behind (6 held = 1 triple; a failure still leaves a full triple). 0 = old behaviour
     COMPOUND_MIN_CHANCE: 0.4, // never attempt below this success chance (asked from the server for the exact items)
     COMPOUND_MAX_SCROLL_GRADE: 1, // highest scroll tier to buy (0 = cscroll0 only, 1 = cscroll1 at 240k each...); higher-grade items are skipped
@@ -3063,10 +3060,7 @@ try {
     focus_of(name) ? focus_of(name).max_grade : CFG.COMPOUND_MAX_SCROLL_GRADE;
   const min_chance_of = (name) =>
     focus_of(name) ? focus_of(name).min_chance : CFG.COMPOUND_MIN_CHANCE;
-  const comp_max_input = (name) =>
-    CFG.COMPOUND_NEED_DRIVEN || focus_of(name)
-      ? target_of(name) - 1
-      : CFG.COMPOUND_MAX_INPUT_LEVEL;
+  const comp_max_input = (name) => target_of(name) - 1;
   const comp_ok = (it) =>
     !!it &&
     !it.l &&
@@ -3511,7 +3505,7 @@ try {
     if (!CFG.BANKFULL_SELL) return;
     const free = bank_free_slots();
     if (free >= CFG.BANKFULL_TRIGGER_FREE) return;
-    const cs = CFG.COMPOUND_NEED_DRIVEN ? comp_state() : null;
+    const cs = comp_state();
     const cheap = (it) =>
       !!it &&
       !it.l &&
@@ -3521,9 +3515,8 @@ try {
       !!G.items[it.name] &&
       !!G.items[it.name].compound &&
       scroll_grade(it) < CFG.BANKFULL_KEEP_GRADE &&
-      (cs
-        ? (it.level || 0) < CFG.COMPOUND_TARGET_LEVEL && !cs.useful(it) // not needed by a Ranger or by the ladder
-        : (it.level || 0) < CFG.COMPOUND_SELL_AT_LEVEL);
+      (it.level || 0) < CFG.COMPOUND_TARGET_LEVEL &&
+      !cs.useful(it); // not needed by a Ranger or by the ladder
     const counts = {};
     const all = bank_list();
     for (const b of all)
@@ -3663,11 +3656,7 @@ try {
       const def = it && G.items[it.name];
       if (!def || it.l || it.q > 1 || never_sell(it)) return;
       if (!def.compound && !def.upgrade) return;
-      const cap = def.compound
-        ? CFG.COMPOUND_NEED_DRIVEN
-          ? CFG.COMPOUND_TARGET_LEVEL
-          : CFG.COMPOUND_SELL_AT_LEVEL
-        : upg_max(it.name);
+      const cap = def.compound ? CFG.COMPOUND_TARGET_LEVEL : upg_max(it.name);
       if ((it.level || 0) < cap) return; // not finished: compounding / upgrading may still use it
       const score = gear_wearable(it)
         ? gear_score(it.name, it.level || 0, { stat_type: it.stat_type })
@@ -4059,7 +4048,7 @@ try {
     const who_list = roster().filter(gear_fresh_for);
     const sup_list = support_names().filter(gear_fresh_for); // v5: support characters with a fresh report are served after the Rangers
     const items = [];
-    const cs = CFG.COMPOUND_NEED_DRIVEN ? comp_state() : null;
+    const cs = comp_state();
     const add = (it, where) => {
       if (
         !it ||
@@ -4107,7 +4096,7 @@ try {
         comp_ok,
         scroll_grade,
         max_grade_of,
-        ladder_ok: cs ? cs.ladder_ok : null,
+        ladder_ok: cs.ladder_ok,
         upg_max,
         upg_ok,
         upg_has_spare,
@@ -4498,7 +4487,6 @@ try {
   // (Complete triples of these used to sit in the bag forever: not compounded, not sold.) Needs fresh gear reports from every Ranger.
   function dead_stock_bag() {
     const out = { sell: [], why: "" };
-    if (!CFG.COMPOUND_NEED_DRIVEN) return out;
     for (const who of roster())
       if (!gear_fresh_for(who)) {
         out.why = "no fresh gear report from " + who;
@@ -4706,7 +4694,7 @@ try {
     )
       await sell_copies();
     await free_bank_space();
-    if (CFG.COMPOUND_NEED_DRIVEN) {
+    {
       const rep_ = comp_state().report();
       if (rep_ && rep_ !== S.ladder_sig) {
         S.ladder_sig = rep_;
@@ -4744,7 +4732,7 @@ try {
     if (!groups.length) {
       say(
         "Compound round: no triples of identical items (+" +
-          CFG.COMPOUND_MAX_INPUT_LEVEL +
+          (CFG.COMPOUND_TARGET_LEVEL - 1) +
           " or lower) found"
       );
       return go_home();

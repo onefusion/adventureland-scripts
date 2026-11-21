@@ -14,7 +14,7 @@ const fn = (worn) => ({
   gear_score: (n, lv) => 10 * (lv + 1), gear_wearable: () => true, support_cfg: () => false, two_hand: () => false,
   slots_of: () => ["ring1", "ring2"], slot_scores: (who) => worn[who], kit_missing: () => false, kit_names: () => [], find_kit: () => null,
 });
-const cfg = { COMPOUND_NEED_DRIVEN: true, COMPOUND_SELL_AT_LEVEL: 3, GEAR_MARGIN: 1.05 };
+const cfg = { GEAR_MARGIN: 1.05 };
 const item = (lv, i) => ({ it: { name: "ring", level: lv }, pack: "items0", i });
 
 let p = AL.planners.sweep({ who_list: ["A", "B"], sup_list: [], items: [item(3, 0)], cfg, G_items, fn: fn({ A: { ring1: 10, ring2: 20 }, B: { ring1: 40, ring2: 40 } }) });
@@ -102,8 +102,8 @@ ok(ld.useful({ name: "ring", level: 0 }) && !ld.useful({ name: "ring", level: 3 
 
 // ---- compound groups ----
 const grp = (lv, bag, bank) => ({ key: "ring+" + lv, item: { name: "ring", level: lv }, bag, bank: new Array(bank).fill({}) });
-const genv = (groups, o) => Object.assign({ groups, cfg: { COMPOUND_NEED_DRIVEN: false },
-  fn: { keep_of: () => 0, scroll_for: () => "cscroll0", scroll_grade: () => 0, max_grade_of: () => 1, focus_of: () => null, ladder: () => null } }, o);
+const genv = (groups, o) => Object.assign({ groups,
+  fn: { keep_of: () => 0, scroll_for: () => "cscroll0", scroll_grade: () => 0, max_grade_of: () => 1, focus_of: () => null, ladder: () => ({ take_triples: (n, L, avail) => avail }) } }, o);
 
 let cg = AL.planners.compound_groups(genv([grp(1, 3, 0), grp(0, 2, 5), grp(2, 2, 0)]));
 ok(cg.groups.map((g) => g.item.level).join() === "0,1" && cg.groups[0].max_triples === 2 && cg.groups[1].max_triples === 1, "groups with fewer than three copies are dropped; the rest are sorted lowest level first with their triple counts");
@@ -114,7 +114,7 @@ ok(cg.groups.length === 0, "a full triple that must stay behind (keep_of 3) is n
 cg = AL.planners.compound_groups(genv([grp(0, 3, 0)], { fn: Object.assign(genv([]).fn, { scroll_grade: () => 2 }) }));
 ok(cg.groups.length === 0 && cg.skipped.length === 1, "a scroll above the allowed tier skips the group and reports it");
 
-cg = AL.planners.compound_groups({ groups: [grp(0, 6, 0)], cfg: { COMPOUND_NEED_DRIVEN: true }, fn: Object.assign(genv([]).fn, { ladder: () => ({ take_triples: (n, L, avail) => Math.min(avail, 1) }) }) });
+cg = AL.planners.compound_groups({ groups: [grp(0, 6, 0)], fn: Object.assign(genv([]).fn, { ladder: () => ({ take_triples: (n, L, avail) => Math.min(avail, 1) }) }) });
 ok(cg.groups.length === 1 && cg.groups[0].max_triples === 1, "with the ladder on, the ladder decides how many triples");
 
 process.exit(fails ? 1 : 0);

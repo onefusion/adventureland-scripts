@@ -8,10 +8,9 @@ AL.planners = (function () {
   // ---- sweep ----
   // env.who_list / env.sup_list   Rangers / support characters with a fresh gear report (the Merchant already filtered them)
   // env.items                     candidate pieces [{ it, bag } | { it, pack, i }] (wearable, unlocked, unstacked, upgradeable or compoundable)
-  // env.cfg                       { COMPOUND_NEED_DRIVEN, COMPOUND_SELL_AT_LEVEL, GEAR_MARGIN }
+  // env.cfg                       { GEAR_MARGIN }
   // env.G_items                   G.items
-  // env.fn                        the Merchant's helpers: comp_key, target_of, keep_of, comp_ok, scroll_grade, max_grade_of, ladder_ok (null when
-  //                               the compound ladder is off), upg_max, upg_ok, upg_has_spare, gear_score, gear_wearable, support_cfg, two_hand,
+  // env.fn                        the Merchant's helpers: comp_key, target_of, keep_of, comp_ok, scroll_grade, max_grade_of, ladder_ok, upg_max, upg_ok, upg_has_spare, gear_score, gear_wearable, support_cfg, two_hand,
   //                               slots_of, slot_scores(who) -> { slot: score of what he wears }, kit_missing, kit_names, find_kit(name)
   // Returns { give: [{ c, who, slot }], no_kit?: [names] }.
   function sweep(env) {
@@ -24,7 +23,7 @@ AL.planners = (function () {
     const finished = (c) => {
       const def = G_items[c.it.name];
       const lv = c.it.level || 0;
-      if (def.compound && cfg.COMPOUND_NEED_DRIVEN) {
+      if (def.compound) {
         if (lv >= fn.target_of(c.it.name)) return true;
         const compoundable =
           counts[fn.comp_key(c.it)] >= 3 + fn.keep_of(c.it.name) &&
@@ -33,10 +32,8 @@ AL.planners = (function () {
           fn.ladder_ok(c.it.name, lv);
         return !compoundable; // waiting for a triple, or the ladder has no use for it: a Ranger may wear it now
       }
-      if (def.compound && lv >= cfg.COMPOUND_SELL_AT_LEVEL) return true;
       if (def.upgrade && lv >= fn.upg_max(c.it.name)) return true;
-      if (def.upgrade && !def.compound) return !(fn.upg_ok(c.it) && fn.upg_has_spare(c.it)); // the upgrade rounds will not take it further
-      if (def.compound) return counts[fn.comp_key(c.it)] < 3; // no triple to compound it with
+      if (def.upgrade) return !(fn.upg_ok(c.it) && fn.upg_has_spare(c.it)); // the upgrade rounds will not take it further
       return false;
     };
     const virt = {};
@@ -267,11 +264,10 @@ AL.planners = (function () {
 
   // ---- compound groups: which stacks of identical items are compounded now, and how many triples ----
   // env.groups   [{ key, item, bag, bank: [..] }]  copies per kind and level (bag count, bank entries), built by the Merchant
-  // env.cfg      { COMPOUND_NEED_DRIVEN }
   // env.fn       keep_of(name), scroll_for(item), scroll_grade(item), max_grade_of(name), focus_of(name), ladder() -> the ladder planner state
   // Returns { groups: [g with .scroll .grade .max_triples], skipped: [g] } (skipped = needs a scroll above the allowed tier), lowest level first.
   function compound_groups(env) {
-    const { cfg, fn } = env;
+    const { fn } = env;
     const skipped = [];
     let ladder_cs = null;
     const groups = env.groups
@@ -286,10 +282,6 @@ AL.planners = (function () {
       .filter((g) => {
         // never use the last copies: a failed compound destroys all three, so a full triple stays behind
         const spare = Math.floor((g.bag + g.bank.length - fn.keep_of(g.item.name)) / 3);
-        if (!cfg.COMPOUND_NEED_DRIVEN && !fn.focus_of(g.item.name)) {
-          g.max_triples = spare;
-          return spare > 0;
-        }
         if (!ladder_cs) ladder_cs = fn.ladder();
         // lowest level first; every planned triple changes what the next one sees
         g.max_triples = ladder_cs.take_triples(g.item.name, g.item.level || 0, spare);
