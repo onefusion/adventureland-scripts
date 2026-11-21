@@ -10,7 +10,13 @@
     jsd_main: "https://cdn.jsdelivr.net/gh/" + OWNER + "@main/" + FILE,
     jsd_sha: "https://cdn.jsdelivr.net/gh/" + OWNER + "@" + SHA + "/" + FILE,
   };
-  const log = (m, ok) => game_log("[probe] " + m, ok === false ? "#CF575F" : ok ? "#5BCB5B" : "#7DC4E4");
+  // every line goes to the game log AND the browser console (the game log cannot be copied); all lines are printed again as ONE block at the end
+  const lines = [];
+  const log = (m, ok) => {
+    lines.push((ok === false ? "FAIL " : ok ? "OK   " : "     ") + m);
+    console.log("[probe] " + m);
+    game_log("[probe] " + m, ok === false ? "#CF575F" : ok ? "#5BCB5B" : "#7DC4E4");
+  };
   const bust = (u) => u + (u.indexOf("?") < 0 ? "?" : "&") + "t=" + Date.now();
   const run = async (name, f) => {
     const t0 = Date.now();
@@ -61,5 +67,6 @@
       })
     );
   }
-  log("probe finished - copy every [probe] line back", null);
+  log("probe finished", null);
+  console.log("[probe] ===== SUMMARY (copy everything between the lines) =====\n" + lines.join("\n") + "\n[probe] ===== END =====");
 })();
