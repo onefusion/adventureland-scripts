@@ -158,6 +158,8 @@
     who = who || CFG.RANGER_NAME;
     const g = gear_of(who);
     const slots = slots_of(G.items[it.name].type, who);
+    // a type this character has no slot for (a shield for a Ranger, a book for the Warrior ...): nothing he wears can be beaten, so the floor is infinite (was: "slots is undefined" crash, 2026-11-21)
+    if (!slots) return { slot: "", score: Infinity };
     if (two_hand(who, it)) {
       // a two-handed weapon replaces the weapon AND the off hand
       const sc = (sl) => {
