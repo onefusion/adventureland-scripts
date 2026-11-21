@@ -62,6 +62,23 @@ try {
     );
     load_budgets();
     add_test_buttons();
+    // GitHub auto-update: the Merchant polls version.json himself and reloads when idle (no job, not in a round, 60 s of quiet)
+    if (AL.update && AL.config.roster.update && AL.config.roster.update.enabled !== false) {
+      let quiet_since = 0;
+      const UPD = AL.update.create({
+        say,
+        cfg: AL.config.roster.update,
+        current: () => String(globalThis.__AL_BUILD || ""),
+        can_reload: () => {
+          const busy = S.cur ? "a job is running" : has_jobs() ? "a job is queued" : ACT.label !== IDLE_LABEL ? "busy: " + ACT.label : "";
+          if (busy) { quiet_since = 0; return busy; }
+          if (!quiet_since) quiet_since = Date.now();
+          return Date.now() - quiet_since < 60000 ? "waiting for 60 s of quiet" : "";
+        },
+        reload: () => AL.reengage({ say, slot: CFG.SELF_CODE_SLOT, restart: AutoMerchantV5 }),
+      });
+      const upd_timer = setInterval(() => (alive() ? UPD.tick() : clearInterval(upd_timer)), 15000);
+    }
     AL.reengage_button({
       say,
       slot: CFG.SELF_CODE_SLOT,

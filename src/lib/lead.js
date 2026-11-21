@@ -231,6 +231,8 @@ AL.lead = (function () {
       } catch (e) {}
       return true;
     }
+    // GitHub auto-update (lead only): a newer build on GitHub makes the LEAD reload (quiet moment); the followers then see its new build id in the hello and reload by themselves (check_build)
+    const UPD = env.update && env.update.enabled !== false && AL.update ? AL.update.create({ say: (m, c) => say(m, c), cfg: env.update, current: my_build, fetch: env.fetch, reload: (why) => request_reload(why) }) : null;
     function check_build(from, d) {
       const mb = my_build(), ml = my_lib();
       const tb = String(d.build || ""), tl = String(d.lib || "");
@@ -335,6 +337,7 @@ AL.lead = (function () {
       }
       reload_tick();
       idle_tick();
+      if (UPD && i_lead()) UPD.tick();
       merchant_tick();
       if (!i_lead() && now() - L.seen_at >= election_ms && now() - L.started >= election_ms) election();
     }

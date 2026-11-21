@@ -529,7 +529,7 @@ T("HR1 hourly report: XP gained (across a level-up), deaths, free bag slots, gol
 T("HR2 the hourly report rows are kept in storage and posted to the Google Sheet URL (when set)", async (w) => {
   if (!IS_V5) return skip_v4;
   const calls = [];
-  global.fetch = (url, opts) => { calls.push({ url, opts }); return Promise.resolve({}); };
+  global.fetch = (url, opts) => { if (/githubusercontent/.test(url)) return Promise.resolve({ ok: false, status: 404 }); calls.push({ url, opts }); return Promise.resolve({}); }; // the GitHub update poll is not a report POST
   try {
     const m = merchant_char(w, { gold: 50000 }, MERCH_OVR.concat([[/STATUS_REPORT_MS: 3600000/, "STATUS_REPORT_MS: 300000"], [/REPORT_URL: ""/, 'REPORT_URL: "https://script.google.com/macros/s/TEST/exec"'], [/REPORT_TOKEN: ""/, 'REPORT_TOKEN: "tok"']]));
     m.sb.fetch = global.fetch;

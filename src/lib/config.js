@@ -22,6 +22,7 @@ AL.config = (function () {
     priest: { name: "SexyHexy", cls: "priest", slot: "5" },
     lead_order: ["ranger", "warrior", "priest"], // E1 (stage 4): who is preferred when the party elects a lead
     merchant_in_party: false, // D14: the Merchant is not in the game party, does not lead it and does not invite; the lead Ranger invites the others. true = the v5 way (he leads and invites)
+    update: { enabled: true, repo: "onefusion/adventureland-scripts", branch: "main", check_ms: 5 * 60000, min_gap_ms: 30 * 60000 }, // GitHub auto-update (2026-11-21): the lead and the Merchant read dist/version.json every check_ms and reload when the build differs
     auto_reload: { build: true, lib: true, idle: true, idle_ms: 15 * 60000, min_gap_ms: 60 * 60000 }, // Sean 2026-11-21: reload requests (never mid-fight): build / lib id differs from the lead's, or nothing changed for idle_ms. The same cause fires at most once per min_gap_ms
     merchant_autostart: { enabled: true, max_tries: 3, retry_ms: 60000, grace_ms: 30000 }, // the lead starts the Merchant if he is not running: at most max_tries attempts, stops for good when he is up or a start fails
     can_lead: { ranger: true, warrior: false, priest: false }, // the Warrior and the Priest lead only after the focus/activities logic is shared (later stage)
@@ -343,7 +344,7 @@ AL.config = (function () {
     // a character that is not in the roster (a spare Ranger, a test character) is still a party member of the class its script says
     const members = all.map((x) => ({ name: x.name, cls: x.cls, slot: x.slot }));
     if (!me) members.push({ name, cls, slot: "" });
-    return { me: { name, cls: me ? me.cls : cls }, members: members.map((x) => ({ name: x.name, cls: x.cls, slot: x.slot })), order: roster.lead_order.slice(), can_lead: Object.assign({}, roster.can_lead), merchant: Object.assign({ name: roster.merchant.name, slot: roster.merchant.slot }, roster.merchant_autostart), auto_reload: Object.assign({}, roster.auto_reload) };
+    return { me: { name, cls: me ? me.cls : cls }, members: members.map((x) => ({ name: x.name, cls: x.cls, slot: x.slot })), order: roster.lead_order.slice(), can_lead: Object.assign({}, roster.can_lead), merchant: Object.assign({ name: roster.merchant.name, slot: roster.merchant.slot }, roster.merchant_autostart), auto_reload: Object.assign({}, roster.auto_reload), update: Object.assign({}, roster.update) };
   }
   return { lead_env, roster, lists: { never_wear, junk_both, junk_merchant_only, handover_support_gear, compound_core, boss_gear, orb, prefixes_consumables, prefixes_scrolls, junk_any_level, junk_max_level }, for_script };
 })();
