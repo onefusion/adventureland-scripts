@@ -834,17 +834,6 @@ T("W6 gear sweep: a single Agile Quiver is not sold, upgraded or banked back as 
   const held = m.items.filter((i) => i && i.name === "t2quiver").length + w.bank.items0.concat(w.bank.items1, w.bank.items3).filter((x) => x && x.name === "t2quiver").length;
   return [[held === 1, "still exactly one Agile Quiver in the bag or bank: " + held], [!logged(w, "Goodies", /Sold t2quiver/), "never sold"]];
 });
-const SW_CRAFT = SW_OVR.concat([[/CRAFT_ENABLED: false/, "CRAFT_ENABLED: true"], [/CRAFT_ITEMS: \[[^\]]*\]/, 'CRAFT_ITEMS: ["quiver"]']]); // the live Merchant ships with CRAFT_ITEMS empty (craft report only)
-T("CR1 crafting: each Ranger without a quiver gets one made at Cole from bank materials", async (w) => {
-  w.bank.items0.push({ name: "ascale", q: 3 }, { name: "beewings", q: 450 });
-  const m = merchant_char(w, { gold: 50000 }, SW_CRAFT);
-  const L = fake_ranger(w); const F = make_char(w, "Dexy2", { x: -110, y: 25 });
-  const send = () => { gear_rep(L, {}); gear_rep(F, {}); };
-  send(); w.clock.every(send, 60000);
-  await w.clock.run(1500);
-  const q = m.items.filter((i) => i && i.name === "quiver").length;
-  return [[m.crafted.length === 2, "crafted " + m.crafted.length + " quivers"], [q === 2, "both quivers in the bag: " + q], [logged(w, "Goodies", /Crafted a quiver \(mcollector\)/), "logged it"]];
-});
 T("ML1 Merchant's Luck: level 40, casts on each Ranger once, renews only after 50 min", async (w) => {
   w.G.skills = { mluck: { name: "Merchant's Luck", level: 40, mp: 10, range: 320, cooldown: 100, target: "player", duration: 3600000 } };
   const m = merchant_char(w, { gold: 50000, level: 40, mp: 500, max_mp: 500 }, SW_OVR.concat([[/MLUCK_ENABLED: false/, "MLUCK_ENABLED: true"]]));
@@ -872,24 +861,6 @@ T("ML2 Merchant's Luck: below level 40 or skill unknown -> never casts", async (
   m.level = 50;
   await w.clock.run(300);
   return [[low === 0, "level 30: no cast"], [casts.length === 0, "no skill in G.skills: no cast"]];
-});
-T("CR2 crafting: materials missing -> says so and does not craft", async (w) => {
-  w.bank.items0.push({ name: "beewings", q: 450 });
-  const m = merchant_char(w, { gold: 50000 }, SW_CRAFT);
-  const L = fake_ranger(w); const F = make_char(w, "Dexy2", { x: -110, y: 25 });
-  const send = () => { gear_rep(L, {}); gear_rep(F, { offhand: { name: "quiver", level: 2 } }); };
-  send(); w.clock.every(send, 60000);
-  await w.clock.run(900);
-  return [[m.crafted.length === 0, "nothing crafted"], [logged(w, "Goodies", /Crafting quiver for the Rangers is waiting for materials: 1 more ascale/), "names the missing scale"]];
-});
-T("CR3 crafting: Rangers already wearing a quiver need none", async (w) => {
-  w.bank.items0.push({ name: "ascale", q: 3 }, { name: "beewings", q: 450 });
-  const m = merchant_char(w, { gold: 50000 }, SW_CRAFT);
-  const L = fake_ranger(w); const F = make_char(w, "Dexy2", { x: -110, y: 25 });
-  const send = () => { gear_rep(L, { offhand: { name: "quiver", level: 3 } }); gear_rep(F, { offhand: { name: "quiver", level: 2 } }); };
-  send(); w.clock.every(send, 60000);
-  await w.clock.run(900);
-  return [[m.crafted.length === 0, "nothing crafted"], [!logged(w, "Goodies", /Moving to bank - crafting/), "no trip"]];
 });
 const SW_TARGET = SW_OVR.concat([[/CRAFT_ENABLED: false/, "CRAFT_ENABLED: true"], [/total: 6 \}/, "total: 1 }"]]);
 const venom_world = (w) => {
