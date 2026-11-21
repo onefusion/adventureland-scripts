@@ -5,6 +5,7 @@
     "SUPPORT_SCROLL_MAX_GOLD": "stage 1 (D5): replaced by STAT_SCROLL_MAX_GOLD",
     "STAT_SCROLL_APPLY": "stage 1 (D5): new, per class",
     "STAT_SCROLL_MAX_GOLD": "stage 1 (D5): new, any class",
+    "UPGRADE_MAX_LEVEL_BY_ITEM": "2026-11-21: Fire Bow cap +8 (v5 had +7)",
     "MLUCK_TOWN_ALWAYS": "2026-11-21: new, the town Merchant's Luck round also runs without the Grinch",
     "GEAR_TRACE": "stage 1: scorer trace switch",
     "PARTY_ENABLED": "stage 4 (D14): the Merchant is not in the game party (roster.merchant_in_party false)",
