@@ -24,7 +24,7 @@
     if (
       CFG.CONSOLE_ALL ||
       (CFG.CONSOLE_STATUS &&
-        (/^(Schedule: |Hourly report|Report sheet|Also due after |Upgrade round|Private sale|Market watch|Manual sell round|Manual hold|Bank excess|Sold |Bank junk sweep|Bank (sort|merge|data|layout)|Compound round|Exchange run|Craft report|Gear sweep|Surplus check|Courier notice|Waiting for the courier|Donation|Lottery|Junk pickup|Bag tidy|Copy limit|Flip|FLIP|ERROR|Dead|HP critical|Could not|Cannot)/.test(
+        (/^(Schedule: |Gear sweep|Gave |Hourly report|Report sheet|Also due after |Upgrade round|Private sale|Market watch|Manual sell round|Manual hold|Bank excess|Sold |Bank junk sweep|Bank (sort|merge|data|layout)|Compound round|Exchange run|Craft report|Gear sweep|Surplus check|Courier notice|Waiting for the courier|Donation|Lottery|Junk pickup|Bag tidy|Copy limit|Flip|FLIP|ERROR|Dead|HP critical|Could not|Cannot)/.test(
           String(msg)
         ) ||
           color === "#CF575F" ||
