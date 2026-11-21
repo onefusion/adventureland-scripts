@@ -45,7 +45,7 @@ const join_cfg = (text) => {
   flush();
   return lines.slice(0, st + 1).concat(out, lines.slice(en)).join("\n");
 };
-const norm_src = (t) => join_cfg(t).replace(/REPORT_URL: "[^"]*"/, 'REPORT_URL: ""').replace(/REPORT_TOKEN: "[^"]*"/, 'REPORT_TOKEN: ""').replace("UPGRADE_MAX_LEVEL: 7,", "UPGRADE_MAX_LEVEL: 5,").replace("MLUCK_ENABLED: true,", "MLUCK_ENABLED: false,").replace("SURPLUS_DRY_RUN: false,", "SURPLUS_DRY_RUN: true,").replace(/BANK_LAYOUT_PACKS: \{[^}]*\},/, 'BANK_LAYOUT_PACKS: { stack: ["items0"], exchange: ["items1"], upgrade: ["items2"], compound: ["items3", "items4"], excess: ["items5"] },'); // (the scenarios were written for the shipped defaults; the live file has Sean's own settings: upgrade cap 7, Merchant's Luck on, surplus selling for real); // the tests never post to the real Google Sheet
+const norm_src = (t) => join_cfg(t).replace(/REPORT_URL: "[^"]*"/, 'REPORT_URL: ""').replace(/REPORT_TOKEN: "[^"]*"/, 'REPORT_TOKEN: ""').replace("UPGRADE_MAX_LEVEL: 7,", "UPGRADE_MAX_LEVEL: 5,").replace("MLUCK_ENABLED: true,", "MLUCK_ENABLED: false,").replace(/BANK_LAYOUT_PACKS: \{[^}]*\},/, 'BANK_LAYOUT_PACKS: { stack: ["items0"], exchange: ["items1"], upgrade: ["items2"], compound: ["items3", "items4"], excess: ["items5"] },'); // (the scenarios were written for the shipped defaults; the live file has Sean's own settings: upgrade cap 7, Merchant's Luck on, surplus selling for real); // the tests never post to the real Google Sheet
 src = (f) => norm_src(_read0(f));
 // Rings of Joy became junk at any level (2026-11-18). Most older scenarios use them as their generic ring, so the base source is put back to the old behaviour here; RJ_NEW (below) switches the new behaviour on for RJ1/RJ2.
 const _src0 = _read0;
@@ -426,22 +426,12 @@ T("G2 gear the leader does not need goes to a follower, who gets it at his next 
   const give = msgs(F, "gear_give")[0];
   return [[kept, "kept for the follower"], [!logged(w, "Goodies", /Keeping plaincap \+1 for SexyDexy/), "not for the leader"], [give && give.slot === "helmet" && give.name === "plaincap", "follower told to equip it: " + JSON.stringify(give)], [F.items.some((i) => i && i.name === "plaincap"), "item handed to the follower"]];
 });
-const SUR_OVR = MERCH_OVR_COMPOUND.concat([[/TRUSTED_NAMES: (?:\[[^\]]*\]|C\.TRUSTED_NAMES)/, 'TRUSTED_NAMES: ["Dexy2"]'], [/GEAR_SWEEP: true/, "GEAR_SWEEP: false"], [/SURPLUS_COPIES: true/, "SURPLUS_COPIES: false"], [/SURPLUS_DRY_RUN: (true|false)/, "SURPLUS_DRY_RUN: true"]]);
+const SUR_OVR = MERCH_OVR_COMPOUND.concat([[/TRUSTED_NAMES: (?:\[[^\]]*\]|C\.TRUSTED_NAMES)/, 'TRUSTED_NAMES: ["Dexy2"]'], [/GEAR_SWEEP: true/, "GEAR_SWEEP: false"], [/SURPLUS_COPIES: true/, "SURPLUS_COPIES: false"]]);
 const full_bank = (w, n) => { for (let i = 0; i < n; i++) w.bank[["items0", "items1", "items3"][Math.floor(i / 42)]].push({ name: "plaincap", level: 5 }); };
 const bank_count = (w) => [0, 1, 3].reduce((a, k) => a + w.bank["items" + k].filter((x) => x).length, 0);
-T("S3 surplus: full bank, finished caps no Ranger needs -> dry run only logs the plan", async (w) => {
-  full_bank(w, 122);
-  const m = merchant_char(w, { gold: 50000 }, SUR_OVR); m.sb.calculate_item_value = () => 1000;
-  const L = fake_ranger(w); const F = make_char(w, "Dexy2", { x: -110, y: 25 });
-  const send = () => { gear_rep(L, { helmet: { name: "plaincap", level: 0 } }); gear_rep(F, {}); };
-  send(); w.clock.every(send, 60000);
-  await w.clock.run(900);
-  return [[logged(w, "Goodies", /Surplus check: 2 finished item\(s\) kept for the Rangers, 120 surplus/), "2 kept (one per Ranger), rest surplus"],
-    [logged(w, "Goodies", /dry run, would sell 9 surplus/), "dry run names 9 items (12 free wanted of the 41 usable slots per pack)"], [bank_count(w) === 122, "nothing left the bank"]];
-});
 T("S4 surplus: real run sells just enough to reach the target free slots", async (w) => {
   full_bank(w, 122);
-  const m = merchant_char(w, { gold: 50000 }, SUR_OVR.concat([[/SURPLUS_DRY_RUN: true/, "SURPLUS_DRY_RUN: false"]])); m.sb.calculate_item_value = () => 1000;
+  const m = merchant_char(w, { gold: 50000 }, SUR_OVR); m.sb.calculate_item_value = () => 1000;
   const L = fake_ranger(w); const F = make_char(w, "Dexy2", { x: -110, y: 25 });
   const send = () => { gear_rep(L, { helmet: { name: "plaincap", level: 0 } }); gear_rep(F, {}); };
   send(); w.clock.every(send, 60000);
@@ -450,7 +440,7 @@ T("S4 surplus: real run sells just enough to reach the target free slots", async
 });
 T("S5 surplus: no gear report from a Ranger -> nothing is sold", async (w) => {
   full_bank(w, 122);
-  const m = merchant_char(w, { gold: 50000 }, SUR_OVR.concat([[/SURPLUS_DRY_RUN: true/, "SURPLUS_DRY_RUN: false"]])); m.sb.calculate_item_value = () => 1000;
+  const m = merchant_char(w, { gold: 50000 }, SUR_OVR); m.sb.calculate_item_value = () => 1000;
   const L = fake_ranger(w);
   const send = () => gear_rep(L, {});
   send(); w.clock.every(send, 60000);
@@ -1019,7 +1009,7 @@ T("W3 leader starts a courier trip when the Merchant says gear is waiting", asyn
   return [[logged(w, "SexyDexy", /Courier trip: better gear is waiting at the Merchant/), "trip for gear"], [logged(w, "SexyDexy", /Courier Dexy2 is back \(ok\)/), "trip finished"]];
 });
 const fill_rest = (w) => { for (const k of ["items0", "items1", "items3"]) while (w.bank[k].length < 42) w.bank[k].push({ name: "wshoes", level: 0 }); };
-const CP_OVR = MERCH_OVR.concat([[/TRUSTED_NAMES: (?:\[[^\]]*\]|C\.TRUSTED_NAMES)/, 'TRUSTED_NAMES: ["Dexy2"]'], [/GEAR_SWEEP: true/, "GEAR_SWEEP: false"], [/SURPLUS_DRY_RUN: (true|false)/, "SURPLUS_DRY_RUN: false"]]);
+const CP_OVR = MERCH_OVR.concat([[/TRUSTED_NAMES: (?:\[[^\]]*\]|C\.TRUSTED_NAMES)/, 'TRUSTED_NAMES: ["Dexy2"]'], [/GEAR_SWEEP: true/, "GEAR_SWEEP: false"]]);
 T("X1 consolidate (bank nearly full): both Rangers already wear the +5 piece -> every other +5 of it is sold", async (w) => {
   for (let i = 0; i < 5; i++) w.bank.items0.push({ name: "plaincap", level: 5 });
   w.bank.items0.push({ name: "plaincap", level: 4 }); // below the cap level: untouched
@@ -1045,16 +1035,6 @@ T("X2 copy limit: earrings keep two per Ranger, everything else one", async (w) 
   await w.clock.run(400);
   const n = (nm) => w.bank.items0.filter((x) => x && x.name === nm).length;
   return [[n("xear") === 4, "earrings kept: " + n("xear") + " (2 Rangers x 2)"], [n("plaincap") === 2, "caps kept: " + n("plaincap") + " (2 Rangers x 1)"]];
-});
-T("X3 copy limit: dry run only logs", async (w) => {
-  for (let i = 0; i < 4; i++) w.bank.items0.push({ name: "plaincap", level: 5 });
-  fill_rest(w);
-  const m = merchant_char(w, { gold: 50000 }, CP_OVR.concat([[/SURPLUS_DRY_RUN: false/, "SURPLUS_DRY_RUN: true"]])); m.sb.calculate_item_value = () => 1000;
-  const L = fake_ranger(w); const F = make_char(w, "Dexy2", { x: -110, y: 25 });
-  const send = () => { gear_rep(L, {}); gear_rep(F, {}); };
-  send(); w.clock.every(send, 60000);
-  await w.clock.run(400);
-  return [[logged(w, "Goodies", /Copy limit - dry run, would sell 2 extra/), "plans 2"], [w.bank.items0.filter((x) => x && x.name === "plaincap").length === 4, "bank untouched"]];
 });
 T("X4 copy limit waits while the bank has 10+ free item slots", async (w) => {
   for (let i = 0; i < 5; i++) w.bank.items0.push({ name: "plaincap", level: 5 });
@@ -1126,7 +1106,7 @@ T("B3 gear sweep waits for a missing gear report and says so", async (w) => {
 });
 T("B4 a follower that never reported (offline) does not block the surplus check or the sweep note", async (w) => {
   full_bank(w, 122);
-  const m = merchant_char(w, { gold: 50000 }, SUR_OVR.concat([[/SURPLUS_DRY_RUN: true/, "SURPLUS_DRY_RUN: false"]])); m.sb.calculate_item_value = () => 1000;
+  const m = merchant_char(w, { gold: 50000 }, SUR_OVR); m.sb.calculate_item_value = () => 1000;
   const L = fake_ranger(w);
   const send = () => gear_rep(L, {});
   send(); w.clock.every(send, 60000);

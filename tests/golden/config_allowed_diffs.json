@@ -8,7 +8,9 @@
     "GEAR_TRACE": "stage 1: scorer trace switch",
     "PARTY_ENABLED": "stage 4 (D14): the Merchant is not in the game party (roster.merchant_in_party false)",
     "COMPOUND_FOCUS_OLD": "stage 6: removed (unused backup copy of the Book of Cheer focus; the re-enable recipe stays in the COMPOUND_FOCUS comment)",
-    "CRAFT_ITEMS": "stage 6: removed (quiver crafting list, default [] since 2026-11-18; CRAFT_TARGETS replaced it)"
+    "CRAFT_ITEMS": "stage 6: removed (quiver crafting list, default [] since 2026-11-18; CRAFT_TARGETS replaced it)",
+    "SURPLUS_DRY_RUN": "stage 6: removed (false since 2026-11-15; the sellers really sell)",
+    "UPGRADE_DRY_RUN": "stage 6: removed (false; no log-only upgrade mode any more)"
   },
   "AutoRanger": {
     "BAG_SHARE": "stage 2: Ranger hands spare items to the Priest",

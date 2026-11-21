@@ -227,7 +227,6 @@ try {
     SURPLUS_COPY_LEVEL: 5,
     SURPLUS_COPIES_PER_RANGER: { earring: 2, ring: 2 }, // default 1 per Ranger
     SURPLUS_SELL: true,
-    SURPLUS_DRY_RUN: false, // true = only log the plan (set false to really sell). Review the log lines first
     SURPLUS_MAX_VALUE_EACH: 3000000, // an item worth more than this (expected sale price) is never sold automatically, only listed
     SURPLUS_KEEP_SPARE: 0, // extra finished items to keep per gear slot type beyond what the Rangers can use
     BANK_PACK_SIZE: 42,
@@ -272,7 +271,6 @@ try {
     // Failed upgrades destroy the item. The Ranger reports what he wears; the Merchant upgrades items that could beat it,
     // then walks to the Ranger and hands over anything better than what is equipped (he equips it himself).
     UPGRADE_ENABLED: true,
-    UPGRADE_DRY_RUN: false, // true = fetch the item, ask the server for the odds, log them, put everything back. Set false to really upgrade
     UPGRADE_MAX_LEVEL: 7, // never upgrade an item above this level
     UPGRADE_MAX_LEVEL_BY_ITEM: { firebow: 7 }, // v5 (Sean 2026-11-18): items listed here are upgraded up to this level instead of UPGRADE_MAX_LEVEL (and count as finished only there). Fire Bow: scroll1 (40,000 g) is enough up to +7 (its grade changes at +8), so no dearer scroll is bought. Every upgrade can destroy the item: UPGRADE_MIN_COPIES still keeps a spare copy.
     UPGRADE_MIN_CHANCE_BY_ITEM: {}, // v5: per-item success-chance floor instead of UPGRADE_MIN_CHANCE, e.g. { firebow: 0.3 }. The round logs "UPGRADE skipped (below 40%): firebow +6 -> +7 ... NN%" when the floor stops it.
@@ -3718,7 +3716,7 @@ try {
     out.kept = plan.kept;
     return out;
   }
-  // true = it handled the situation (sold, or logged a dry run); false = nothing to do
+  // true = it handled the situation (sold); false = nothing to do
   async function sell_surplus(free) {
     const plan = surplus_plan();
     const sig =
@@ -3767,17 +3765,6 @@ try {
         );
     }
     if (!pick.length) return false;
-    if (CFG.SURPLUS_DRY_RUN) {
-      say(
-        "Bank nearly full (" +
-          free +
-          " free) - dry run, would sell " +
-          pick.length +
-          " surplus item(s): " +
-          pick.map((c) => comp_label(c.it) + " ~" + c.value + "g").join(", ")
-      );
-      return true;
-    }
     say(
       "Bank nearly full (" +
         free +
@@ -3919,7 +3906,7 @@ try {
     out.kept = plan.kept;
     return out;
   }
-  // The bank must be open. Sells the extra copies (dry run only logs). Leaves the Merchant at the bank.
+  // The bank must be open. Sells the extra copies. Leaves the Merchant at the bank.
   async function sell_copies() {
     S.copies_last = now();
     // "Consolidate bank and inventory": only when the bank is running out of ITEM slots (not packs: a pack holds 42)
@@ -3981,17 +3968,6 @@ try {
         );
     }
     if (!plan.sell.length) return;
-    if (CFG.SURPLUS_DRY_RUN) {
-      say(
-        "Copy limit - dry run, would sell " +
-          plan.sell.length +
-          " extra copie(s): " +
-          plan.sell
-            .map((c) => comp_label(c.it) + " ~" + c.value + "g")
-            .join(", ")
-      );
-      return;
-    }
     // bag items first (no bank trip needed), then as many bank items as the bag has room for
     const room = Math.max(0, free_slots() - 3);
     const pick = plan.sell
@@ -4278,8 +4254,7 @@ try {
     return sup ? sup.cls : "ranger";
   };
   const stat_scroll_on = (who) =>
-    !!(CFG.STAT_SCROLL_APPLY && CFG.STAT_SCROLL_APPLY[stat_scroll_class(who)]) &&
-    !CFG.UPGRADE_DRY_RUN;
+    !!(CFG.STAT_SCROLL_APPLY && CFG.STAT_SCROLL_APPLY[stat_scroll_class(who)]);
   // { name, stat } of the scroll this character uses, or null
   function stat_scroll_of(who) {
     const sup = support_cfg(who);
@@ -4582,7 +4557,7 @@ try {
       "#E1A951"
     );
     await drain_stand("a bag tidy");
-    // 1) what can be sold from the bag: junk always, surplus gear by the same rules as the bank (respects the dry run)
+    // 1) what can be sold from the bag: junk always, surplus gear by the same rules as the bank
     const sell_slots = {};
     for (const i of sellable_slots()) sell_slots[i] = "junk";
     let note = "";
@@ -4601,16 +4576,6 @@ try {
           " ~" +
           c.value +
           "g (no Ranger or ladder step needs it)";
-    const gear_only = Object.keys(sell_slots).filter(
-      (i) => sell_slots[i] !== "junk"
-    );
-    if (gear_only.length && CFG.SURPLUS_DRY_RUN) {
-      say(
-        "Bag tidy - dry run, would also sell: " +
-          gear_only.map((i) => sell_slots[i]).join(", ")
-      );
-      for (const i of gear_only) delete sell_slots[i];
-    }
     if (note)
       say(
         "Bag tidy: gear checks skipped - " + note + " (junk is still sold)",
@@ -5987,12 +5952,6 @@ try {
           }
           tag += money;
         }
-        if (CFG.UPGRADE_DRY_RUN) {
-          say(
-            (w.flip ? "FLIP" : "UPGRADE") + " dry run - would attempt " + tag
-          );
-          break;
-        }
         S.upgrade_attempts++;
         const lvl_now = w.level;
         const res = await call(() => upgrade(i2, si));
@@ -6042,7 +6001,7 @@ try {
       if (w.stop_all) break;
     }
     // flipped items: sell them (or bank them) now, at Gabriel
-    if (!CFG.UPGRADE_DRY_RUN && !yielded && CFG.FLIP_RESULT_ACTION === "sell") {
+    if (!yielded && CFG.FLIP_RESULT_ACTION === "sell") {
       const flipped = work.filter((w) => w.flip);
       const is_flipped = (x) =>
         flipped.some((w) => w.name === x.name && (x.level || 0) === w.level) &&
@@ -6074,18 +6033,14 @@ try {
         (x) => x.name === w.name && (x.level || 0) === w.level
       )[0];
       if (idx === undefined) continue;
-      if (!CFG.UPGRADE_DRY_RUN && !yielded && w.level > w.start)
+      if (!yielded && w.level > w.start)
         await apply_ranger_scroll(w, scrollNpc, upNpc);
       const idx2 = bag_list(
         (x) => x.name === w.name && (x.level || 0) === w.level
       )[0];
       if (idx2 === undefined) continue;
       const it = character.items[idx2];
-      if (
-        !CFG.UPGRADE_DRY_RUN &&
-        w.level > w.start &&
-        beats_worn(it, w.level, w.for)
-      ) {
+      if (w.level > w.start && beats_worn(it, w.level, w.for)) {
         S.gear_pending.push({
           name: w.name,
           level: w.level,
