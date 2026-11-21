@@ -207,7 +207,7 @@ AL.config = (function () {
           main_from_weapon: false,
           skip_types: ["source"],
           scroll: "strscroll", // Strength is now his main stat (Sean 2026-11-18); use "vitscroll" for Vitality
-          weapon_types: ["sword", "short_sword"], // 2026-11-21: + short_sword (Fiery Blade; classes.json: a Warrior main hand)
+          weapon_types: ["sword", "short_sword", "mace", "spear"], // 2026-11-21: + short_sword (Fiery Blade), mace (Orange Lolipop Mace, str 24), spear (classes.json: all Warrior main hands)
           two_hand_types: [
             "rapier",
             "bow",

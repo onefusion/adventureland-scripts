@@ -3588,6 +3588,18 @@ T("FC1 Fiery Cape: a Fiery Cape in the bank beats the Grinch's Cape the Ranger w
   const all = [].concat(w.bank.items0, w.bank.items1, w.bank.items3, m.items);
   return [[all.some((i) => i && i.name === "fcape"), "the Fiery Cape was not sold"], [msgs(L, "gear_ready").length >= 1 || logged(w, "Goodies", /fcape/), "the Ranger is told it is waiting: " + w.logs.filter((l) => /fcape/.test(l.msg)).map((l) => l.msg).slice(0, 2).join(" | ")]];
 });
+T("WM1 Orange Lolipop Mace (str 24): the Warrior can wear maces, so one in the bank is handed to him", async (w) => {
+  if (!/STAT_SCROLL_WORN/.test(MERCH_SRC)) return skip_r4;
+  w.G.items.ololipop = { name: "Lolipop Mace", type: "weapon", wtype: "mace", str: 24, attack: 14, explosion: 20, g: 16000, upgrade: { attack: 2.9, explosion: 2, range: 1 }, grades: [8, 9, 10, 12] };
+  w.bank.items0.push({ name: "ololipop", level: 0 });
+  const m = merchant_char(w, { gold: 50000 }, SW_OVR);
+  const L = fake_ranger(w); const F = make_char(w, "Dexy2", { x: -110, y: 25 }); const Wr = make_char(w, ROSTER.warrior.name, { x: -110, y: 35 });
+  const send = () => { gear_rep(L, {}); gear_rep(F, {}); Wr.sb.send_cm("Goodies", { type: "gear_report", slots: { mainhand: { name: "blade", level: 0 } }, bag: {}, map: "main", x: -110, y: 15 }); };
+  w.G.items.blade = w.G.items.blade || { name: "Blade", type: "weapon", wtype: "short_sword", attack: 15, g: 1000, upgrade: { attack: 3 } };
+  send(); w.clock.every(send, 60000);
+  await w.clock.run(600);
+  return [[logged(w, "Goodies", /ololipop \+0 for SexyWexy/) || msgs(Wr, "gear_ready").length >= 1 || msgs(L, "gear_ready").length >= 1, "the Lolipop Mace is set aside for the Warrior: " + w.logs.filter((l) => /ololipop/.test(l.msg)).map((l) => l.msg).slice(0, 2).join(" | ")]];
+});
 T("SS2 STAT_SCROLL_APPLY switches one class off: with priest: false the Priest's cap is handed over without a scroll", async (w) => {
   if (!IS_R5) return skip_r4;
   if (!/STAT_SCROLL_APPLY/.test(MERCH_SRC)) return skip_r4;
