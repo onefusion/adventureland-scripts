@@ -1,0 +1,27 @@
+{
+  "AutoMerchant": {
+    "DEX_SCROLL_APPLY": "stage 1 (D5): replaced by STAT_SCROLL_APPLY",
+    "SUPPORT_SCROLL_APPLY": "stage 1 (D5): replaced by STAT_SCROLL_APPLY",
+    "SUPPORT_SCROLL_MAX_GOLD": "stage 1 (D5): replaced by STAT_SCROLL_MAX_GOLD",
+    "STAT_SCROLL_APPLY": "stage 1 (D5): new, per class",
+    "STAT_SCROLL_MAX_GOLD": "stage 1 (D5): new, any class",
+    "GEAR_TRACE": "stage 1: scorer trace switch",
+    "PARTY_ENABLED": "stage 4 (D14): the Merchant is not in the game party (roster.merchant_in_party false)"
+  },
+  "AutoRanger": {
+    "BAG_SHARE": "stage 2: Ranger hands spare items to the Priest",
+    "BAG_SHARE_TO": "stage 2",
+    "BAG_SHARE_MIN_ITEMS": "stage 2",
+    "BAG_SHARE_EVERY_MS": "stage 2",
+    "BAG_SHARE_MAX": "stage 2",
+    "BAG_SHARE_RANGE": "stage 2",
+    "PARTY_ACCEPT_FROM": "stage 4 (D14): the Merchant is not in the game party (roster.merchant_in_party false)"
+  },
+  "AutoPriest": {
+    "BAG_SHARE_FROM": "stage 2: who may hand her spare items",
+    "PARTY_ACCEPT_FROM": "stage 4 (D14): the Merchant is not in the game party (roster.merchant_in_party false)"
+  },
+  "AutoWarrior": {
+    "PARTY_ACCEPT_FROM": "stage 4 (D14): the Merchant is not in the game party (roster.merchant_in_party false)"
+  }
+}
