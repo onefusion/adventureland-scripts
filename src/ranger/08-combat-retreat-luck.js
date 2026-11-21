@@ -417,6 +417,34 @@
     if (!e || e.type !== "monster" || e.dead || e.rip || e.visible === false) return null;
     return is_in_range(e) ? e : null;
   }
+  // Sean 2026-11-21: monsters that are attacking a party member (the leader included), close to the leader. A search walk (Phoenix goal, Daisy hunt) stops for them and combat shoots them first.
+  function defend_targets() {
+    if (!CFG.DEFEND_PARTY) return [];
+    const names = party_names().concat(CFG.PARTY_SUPPORT);
+    return visible_monsters().filter((e) => e.target && names.indexOf(e.target) !== -1 && d2(character, e) <= CFG.DEFEND_RANGE_PX);
+  }
+  // true while the party is in a fight the leader should be in: cancels a walk in progress (owner = the goal / hunt state, so a cancelled walk is not counted as a path failure)
+  function party_fight_pause(owner) {
+    if (!CFG.DEFEND_PARTY) return false;
+    const t = defend_targets();
+    const f = R.focus;
+    const fe = f && f.id && now() - f.at <= CFG.FOCUS_MAX_AGE_MS ? parent.entities[f.id] : null;
+    const focus_live = !!fe && fe.type === "monster" && !fe.dead && !fe.rip && fe.visible !== false && d2(character, fe) <= CFG.DEFEND_RANGE_PX;
+    if (!t.length && !focus_live) return false;
+    if ((smart.moving || is_moving(character)) && owner) {
+      owner.aborted = true;
+      call(() => {
+        try { smart.moving = false; } catch (e) {}
+        try { stop(); } catch (e) {}
+      });
+    }
+    if (now() - (R.defend_say || 0) > 10000) {
+      R.defend_say = now();
+      const m = t[0] || fe;
+      say("Party fight: " + (m.target || "the Warrior's focus") + " is being attacked by " + m.mtype + " - stopping the search to help", "#E1A951");
+    }
+    return true;
+  }
   function pick_target() {
     const fe = focus_entity();
     if (fe) {
@@ -427,6 +455,11 @@
     if (pri.length) {
       R.lock = null;
       return pri[0];
+    }
+    const df = defend_targets();
+    if (df.length) {
+      R.lock = df[0].id;
+      return df[0];
     }
     // Finish what we already chose: the rating depends on our HP and the monster's HP,
     // so it can flip mid-fight and we don't want to dither between targets.

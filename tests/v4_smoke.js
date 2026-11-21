@@ -620,10 +620,11 @@ T("RD1 a party member dies on the base farm: the leader retreats to town at once
     W.sb.send_cm("SexyDexy", { type: "died" });
     await w.clock.run(5);
     const told = logged(w, "SexyWexy", /RETREAT: the leader is leaving for town/);
+    const cast = logged(w, "SexyWexy", /RETREAT: casting town/) || !IS_V5; // the Warrior casts town() instead of walking after the leader
     await w.clock.run(40);
     const said = logged(w, "SexyDexy", /RETREAT: SexyWexy died on the Poisio - everybody to town.*Poisio are skipped/);
     const moved = logged(w, "SexyDexy", /Farm rotation: after the hunt, farming Armadillo/);
-    return [[before, "was farming Poisios"], [said, "leader: retreat logged, Poisios skipped"], [told, "the Warrior was told"], [moved, "farm moved on to the Armadillos after the hold"]];
+    return [[before, "was farming Poisios"], [said, "leader: retreat logged, Poisios skipped"], [told, "the Warrior was told"], [cast, "the Warrior casts town() on the retreat"], [moved, "farm moved on to the Armadillos after the hold"]];
   } finally { global.USE_NEW_RJ = false; }
 });
 T("RD2 a death during the Grinch fight does not start a retreat", async (w) => {
@@ -1528,6 +1529,23 @@ T("R12 farm goal: walks to the Phoenix spawn, fights it when it appears, goal da
   await w.clock.run(30);
   return [[logged(w, "SexyDexy", /Farm goal: Phoenix/) && logged(w, "SexyDexy", /Earring of Dexterity 12%/), "goal announced with the drop odds"],
     [walked, "walked to the spawn box: (" + Math.round(r.x) + "," + Math.round(r.y) + ")"], [r.attacks > 0, "attacked the Phoenix once it appeared: " + r.attacks]];
+});
+T("R12b farm goal: a monster hits the Warrior while the leader searches - the leader stops and shoots it (IS_V5 only)", async (w) => {
+  if (!IS_V5) return skip_v4;
+  w.G.monsters.phoenix = { name: "Phoenix", attack: 125, frequency: 1.2, hp: 160000, respawn: 32 };
+  w.G.monsters.bee = { name: "Bee", attack: 1, frequency: 1, hp: 10 };
+  w.G.monsters.hawk = { name: "Hawk", attack: 20, frequency: 1, hp: 400 };
+  w.G.drops = { monsters: { phoenix: [[0.12, "dexearring"], [1, "stormfeather"]] } };
+  w.G.items.dexearring = { name: "Earring of Dexterity", g: 38000, type: "earring" }; w.G.items.stormfeather = { name: "Storm Feather", g: 100 };
+  w.G.maps.main.monsters = [{ type: "phoenix", count: 1, boundary: [700, -300, 1600, -90] }];
+  const r = ranger_char(w, { attack: 440, frequency: 2, x: 387, y: 1066 }, [["hpot1", 100], ["mpot1", 100]]);
+  const hits = {}; const oa = r.sb.attack; r.sb.attack = (t) => { hits[t.mtype] = (hits[t.mtype] || 0) + 1; return oa(t); };
+  await w.clock.run(25);
+  r.sb.parent.entities.h1 = { id: "h1", type: "monster", mtype: "hawk", visible: true, dead: false, x: r.x + 80, y: r.y, hp: 400, max_hp: 400, attack: 20, target: "SexyWexy" };
+  const x0 = r.x, y0 = r.y;
+  await w.clock.run(12);
+  const moved = Math.hypot(r.x - x0, r.y - y0);
+  return [[(hits.hawk || 0) > 0, "the leader shot the hawk that attacked the Warrior: " + (hits.hawk || 0)], [moved < 150, "the leader did not walk on to the next search area: moved " + Math.round(moved)], [logged(w, "SexyDexy", /Party fight: SexyWexy/), "the party fight is logged"]];
 });
 T("P1 three Rangers: followers invited, walk to the leader, shoot what he shoots", async (w) => {
   w.G.monsters.phoenix = { name: "Phoenix", attack: 125, frequency: 1.2, hp: 160000, respawn: 32 };

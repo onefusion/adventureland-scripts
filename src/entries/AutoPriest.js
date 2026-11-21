@@ -66,6 +66,7 @@ try {
     FOLLOW_FAR_PX: 160, // farther than this from the leader -> walk to him (the Priest's heal range is about 120)
     FOLLOW_SPREAD_PX: 60, // random offset around the leader so the party does not stack on one pixel
     STAY_ON_TRIP: false, // Sean 2026-11-20: false = follow the leader everywhere, to town on his junk / potion trips too (alone they do too little damage to stay and fight at the farm); true = the old behaviour (stay at the farm position he reports)
+    TOWN_ON_RETREAT: true, // Sean 2026-11-21: on the leader's retreat cast town() (no cooldown) instead of walking after him
     FAR_NOTE_PX: 700, // not within this distance of the leader (or on another map) for 60 s: log why (NOT WITH THE LEADER ...)
     BOAR_FLEE: true, // v5 (Sean 2026-11-18): a Wild Boar (they come in threes in Winterland) that targets anybody in the party: everybody leaves through the portal NPC for the main map and the party farms the normal bees for BOAR_HOLD_MS (no forced farm, hunt or goal) before going back
     BOAR_MAPS: ["winterland"],
@@ -128,6 +129,21 @@ try {
       boar_extra_names: [CFG.TANK_NAME],
     },
   });
+  // Sean 2026-11-21: town() has no cooldown, so a retreat to town is a cast (~3 s) and not a long walk behind the leader. A step or a hit cancels the cast, so we stand still while it runs; no move after 6 s: cast again (3 tries), then walk after the leader as before.
+  function town_step() {
+    if (!CFG.TOWN_ON_RETREAT || S.town_done === S.retreat_until) return false;
+    const t = S.town;
+    if (t && now() - t.at < 6000) return true;
+    if (t && (character.map !== t.map || d2(character, t) > 150)) { S.town = null; S.town_done = S.retreat_until; return false; }
+    const sp = ((G.maps[character.map] || {}).spawns || [])[0];
+    if (!t && sp && d2(character, { x: sp[0], y: sp[1] }) < 300) { S.town_done = S.retreat_until; return false; }
+    const tries = t ? t.tries : 0;
+    if (tries >= 3) { S.town = null; S.town_done = S.retreat_until; return false; }
+    S.town = { at: now(), map: character.map, x: character.x, y: character.y, tries: tries + 1 };
+    say("RETREAT: casting town (try " + (tries + 1) + "/3)", "#E1A951");
+    call(() => town());
+    return true;
+  }
   const { hp_pct, leader_entity, leader_pos, party_members, in_range, party_has, is_online, party_join_tick, free_slots, handoff_slots, gear_slots, courier_give, drops_out, loot_tick, find_gear, send_gear_report, gear_receive, status_tick, drink, warn_potions, boar_check, far_check, follow_step, wiggle_step } = R;
 
   // ============================ MESSAGES ============================
@@ -336,7 +352,7 @@ try {
       warn_potions();
       if (LEAD.held()) return; // Hold from the lead: no fight, no follow (drinking still runs)
       if (await boar_check()) return;
-      if (now() < S.retreat_until) { follow_step(); return; }
+      if (now() < S.retreat_until) { if (!town_step()) follow_step(); return; }
       const wig = wiggle_step();
       await support();
       if (!wig) follow_step();

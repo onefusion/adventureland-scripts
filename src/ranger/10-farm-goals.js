@@ -240,6 +240,7 @@
       }
       return false; // in view: normal combat (it is a priority target)
     }
+    if (party_fight_pause(g)) return false; // a party member is under attack: no walking on, combat helps first
     if (g.busy || smart.moving || is_moving(character)) return true;
     const sweep = g.areas > 1;
     const spawn = nearest_spawn(g.type, g.bad, sweep ? g.visited : null);
@@ -292,8 +293,10 @@
       log_move(dest, "searching for " + g.name);
     } else log_move(dest, "heading to " + g.name + " (farm goal)");
     g.busy = true;
+    g.aborted = false;
     call(() => smart_move(dest)).then((r) => {
       g.busy = false;
+      if (g.aborted) return void (g.aborted = false); // cancelled by a party fight, not a path failure
       if (r.failed || r.success === false) {
         g.fails++;
         g.box_fails++;

@@ -417,6 +417,7 @@
 
     // not in view: go to the spawn, then patrol its area.
     // Never interrupt a walk or a path search in progress (smart_move restarts the search every time it is called).
+    if (party_fight_pause(R.mh)) return false; // a party member is under attack: combat helps first
     if (R.mh.busy || smart.moving || is_moving(character)) return true;
     const spawn = nearest_spawn(h.id, R.mh.bad);
     if (!spawn) {
@@ -451,8 +452,10 @@
     R.mh.move_at = now();
     R.mh.busy = true;
     const mh = R.mh;
+    mh.aborted = false;
     call(() => smart_move(dest)).then((r) => {
       mh.busy = false;
+      if (mh.aborted) return void (mh.aborted = false); // cancelled by a party fight, not a path failure
       if (r.failed || r.success === false) {
         mh.fails++;
         mh.box_fails++;

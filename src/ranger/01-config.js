@@ -26,6 +26,8 @@
     TANK_NAME: C.TANK_NAME, // the Warrior: announces the focus target (the biggest monster hitting the party); we mark it and shoot the rest
     FOCUS_TARGET: true,
     FOCUS_MAX_AGE_MS: 5000,
+    DEFEND_PARTY: true, // Sean 2026-11-21: a monster is hitting a party member (the Warrior tanking a Hawk while the leader searched for the Phoenix): the leader stops walking and searching, shoots it and stays until it is dead
+    DEFEND_RANGE_PX: 700, // ...for monsters within this distance of the leader
     FOCUS_MARK: true,
     ESCORT_WAIT_MS: 6000, // the Warrior is in the party and has not engaged yet (no focus): wait up to this long before opening fire on a monster nobody has aggro'd. 0 = never wait
     PARTY_SUPPORT: C.PARTY_SUPPORT, // Priest SexyHexy (code slot 5) and Warrior SexyWexy (code slot 4). The account allows only 3 running non-merchant characters: with both running, the follower Rangers stay off (an offline member is simply ignored) // non-Ranger helpers (the Priest, running AutoPriest v5.js): part of the party, get party_state, report potions / level / bag to the leader and are served by the courier. Empty = none
