@@ -19,7 +19,9 @@
     "UPGRADE_GAMBLE_NAMES": "2026-11-21: + firestaff (Priest), fireblade (Warrior)",
     "SUPPORT_GEAR": "2026-11-21: Warrior weapon_types + short_sword (Fiery Blade)",
     "STAT_SCROLL_WORN": "2026-11-21: new, scroll worn Ranger gear",
-    "STAT_SCROLL_WORN_GAP_MS": "2026-11-21: new"
+    "STAT_SCROLL_WORN_GAP_MS": "2026-11-21: new",
+    "WARRIOR_COMPOUND": "2026-11-21: + strearring, stramulet",
+    "RANGER_COMPOUND": "2026-11-21: + intearring, intamulet (Priest)"
   },
   "AutoRanger": {
     "BAG_SHARE": "stage 2: Ranger hands spare items to the Priest",

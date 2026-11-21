@@ -156,6 +156,8 @@ AL.config = (function () {
           strring: { count: 2, level: 3 },
           hpamulet: { count: 1, level: 3 },
           hpbelt: { count: 1, level: 3 },
+          strearring: { count: 2, level: 3 }, // Sean 2026-11-21: the Warrior's earrings and amulet of Strength are compounded too (the Rangers hand them over, the Merchant never sells them)
+          stramulet: { count: 1, level: 3 },
         },
       }, // strring (Sean 2026-11-18): Rings of Strength from the arctic bees replace the Rings of Joy;
       // v5 (Sean 2026-11-18 17:28): the Ranger's compound focus. Rings of Dexterity (arctic bees drop them) are pushed up the ladder on their own terms (everything funnels to `level`,
@@ -167,6 +169,8 @@ AL.config = (function () {
           dexring: { count: 2, level: 3 },
           orbg: { count: 1, level: 3 },
           intring: { count: 2, level: 3, who: roster.priest.name },
+          intearring: { count: 2, level: 3, who: roster.priest.name }, // Sean 2026-11-21: the Priest's earrings and amulet of Intelligence
+          intamulet: { count: 1, level: 3, who: roster.priest.name },
         },
       }, // intring: for the Priest (a per-item "who" overrides the Ranger default); // orbg: the Ranger wears ONE orb
       COMPOUND_PACKS: [

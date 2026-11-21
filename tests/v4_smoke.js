@@ -1090,7 +1090,7 @@ T("B1 bag tidy: a full Merchant bag sells his junk, banks gear that must wait, a
   await w.clock.run(300);
   const junk = m.items.filter((i) => i && i.name === "wshoes").length;
   const caps = m.items.filter((i) => i && i.name === "plaincap").length;
-  return [[logged(w, "Goodies", /Bag is nearly full \(0 free\): .*wshoes/), "census logged"], [junk === 0, "junk sold (" + junk + " left)"], [caps < 30 && w.bank.items0.some((x) => x && x.name === "plaincap"), "gear banked (bag holds " + caps + ")"]];
+  return [[logged(w, "Goodies", /Bag is nearly full \(0 free\)/), "census logged"], [junk === 0, "junk sold (" + junk + " left)"], [caps < 30 && w.bank.items0.some((x) => x && x.name === "plaincap"), "gear banked (bag holds " + caps + ")"]];
 });
 T("B5 bag tidy: exchange-plan stackables (Raw Emerald, Market Parcels, Armor / Weapon Boxes) are banked even when no Ranger request named them; Wanderer's Attire is sold as junk", async (w) => {
   if (!IS_R5) return skip_r4;

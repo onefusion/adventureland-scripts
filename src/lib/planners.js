@@ -327,7 +327,7 @@ AL.planners = (function () {
         diag.not_better++;
         if (!diag.why) {
           const parts = [];
-          for (const who of fn.roster().concat(fn.support_names().filter((w) => fn.wearable(it, w)))) {
+          for (const who of (fn.wearable(it) ? fn.roster() : []).concat(fn.support_names().filter((w) => fn.wearable(it, w)))) { // only the characters who can wear it (a Staff is not a Ranger item)
             if (!fn.fresh_for(who)) {
               parts.push(who + ": no fresh gear report");
               continue;

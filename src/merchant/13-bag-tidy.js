@@ -71,9 +71,9 @@
     say(
       (free_slots() <= CFG.BAG_TIDY_FREE
         ? "Bag is nearly full ("
-        : "Junk is piling up (") +
+        : "Bag tidy: " + sellable_slots().length + " junk item(s) to sell (") +
         free_slots() +
-        " free): " +
+        " free). The whole bag, junk or not: " +
         bag_census(),
       "#E1A951"
     );
