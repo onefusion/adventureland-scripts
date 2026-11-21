@@ -100,3 +100,11 @@ console.log('lead_unit OK');
   const n=stopped.length;o.L.command('stop nobody');o.L.command('dance wex');o.L.command('stop');assert.strictEqual(stopped.length,n,'unknown name / verb / missing target: nothing happens');
   console.log('lead_unit al_cmd OK');
 }
+
+// al_cmd status: any character prints one console line
+{
+  const out=[];const oc=console.log;console.log=(...a)=>{out.push(a.join(' '))};
+  try{const L=lead.create({CFG:{PARTY_LEADER:'W'},say:()=>{},alive:()=>true,me:{name:'R',cls:'ranger'},members:[{name:'R',cls:'ranger'},{name:'W',cls:'warrior'}],can_lead:{ranger:true},hooks:{}});L.command('status');}finally{console.log=oc}
+  assert.ok(out.some((l)=>/^\[status\] R \| script build/.test(l)),'status prints a console line even when not the lead');
+  console.log('lead_unit status OK');
+}

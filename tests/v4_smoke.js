@@ -9,7 +9,7 @@ const DIR = path.resolve(__dirname, "..");
 //   MERCHANT_FILE="dist/AutoMerchant v6.js" RANGER_FILE="dist/AutoRanger v6.js" PRIEST_FILE="dist/AutoPriest v6.js" WARRIOR_FILE="dist/AutoWarrior v6.js" LIB_FILE="dist/AL Libs v6.js"
 // (MERCHANT_FILE="AutoMerchant v5.js" etc. run the same scenarios against v5; the default names are the v4 files.)
 const FILE_ENV = { "AutoMerchant v4.js": "MERCHANT_FILE", "AutoRanger v4.js": "RANGER_FILE", "AutoPriest v4.js": "PRIEST_FILE", "AutoWarrior v5.js": "WARRIOR_FILE", "AL Lib v2.js": "LIB_FILE" };
-let src = (f) => fs.readFileSync(path.join(DIR, FILE_ENV[f] && process.env[FILE_ENV[f]] ? process.env[FILE_ENV[f]] : f), "utf8");
+let src = (f) => fs.readFileSync(path.join(DIR, FILE_ENV[f] && process.env[FILE_ENV[f]] ? process.env[FILE_ENV[f]] : f), "utf8").replace(/\n\s*enabled: false, \/\/ Sean 2026-11-21: OFF[^\n]*/, ""); // the tests exercise the Phoenix goal code: the shipped config has it switched off
 
 // The party roster the mock world is built from (name, class, code slot). Characters are created through ROSTER.<role>.name, so a scenario
 // can later build a different party (e.g. the Warrior as lead). The scripts still hard-code these names until the config profiles (stage 3)

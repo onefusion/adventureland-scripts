@@ -233,7 +233,9 @@ AL.lead = (function () {
     }
     // GitHub auto-update (lead only): a newer build on GitHub makes the LEAD reload (quiet moment); the followers then see its new build id in the hello and reload by themselves (check_build)
     const UPD = env.update && env.update.enabled !== false && AL.update ? AL.update.create({ say: (m, c) => say(m, c), cfg: env.update, current: my_build, fetch: env.fetch, reload: (why) => request_reload(why) }) : null;
+    const heard = {}; // peer name -> the build / lib ids in its last hello (for al_cmd status)
     function check_build(from, d) {
+      heard[from] = { build: String(d.build || ""), lib: String(d.lib || ""), at: now() };
       const mb = my_build(), ml = my_lib();
       const tb = String(d.build || ""), tl = String(d.lib || "");
       const bad_b = mb && tb && mb !== tb, bad_l = ml && tl && ml !== tl;
@@ -378,10 +380,19 @@ AL.lead = (function () {
       if (hooks.start) hooks.start(name, m.slot);
       else AL.call(() => start_character(name, m.slot));
     }
+    // set("al_cmd","status") on ANY character: one copyable console.log block with what this character runs and what it knows about the party
+    function status() {
+      const peers_s = Object.keys(heard).map((n) => n + " build " + (heard[n].build || "?") + " lib " + (heard[n].lib || "?") + " (" + Math.round((now() - heard[n].at) / 1000) + " s ago)").join("; ");
+      const cached = (() => { try { return Object.keys(globalThis).length && [get("al_code_cache_AL Libs v6.js"), get("al_code_cache_AutoRanger v6.js")].map((t) => ((t || "").slice(0, 400).match(/build ([a-f0-9]+)/) || [])[1] || "none").join("/"); } catch (e) { return "?"; } })();
+      const line = "[status] " + me.name + " | script build " + my_build() + " | lib build " + my_lib() + " | lead " + L.lead + (i_lead() ? " (me)" : "") + " | peers: " + (peers_s || "none heard") + " | cached lib/ranger build " + cached + " | update " + (UPD ? "on, pending " + (UPD.state.pending || "none") : "off");
+      try { console.log(line); } catch (e) {}
+      lead_log(line.replace("[status] ", "status: "));
+    }
     // console commands (typed in the LEAD's code line):  set("al_cmd", "stop SexyLexy")  -  verbs: stop, start, hold, resume, reload; target: a character name (any case), "followers"/"all", or "merchant"
     function command(text) {
       const parts = String(text || "").trim().split(/\s+/);
       const verb = (parts[0] || "").toLowerCase(), want = (parts[1] || "").toLowerCase();
+      if (verb === "status") return status();
       if (!i_lead()) return lead_log("al_cmd \"" + text + "\" ignored: only the lead takes commands (the lead is " + L.lead + ")", "#CF575F");
       const M = env.merchant && env.merchant.name;
       if (!verb || !want || ["stop", "start", "hold", "resume", "reload"].indexOf(verb) < 0) return lead_log("al_cmd: say  stop|start|hold|resume|reload <name|followers|merchant>, not \"" + text + "\"", "#CF575F");

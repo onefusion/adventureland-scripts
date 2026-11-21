@@ -139,6 +139,7 @@
         session_min: 10, // v5: one visit lasts this long (a sweep of its 5 areas takes ~5 min) ...
         every_min: 30, // v5 (Sean 2026-11-17): ... and starts at most this often; the rest of the time he farms bees / does hunts and boss events. 0 / unset = no limit
         want: ["dexearring", "stormfeather"],
+        enabled: false, // Sean 2026-11-21: OFF - the search separated the leader from the party (the Warrior died to a Hawk while the leader walked on). Remove this line to search again.
       }, // main map: Earring of Dexterity 12%; Storm Feather (the Wind Belt needs 40) also drops
       { type: "mvampire", session_min: 20, want: ["dexearring"], enabled: false }, // v5: off while the Phoenix is checked every 30 min (remove "enabled: false" to bring Dracul back)
       // // Dracul, Cave of Darkness: respawns every ~18 min

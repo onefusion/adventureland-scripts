@@ -11,7 +11,10 @@ AL.update = (function () {
   function create(env) {
     const { cfg } = env;
     const U = { last: 0, busy: false, pending: "", said: "", fail_said: 0, guard_said: "" };
-    const log = (m, color) => env.say("[update] " + m, color || "#51D2E1");
+    const log = (m, color) => {
+      env.say("[update] " + m, color || "#51D2E1");
+      try { console.log("[update] " + m); } catch (e) {} // the game log cannot be copied
+    };
     // the same new build reloads at most once per min_gap_ms (a stale CDN copy must not cause a reload loop); stored with set() so it survives the reload
     function guard_ok(build) {
       try {
