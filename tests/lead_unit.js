@@ -54,3 +54,25 @@ assert.strictEqual(W.L.lead(),'W');
   setTimeout(()=>{T+=70000;L3.tick();setTimeout(()=>{assert.strictEqual(starts.length,1,'failed start: one attempt only, got '+starts.length);console.log('lead_unit merchant/reload OK')},5)},5);
 }
 console.log('lead_unit OK');
+
+// automatic reload triggers (build / lib id differ from the lead's, idle): requests only, guarded, never for the lead itself
+{
+  const store={};global.get=(k)=>store[k];global.set=(k,v)=>{store[k]=v};
+  global.character={level:50,slots:{},map:'main',x:1,y:1,xp:5,gold:9,rip:false};
+  const mkf=(name,idle_ms)=>{const o={reloads:0,logs:[]};o.L=lead.create({CFG:{PARTY_LEADER:'R'},say:(x)=>o.logs.push(x),alive:()=>true,me:{name,cls:'warrior'},members:[{name:'R',cls:'ranger'},{name,cls:'warrior'}],can_lead:{ranger:true},
+    busy:()=>'',quiet_ms:1000,auto_reload:{idle_ms:idle_ms||900000,min_gap_ms:3600000},hooks:{reload:()=>{o.reloads++}}});return o};
+  const hello=(f,from,d)=>f.L.handle({name:from,message:Object.assign({type:'lead_hello',level:60,gear:5,lead:'R',epoch:1},d)});
+  globalThis.__AL_BUILD='aaa';globalThis.__AL_LIB_BUILD='lll';
+  let f=mkf('W');
+  hello(f,'R',{build:'aaa',lib:'lll'});T+=1000;f.L.tick();T+=2000;f.L.tick();assert.strictEqual(f.reloads,0,'same builds: no reload');
+  hello(f,'R',{build:'bbb',lib:'lll'});T+=1000;f.L.tick();T+=2000;f.L.tick();assert.strictEqual(f.reloads,1,'script build differs from the lead: reload');
+  assert(f.logs.some((x)=>/BUILD MISMATCH/.test(x)),'mismatch is logged loudly');
+  hello(f,'R',{build:'bbb',lib:'lll'});T+=3000;f.L.tick();T+=3000;f.L.tick();assert.strictEqual(f.reloads,1,'guard: the same cause does not reload again within the gap');
+  f=mkf('W');hello(f,'R',{build:'aaa',lib:'zzz'});T+=1000;f.L.tick();T+=2000;f.L.tick();assert.strictEqual(f.reloads,1,'lib build differs: reload');
+  f=mkf('W');hello(f,'X',{build:'bbb',lib:'lll'});T+=3000;f.L.tick();T+=3000;f.L.tick();assert.strictEqual(f.reloads,0,'a mismatch with a non-lead peer is only logged');
+  const prev=T;T+=4000000;
+  f=mkf('W',60000);T+=1000;f.L.tick();T+=50000;f.L.tick();assert.strictEqual(f.reloads,0,'idle: not yet');
+  T+=20000;f.L.tick();T+=2000;f.L.tick();T+=2000;f.L.tick();assert.strictEqual(f.reloads,1,'idle: nothing changed for idle_ms: reload');
+  f=mkf('W',60000);T+=1000;f.L.tick();T+=40000;character.x=50;f.L.tick();T+=40000;f.L.tick();assert.strictEqual(f.reloads,0,'idle: moving resets the clock');
+  console.log('lead_unit auto-reload OK');
+}

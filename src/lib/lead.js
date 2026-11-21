@@ -173,6 +173,7 @@ AL.lead = (function () {
         if (!d || typeof d.type !== "string" || d.type.indexOf("lead_") !== 0 && d.type !== "ctl") return false;
         if (d.type === "lead_hello") {
           L.peers[from] = { at: now(), cls: cls_of[from], level: Number(d.level) || 0, gear: Number(d.gear) || 0 };
+          check_build(from, d);
           const ep = Number(d.epoch) || 0;
           if (typeof d.lead === "string" && d.lead !== L.lead && ep > L.epoch) follow(d.lead, ep, "told by " + from); // somebody newer knows better (e.g. I just restarted)
           return true;
@@ -215,6 +216,48 @@ AL.lead = (function () {
     // ---- reload (rule from Sean 2026-11-21): an automatic reload never fires mid-fight. It is only REQUESTED; tick() runs it after QUIET_MS without hunt / goal / boss / forced farm / Try monster
     // (env.busy() returns a reason string while something is going on, "" when quiet). A button press (the Re-engage button) is immediate and does not come through here.
     const QUIET_MS = env.quiet_ms || 10000;
+    // ---- automatic reload triggers (Sean 2026-11-21): all three only REQUEST a reload, so it waits for a quiet moment (above); each is switchable and a guard allows the same trigger once per min_gap_ms
+    //   build: my script build id differs from the lead's   lib: my lib build id differs from the lead's   idle: no move / xp / gold change for idle_ms while not on Hold
+    const AR = Object.assign({ build: true, lib: true, idle: true, idle_ms: 15 * 60000, min_gap_ms: 60 * 60000 }, env.auto_reload || {});
+    const my_build = () => String(globalThis.__AL_BUILD || "");
+    const my_lib = () => String(globalThis.__AL_LIB_BUILD || "");
+    // the guard lives in set()/get(), so it survives the reload it caused: the same cause does not reload again within min_gap_ms (a lead that runs OLDER code than me would otherwise loop)
+    function auto_ok(key) {
+      try {
+        const g = JSON.parse(get("auto_reload_guard") || "{}") || {};
+        if (g[key] && now() - g[key] < AR.min_gap_ms) return false;
+        g[key] = now();
+        set("auto_reload_guard", JSON.stringify(g));
+      } catch (e) {}
+      return true;
+    }
+    function check_build(from, d) {
+      const mb = my_build(), ml = my_lib();
+      const tb = String(d.build || ""), tl = String(d.lib || "");
+      const bad_b = mb && tb && mb !== tb, bad_l = ml && tl && ml !== tl;
+      if (!bad_b && !bad_l) return;
+      const key = from + ":" + mb + ">" + tb + "/" + ml + ">" + tl;
+      if (L.mismatch_said !== key) {
+        L.mismatch_said = key;
+        lead_log("BUILD MISMATCH with " + from + ": script " + mb + " vs " + tb + ", lib " + ml + " vs " + tl + " (one slot was not re-uploaded or not restarted)", "#CF575F");
+      }
+      if (i_lead() || from !== L.lead) return; // only a follower follows the lead's build; the lead is the reference
+      if (bad_b && AR.build && auto_ok("build:" + tb)) request_reload("script build " + mb + " differs from the lead's " + tb);
+      else if (bad_l && AR.lib && auto_ok("lib:" + tl)) request_reload("lib build " + ml + " differs from the lead's " + tl);
+    }
+    function idle_tick() {
+      if (!AR.idle || L.hold || !alive() || character.rip) return (L.idle_since = 0);
+      const sig = [character.map, Math.round(character.x), Math.round(character.y), character.xp, character.gold].join("|");
+      if (sig !== L.idle_sig || !L.idle_since) {
+        L.idle_sig = sig;
+        L.idle_since = now();
+        return;
+      }
+      if (now() - L.idle_since >= AR.idle_ms && !L.reload && !(env.busy && env.busy()) && auto_ok("idle")) { // a boss / forced-farm wait is not idle
+        request_reload("nothing changed (position, xp, gold) for " + Math.round((now() - L.idle_since) / 60000) + " min");
+        L.idle_since = now();
+      }
+    }
     function request_reload(why) {
       if (L.reload) return;
       L.reload = why;
@@ -287,10 +330,11 @@ AL.lead = (function () {
       if (now() - L.hello_at >= hello_ms) {
         L.hello_at = now();
         const i = info();
-        broadcast({ type: "lead_hello", level: i.level, gear: i.gear, lead: L.lead, epoch: L.epoch });
+        broadcast({ type: "lead_hello", level: i.level, gear: i.gear, lead: L.lead, epoch: L.epoch, build: my_build(), lib: my_lib() });
         tell_merchant(); // Sean 2026-11-21: the Merchant is not a lead member but learns who leads, so he serves the lead first
       }
       reload_tick();
+      idle_tick();
       merchant_tick();
       if (!i_lead() && now() - L.seen_at >= election_ms && now() - L.started >= election_ms) election();
     }
