@@ -1,6 +1,7 @@
 // @include AL-Lib.js
 // @include gear.js
 // @include config.js
+// @include planners.js
 // @include runtime.js
 // @include lead.js
 

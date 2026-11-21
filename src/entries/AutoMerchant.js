@@ -4402,6 +4402,7 @@ try {
 
   // ---- gear sweep ----
   // Gear that is finished (max level) or stuck (cannot be taken further by us) and would beat a Ranger's worn slot.
+  // The decisions live in AL.planners.sweep (src/lib/planners.js, pure); this wrapper reads the live state into its input.
   function sweep_plan() {
     const out = { give: [], why: "" };
     // v5: only characters with a fresh gear report are served, so an offline Ranger no longer blocks the sweep (the leader must have reported).
@@ -4413,7 +4414,6 @@ try {
     const who_list = roster().filter(gear_fresh_for);
     const sup_list = support_names().filter(gear_fresh_for); // v5: support characters with a fresh report are served after the Rangers
     const items = [];
-    const counts = {};
     const cs = CFG.COMPOUND_NEED_DRIVEN ? comp_state() : null;
     const add = (it, where) => {
       if (
@@ -4426,7 +4426,6 @@ try {
       const def = G.items[it.name];
       if (!def || (!def.upgrade && !def.compound)) return;
       items.push(Object.assign({ it }, where));
-      counts[comp_key(it)] = (counts[comp_key(it)] || 0) + 1;
     };
     for (let i = 0; i < character.isize; i++)
       add(character.items[i], { bag: i });
@@ -4434,110 +4433,60 @@ try {
       const arr = character.bank && character.bank[pack];
       if (Array.isArray(arr)) arr.forEach((it, i) => add(it, { pack, i }));
     }
-    const finished = (c) => {
-      const def = G.items[c.it.name];
-      const lv = c.it.level || 0;
-      if (def.compound && CFG.COMPOUND_NEED_DRIVEN) {
-        if (lv >= target_of(c.it.name)) return true;
-        const compoundable =
-          counts[comp_key(c.it)] >= 3 + keep_of(c.it.name) &&
-          comp_ok(c.it) &&
-          scroll_grade(c.it) <= max_grade_of(c.it.name) &&
-          cs.ladder_ok(c.it.name, lv);
-        return !compoundable; // waiting for a triple, or the ladder has no use for it: a Ranger may wear it now
+    // the Warrior's basher (kept in his bag, never worn): the first unlocked single one in the bag, else in the bank
+    const find_kit = (nm) => {
+      for (let i = 0; i < character.isize; i++) {
+        const it = character.items[i];
+        if (it && it.name === nm && !it.l && !(it.q > 1)) return { it, bag: i };
       }
-      if (def.compound && lv >= CFG.COMPOUND_SELL_AT_LEVEL) return true;
-      if (def.upgrade && lv >= upg_max(c.it.name)) return true;
-      if (def.upgrade && !def.compound)
-        return !(upg_ok(c.it) && upg_has_spare(c.it)); // the upgrade rounds will not take it further
-      if (def.compound) return counts[comp_key(c.it)] < 3; // no triple to compound it with
-      return false;
+      for (const pack of CFG.UPGRADE_PACKS) {
+        const arr = character.bank && character.bank[pack];
+        if (!Array.isArray(arr)) continue;
+        for (let i = 0; i < arr.length; i++) {
+          const it = arr[i];
+          if (it && it.name === nm && !it.l && !(it.q > 1)) return { it, pack, i };
+        }
+      }
+      return null;
     };
-    const virt = {};
-    for (const who of who_list.concat(sup_list)) {
-      virt[who] = {};
-      const g = gear_of(who);
-      for (const sl in (g && g.slots) || {}) {
-        const w = g.slots[sl];
-        virt[who][sl] = w
-          ? gear_score(w.name, w.level, { stat_type: w.stat_type, who })
-          : 0;
-      }
-    }
-    // score of an item for one character (null when he cannot wear it): Rangers as before, support characters with their own weights
-    const score_for = (c, who) =>
-      support_cfg(who)
-        ? gear_wearable(c.it, who)
-          ? gear_score(c.it.name, c.it.level || 0, {
-              stat_type: c.it.stat_type,
-              who,
-            })
-          : null
-        : gear_wearable(c.it)
-        ? gear_score(c.it.name, c.it.level || 0, { stat_type: c.it.stat_type })
-        : null;
-    const cands = items
-      .filter(finished)
-      .map((c) =>
-        Object.assign(c, {
-          score: Math.max(
-            0,
-            ...who_list.concat(sup_list).map((w) => score_for(c, w) || 0)
-          ),
-        })
-      )
-      .sort((a, b) => b.score - a.score);
-    for (const c of cands) {
-      if (c.score <= 0) continue;
-      for (const who of who_list.concat(sup_list)) {
-        const sc = score_for(c, who);
-        if (!sc || sc <= 0) continue;
-        if (two_hand(who, c.it)) {
-          const cur = (virt[who].mainhand || 0) + (virt[who].offhand || 0);
-          if (sc > cur * CFG.GEAR_MARGIN) {
-            virt[who].mainhand = sc;
-            virt[who].offhand = 0;
-            out.give.push({ c, who, slot: "mainhand" });
-            break;
+    const plan = AL.planners.sweep({
+      who_list,
+      sup_list,
+      items,
+      cfg: CFG,
+      G_items: G.items,
+      fn: {
+        comp_key,
+        target_of,
+        keep_of,
+        comp_ok,
+        scroll_grade,
+        max_grade_of,
+        ladder_ok: cs ? cs.ladder_ok : null,
+        upg_max,
+        upg_ok,
+        upg_has_spare,
+        gear_score,
+        gear_wearable,
+        support_cfg,
+        two_hand,
+        slots_of,
+        slot_scores: (who) => {
+          const res = {};
+          const g = gear_of(who);
+          for (const sl in (g && g.slots) || {}) {
+            const w = g.slots[sl];
+            res[sl] = w ? gear_score(w.name, w.level, { stat_type: w.stat_type, who }) : 0;
           }
-          continue;
-        }
-        const slots = slots_of(G.items[c.it.name].type, who) || [];
-        let low = null;
-        for (const sl of slots) {
-          const v = virt[who][sl] || 0;
-          if (!low || v < low.v) low = { sl, v };
-        }
-        if (low && sc > low.v * CFG.GEAR_MARGIN) {
-          virt[who][low.sl] = sc;
-          out.give.push({ c, who, slot: low.sl });
-          break;
-        }
-      }
-    }
-    // v5: the Warrior's basher (kept in his bag, never worn): one from the bag or the bank when his report shows none
-    for (const who of sup_list) {
-      if (!kit_missing(who)) continue;
-      let found = null;
-      for (const nm of kit_names(who)) {
-        for (let i = 0; i < character.isize && !found; i++) {
-          const it = character.items[i];
-          if (it && it.name === nm && !it.l && !(it.q > 1))
-            found = { it, bag: i };
-        }
-        for (const pack of CFG.UPGRADE_PACKS) {
-          const arr = character.bank && character.bank[pack];
-          if (Array.isArray(arr) && !found)
-            arr.forEach((it, i) => {
-              if (!found && it && it.name === nm && !it.l && !(it.q > 1))
-                found = { it, pack, i };
-            });
-        }
-        if (found) break;
-      }
-      if (found) out.give.push({ c: found, who, slot: "bag" });
-      else out.no_kit = (out.no_kit || []).concat(who);
-    }
+          return res;
+        },
+        kit_missing,
+        kit_names,
+        find_kit,
+      },
+    });
+    out.give = plan.give;
+    if (plan.no_kit) out.no_kit = plan.no_kit;
     return out;
   }
   // The bank must be open. Takes what is needed into the bag, marks it as waiting for its Ranger, tells the leader.
