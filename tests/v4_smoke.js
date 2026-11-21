@@ -256,7 +256,7 @@ function make_char(world, name, o, script, overrides) {
   ch.ctx = ctx; ch.sb = sb;
   if (script) {
     let text = (global.USE_NEW_RJ ? src : src_legacy)(script);
-    if (/AutoMerchant/.test(script) && !(overrides && overrides.fire_on)) { text = text.replace("UPGRADE_MAX_LEVEL_BY_ITEM: { firebow: 8 }", "UPGRADE_MAX_LEVEL_BY_ITEM: {}"); text = text.replace('UPGRADE_GAMBLE_NAMES: ["firebow"]', "UPGRADE_GAMBLE_NAMES: []"); } // v5: the per-item upgrade cap (Fire Bow +7) is tested on its own (UPF1)
+    if (/AutoMerchant/.test(script) && !(overrides && overrides.fire_on)) { text = text.replace("UPGRADE_MAX_LEVEL_BY_ITEM: { firebow: 8, firestaff: 8, fireblade: 8 }", "UPGRADE_MAX_LEVEL_BY_ITEM: {}"); text = text.replace('UPGRADE_GAMBLE_NAMES: ["firebow", "firestaff", "fireblade"]', "UPGRADE_GAMBLE_NAMES: []"); } // v5: the per-item upgrade cap (Fire Bow +7) is tested on its own (UPF1)
     if (/AutoMerchant/.test(script) && !(overrides && overrides.layout_on)) text = text.replace("BANK_LAYOUT: true", "BANK_LAYOUT: false"); // v5: the bank layout (packs per kind of item) is tested on its own (BL1-BL6)
     if (global.MERCHANT_PARTY) overrides = (overrides || []).concat(/AutoMerchant/.test(script) ? [[/PARTY_ENABLED: C\.PARTY_ENABLED/, "PARTY_ENABLED: true", true]] : /AutoRanger/.test(script) ? [[/PARTY_ACCEPT_FROM: C\.PARTY_ACCEPT_FROM/, 'PARTY_ACCEPT_FROM: "Goodies"', true]] : [[/PARTY_ACCEPT_FROM: C\.PARTY_ACCEPT_FROM/, 'PARTY_ACCEPT_FROM: ["Goodies", "SexyDexy"]', true]]); // the v5 way: the Merchant leads the game party (roster.merchant_in_party), for PA1 / PR4
     for (const [re, to, optional] of overrides || []) { if (!re.test(text)) { if (optional) continue; throw new Error("override did not match: " + re); } text = text.replace(re, to); }
@@ -1236,6 +1236,19 @@ T("UPF1 per-item upgrade cap: SexyDexy wears a Fire Bow +7, a +6 and four +0 are
   const all = [].concat(w.bank.items0, w.bank.items1, w.bank.items3, m.items);
   const lv = (n, x) => all.filter((i) => i && i.name === n && (i.level || 0) === x).length;
   return [[logged(w, "Goodies", /UPGRADE \w+ - firebow \+6 -> \+7 with scroll1/), "the +6 is tried with no spare copy"], [logged(w, "Goodies", /UPGRADE \w+ - firebow \+0 -> \+1 with scroll0/) || logged(w, "Goodies", /UPGRADE \w+ - firebow \+0 -> \+1/), "the +0 bows are tried too"], [lv("firebow", 8) >= 1 || logged(w, "Goodies", /firebow \+8/) || logged(w, "Goodies", /firebow \+7 -> \+8/), "a Fire Bow +8 is reached (scroll2)"], [lv("firebow", 9) === 0, "never above +8"], [lv("plaincap", 6) === 0, "plaincap stays at +5 (the general cap)"]];
+});
+T("UPF4 Fiery Staff (Priest) and Fiery Blade (Warrior): the wearer decides fodder / set aside, no spare needed, cap +8", async (w) => {
+  w.G.items.scroll1 = { g: 40000, s: true, type: "uscroll", grade: 1 }; w.G.items.scroll2 = { g: 1600000, s: true, type: "uscroll", grade: 2 };
+  w.G.items.firestaff = { name: "Fiery Staff", type: "weapon", wtype: "staff", g: 189000, attack: 35, range: 56, upgrade: { attack: 5.5, range: 3.5, attr0: 0.5 }, grades: [0, 8, 10, 12] };
+  w.G.items.fireblade = { name: "Fiery Blade", type: "weapon", wtype: "short_sword", g: 96000, attack: 21, range: 7, upgrade: { attack: 4.5, range: 1.5, attr0: 0.5 }, grades: [0, 8, 10, 12] };
+  w.bank.items0.push({ name: "firestaff", level: 6 }, { name: "firestaff", level: 0 }, { name: "fireblade", level: 6 }, { name: "fireblade", level: 0 });
+  const ovr = Object.assign(UPG_REAL.filter((x) => !/UPGRADE_MAX_LEVEL: 5/.test(String(x[0]))).concat([[/UPGRADE_SESSION_PCT: 0\.1/, "UPGRADE_SESSION_PCT: 1"]]), { fire_on: true });
+  const m = merchant_char(w, { gold: 20000000 }, ovr);
+  const real = m.sb.upgrade; m.sb.upgrade = (a, si, off, only) => (only ? Promise.resolve({ chance: 0.5, grace: 0 }) : real(a, si, off, only));
+  const L = fake_ranger(w); const F = make_char(w, "Dexy2", { x: -110, y: 25 }); const P = make_char(w, ROSTER.priest.name, { x: -110, y: 35 }); const W = make_char(w, ROSTER.warrior.name, { x: -110, y: 45 });
+  const send = () => { gear_rep(L, {}); gear_rep(F, {}); gear_rep(P, { mainhand: { name: "firestaff", level: 7 } }); gear_rep(W, { mainhand: { name: "fireblade", level: 7 } }); }; send(); w.clock.every(send, 60000);
+  await w.clock.run(3000);
+  return [[logged(w, "Goodies", /UPGRADE \w+ - firestaff \+6 -> \+7/), "the Priest's staff +6 is tried with no spare (fodder: she wears +7)"], [logged(w, "Goodies", /UPGRADE \w+ - firestaff \+0 -> \+1/), "the staff +0 is tried"], [logged(w, "Goodies", /UPGRADE \w+ - fireblade \+6 -> \+7/), "the Warrior's blade +6 is tried with no spare"]];
 });
 T("UPF2 Fire Bow fodder: a bow that does not beat SexyDexy's is upgraded even at a low chance and without a spare; once it beats his, it is set aside and handed to him", async (w) => {
   w.G.items.scroll1 = { g: 40000, s: true, type: "uscroll", grade: 1 }; w.G.items.firebow.wtype = "bow";

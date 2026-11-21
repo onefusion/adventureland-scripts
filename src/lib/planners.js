@@ -363,17 +363,25 @@ AL.planners = (function () {
     return null;
   }
 
-  // ---- gamble mode: "" = not a gamble item (or no fresh report from the leader), "aside" = already beats what the leader wears, "fodder" = does not ----
-  // env.cfg { UPGRADE_GAMBLE_NAMES, RANGER_NAME }; env.ranger_gear (the leader's gear report or null); env.fresh (the report is fresh)
-  // env.fn  beats_worn(it, level, who), upg_max(name)
-  function gamble_mode(env, it) {
+  // ---- gamble mode: "" = not a gamble item (or no fresh report from a wearer), "aside" = already beats what a wearer has on, "fodder" = does not ----
+  // The wearers are everybody who can wear the item (leader Ranger first, then the Warrior / Priest): a Fire Bow is the Ranger's, a Fiery Staff the Priest's, a Fiery Blade the Warrior's.
+  // env.cfg { UPGRADE_GAMBLE_NAMES, RANGER_NAME }; env.fn  beats_worn(it, level, who), upg_max(name), owners(it) -> [who], fresh_for(who), gear_of(who)
+  // Returns { mode, who } ("who" = the wearer it beats for "aside", otherwise the first wearer).
+  function gamble_info(env, it) {
     const { cfg, fn } = env;
-    if (!it || !cfg.UPGRADE_GAMBLE_NAMES || cfg.UPGRADE_GAMBLE_NAMES.indexOf(it.name) === -1 || !env.fresh) return "";
-    if (fn.beats_worn(it, it.level || 0, cfg.RANGER_NAME)) return "aside";
-    const w = env.ranger_gear && env.ranger_gear.slots && env.ranger_gear.slots.mainhand;
-    if (w && w.name === it.name && (w.level || 0) >= fn.upg_max(it.name)) return ""; // he already wears the cap: nothing to gain
-    return "fodder";
+    const none = { mode: "", who: "" };
+    if (!it || !cfg.UPGRADE_GAMBLE_NAMES || cfg.UPGRADE_GAMBLE_NAMES.indexOf(it.name) === -1) return none;
+    const owners = (fn.owners ? fn.owners(it) : [cfg.RANGER_NAME]).filter((w) => (fn.fresh_for ? fn.fresh_for(w) : env.fresh));
+    if (!owners.length) return none;
+    for (const who of owners) if (fn.beats_worn(it, it.level || 0, who)) return { mode: "aside", who };
+    for (const who of owners) {
+      const g = fn.gear_of ? fn.gear_of(who) : env.ranger_gear;
+      const w = g && g.slots && g.slots.mainhand;
+      if (w && w.name === it.name && (w.level || 0) >= fn.upg_max(it.name)) return none; // a wearer already has the cap: nothing to gain
+    }
+    return { mode: "fodder", who: owners[0] };
   }
+  const gamble_mode = (env, it) => gamble_info(env, it).mode;
 
   // ---- flips: pieces worth upgrading to sell (expected value of the chain beats selling as is) ----
   // env.items [{ it, where }]; env.cfg { FLIP_MIN_GAIN }; env.fn { flip_ok(it), sell_value(name, level), chain_value(name, level) }
@@ -391,5 +399,5 @@ AL.planners = (function () {
     return out.sort((a, b) => b.gain - a.gain);
   }
 
-  return { sweep, copies, surplus, ladder, compound_groups, upgrade, support_target, gamble_mode, flips };
+  return { sweep, copies, surplus, ladder, compound_groups, upgrade, support_target, gamble_mode, gamble_info, flips };
 })();

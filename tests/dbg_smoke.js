@@ -190,7 +190,7 @@ function make_char(world, name, o, script, overrides) {
   ch.ctx = ctx; ch.sb = sb;
   if (script) {
     let text = src(script);
-    if (/AutoMerchant/.test(script) && !(overrides && overrides.fire_on)) { text = text.replace("UPGRADE_MAX_LEVEL_BY_ITEM: { firebow: 8 }", "UPGRADE_MAX_LEVEL_BY_ITEM: {}"); text = text.replace('UPGRADE_GAMBLE_NAMES: ["firebow"]', "UPGRADE_GAMBLE_NAMES: []"); } // v5: the per-item upgrade cap (Fire Bow +7) is tested on its own (UPF1)
+    if (/AutoMerchant/.test(script) && !(overrides && overrides.fire_on)) { text = text.replace("UPGRADE_MAX_LEVEL_BY_ITEM: { firebow: 8, firestaff: 8, fireblade: 8 }", "UPGRADE_MAX_LEVEL_BY_ITEM: {}"); text = text.replace('UPGRADE_GAMBLE_NAMES: ["firebow", "firestaff", "fireblade"]', "UPGRADE_GAMBLE_NAMES: []"); } // v5: the per-item upgrade cap (Fire Bow +7) is tested on its own (UPF1)
     if (/AutoMerchant/.test(script) && !(overrides && overrides.layout_on)) text = text.replace("BANK_LAYOUT: true", "BANK_LAYOUT: false"); // v5: the bank layout (packs per kind of item) is tested on its own (BL1-BL6)
     for (const [re, to, optional] of overrides || []) { if (!re.test(text)) { if (optional) continue; throw new Error("override did not match: " + re); } text = text.replace(re, to); }
     vm.runInContext(text, ctx, { filename: script });

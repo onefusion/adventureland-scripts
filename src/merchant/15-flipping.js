@@ -154,17 +154,19 @@
     }
     return n;
   }
-  // "" = not a gamble item (or no fresh report from the leader), "aside" = already beats what SexyDexy wears, "fodder" = does not (and he still wears less than the cap)
-  const gamble_mode = (it) =>
-    AL.planners.gamble_mode(
-      {
-        cfg: CFG,
-        fresh: gear_fresh(),
-        ranger_gear: S.ranger_gear,
-        fn: { beats_worn, upg_max },
-      },
-      it
-    );
+  // "" = not a gamble item (or no fresh report from a wearer), "aside" = already beats what a wearer (SexyDexy / the Warrior / the Priest) has on, "fodder" = does not (and nobody wears the cap level yet)
+  const gamble_env = () => ({
+    cfg: CFG,
+    fn: {
+      beats_worn,
+      upg_max,
+      gear_of,
+      fresh_for: gear_fresh_for,
+      owners: (it) => [CFG.RANGER_NAME].concat(support_names()).filter((w) => gear_wearable(it, w === CFG.RANGER_NAME ? undefined : w)),
+    },
+  });
+  const gamble_info = (it) => AL.planners.gamble_info(gamble_env(), it);
+  const gamble_mode = (it) => gamble_info(it).mode;
   const upg_has_spare = (it) =>
     gamble_mode(it) === "fodder" || upg_copies(it) >= CFG.UPGRADE_MIN_COPIES;
   const upg_scroll = (it) => "scroll" + scroll_grade(it);
@@ -406,7 +408,7 @@
               " +" +
               w.level +
               " is better than what " +
-              CFG.RANGER_NAME +
+              (gamble_info(it).who || CFG.RANGER_NAME) +
               " wears - set aside for him, not upgraded further",
             "#8AB4D0"
           );
