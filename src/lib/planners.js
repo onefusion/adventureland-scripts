@@ -1,7 +1,7 @@
 // ============================== AL.planners: pure Merchant planners (stage 5 of the refactor, 2026-11-21) ==============================
 // A planner decides; it does not walk, open the bank or send anything. It reads a plain input object and returns a plan, so it can be tested
 // without the game. The Merchant builds the input from its live state (`env`) and acts on the plan.
-// Planners so far: sweep (which finished / stuck gear goes to which character), copies (the copy limit).
+// Planners so far: sweep (which finished / stuck gear goes to which character), copies (the copy limit), surplus (the bank-full seller).
 AL.planners = (function () {
   "use strict";
 
@@ -137,5 +137,55 @@ AL.planners = (function () {
     return out;
   }
 
-  return { sweep, copies };
+  // ---- surplus (bank-full seller): which finished items does no character need? ----
+  // env.who_list      the characters whose slots keep items (fresh reports, already checked by the Merchant)
+  // env.cands         finished candidates [{ it, score, pack,i | bag }] (score 0 = nobody can wear it)
+  // env.slot_scores   (who) -> { slot: score of what he wears }
+  // env.slot_of_type  item type -> slots; env.cfg { GEAR_MARGIN, SURPLUS_KEEP_SPARE, SURPLUS_MAX_VALUE_EACH }; env.G_items; env.sell_value(name, level)
+  // Returns { sell: [c with .value, most valuable first], held: [{ it, value, why }], kept }.
+  function surplus(env) {
+    const { cfg, G_items } = env;
+    const out = { sell: [], held: [], kept: 0 };
+    // what each character wears per slot, as a score; kept items raise the virtual floor of the slot they would take
+    const virt = {};
+    for (const who of env.who_list) virt[who] = Object.assign({}, env.slot_scores(who));
+    const cands = env.cands.slice().sort((a, b) => b.score - a.score);
+    const spare = {};
+    for (const c of cands) {
+      const def = G_items[c.it.name];
+      let keep = false;
+      if (c.score > 0) {
+        const slots = env.slot_of_type[def.type] || [];
+        for (const who of env.who_list) {
+          let low = null;
+          for (const sl of slots) {
+            const v = virt[who][sl] || 0;
+            if (!low || v < low.v) low = { sl, v };
+          }
+          if (low && c.score > low.v * cfg.GEAR_MARGIN) {
+            virt[who][low.sl] = c.score;
+            keep = true;
+            break;
+          }
+        }
+      }
+      if (!keep && cfg.SURPLUS_KEEP_SPARE > 0) {
+        spare[def.type] = (spare[def.type] || 0) + 1;
+        if (spare[def.type] <= cfg.SURPLUS_KEEP_SPARE) keep = true;
+      }
+      if (keep) {
+        out.kept++;
+        continue;
+      }
+      c.value = Math.round(env.sell_value(c.it.name, c.it.level || 0));
+      if (c.it.p) out.held.push({ it: c.it, value: c.value, why: "special (" + c.it.p + ")" });
+      else if (c.value > cfg.SURPLUS_MAX_VALUE_EACH)
+        out.held.push({ it: c.it, value: c.value, why: "worth more than SURPLUS_MAX_VALUE_EACH" });
+      else out.sell.push(c);
+    }
+    out.sell.sort((a, b) => b.value - a.value); // the most valuable first: biggest step towards the next bank slot
+    return out;
+  }
+
+  return { sweep, copies, surplus };
 })();

@@ -52,4 +52,27 @@ ok(c.sell.length === 0 && c.held.length === 1 && /SURPLUS_MAX_VALUE_EACH/.test(c
 c = AL.planners.copies(cenv({ cfg: Object.assign({}, ccfg, { KEEP_BEST_COPIES: { ring: 1 } }), owned: [own(5, 0), own(5, 1)] }));
 ok(c.kept === 1 && c.sell.length === 1, "KEEP_BEST_COPIES overrides the per-character allowance");
 
+// ---- surplus ----
+const scfg = { GEAR_MARGIN: 1.05, SURPLUS_KEEP_SPARE: 0, SURPLUS_MAX_VALUE_EACH: 1000 };
+const cand = (lv, i, score, extra) => Object.assign({ it: { name: "ring", level: lv }, pack: "items0", i, score }, extra || {});
+const senv = (o) => Object.assign({ who_list: ["A"], cands: [], slot_scores: () => ({ ring1: 10, ring2: 10 }), slot_of_type: { ring: ["ring1", "ring2"] }, cfg: scfg, G_items, sell_value: () => 100 }, o);
+
+let sp = AL.planners.surplus(senv({ cands: [cand(3, 0, 50), cand(3, 1, 50), cand(3, 2, 50)] }));
+ok(sp.kept === 2 && sp.sell.length === 1, "two rings that beat the worn ones are kept, the third is surplus");
+
+sp = AL.planners.surplus(senv({ cands: [cand(3, 0, 5)] }));
+ok(sp.kept === 0 && sp.sell.length === 1, "an item that beats nothing worn is surplus");
+
+sp = AL.planners.surplus(senv({ cands: [cand(3, 0, 0)] }));
+ok(sp.sell.length === 1, "an item nobody can wear is surplus");
+
+sp = AL.planners.surplus(senv({ cfg: Object.assign({}, scfg, { SURPLUS_KEEP_SPARE: 1 }), cands: [cand(3, 0, 0), cand(3, 1, 0)] }));
+ok(sp.kept === 1 && sp.sell.length === 1, "SURPLUS_KEEP_SPARE keeps one spare per item type");
+
+sp = AL.planners.surplus(senv({ sell_value: () => 5000, cands: [cand(3, 0, 0)] }));
+ok(sp.sell.length === 0 && sp.held.length === 1, "an expensive surplus item is held back");
+
+sp = AL.planners.surplus(senv({ sell_value: (n, l) => l * 100, cands: [cand(1, 0, 0), cand(3, 1, 0), cand(2, 2, 0)] }));
+ok(sp.sell.map((c) => c.value).join() === "300,200,100", "the most valuable surplus is listed first");
+
 process.exit(fails ? 1 : 0);

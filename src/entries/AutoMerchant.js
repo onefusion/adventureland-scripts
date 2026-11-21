@@ -3935,18 +3935,6 @@ try {
       out.why = "the game's item value function is not available";
       return out;
     }
-    // what each Ranger wears per slot, as a score; kept items raise the virtual floor of the slot they would take
-    const virt = {};
-    for (const who of who_list) {
-      virt[who] = {};
-      const g = gear_of(who);
-      for (const sl in (g && g.slots) || {}) {
-        const w = g.slots[sl];
-        virt[who][sl] = w
-          ? gear_score(w.name, w.level, { stat_type: w.stat_type })
-          : 0;
-      }
-    }
     const cands = [];
     const consider = (it, where) => {
       const def = it && G.items[it.name];
@@ -3982,50 +3970,27 @@ try {
         consider(it, { bag: i });
       }
     }
-    cands.sort((a, b) => b.score - a.score);
-    const spare = {};
-    for (const c of cands) {
-      const def = G.items[c.it.name];
-      let keep = false;
-      if (c.score > 0) {
-        const slots = SLOT_OF_TYPE[def.type] || [];
-        for (const who of who_list) {
-          let low = null;
-          for (const sl of slots) {
-            const v = virt[who][sl] || 0;
-            if (!low || v < low.v) low = { sl, v };
-          }
-          if (low && c.score > low.v * CFG.GEAR_MARGIN) {
-            virt[who][low.sl] = c.score;
-            keep = true;
-            break;
-          }
+    // the decisions live in AL.planners.surplus (src/lib/planners.js, pure)
+    const plan = AL.planners.surplus({
+      who_list,
+      cands,
+      slot_scores: (who) => {
+        const res = {};
+        const g = gear_of(who);
+        for (const sl in (g && g.slots) || {}) {
+          const w = g.slots[sl];
+          res[sl] = w ? gear_score(w.name, w.level, { stat_type: w.stat_type }) : 0;
         }
-      }
-      if (!keep && CFG.SURPLUS_KEEP_SPARE > 0) {
-        spare[def.type] = (spare[def.type] || 0) + 1;
-        if (spare[def.type] <= CFG.SURPLUS_KEEP_SPARE) keep = true;
-      }
-      if (keep) {
-        out.kept++;
-        continue;
-      }
-      c.value = Math.round(sell_value(c.it.name, c.it.level || 0));
-      if (c.it.p)
-        out.held.push({
-          it: c.it,
-          value: c.value,
-          why: "special (" + c.it.p + ")",
-        });
-      else if (c.value > CFG.SURPLUS_MAX_VALUE_EACH)
-        out.held.push({
-          it: c.it,
-          value: c.value,
-          why: "worth more than SURPLUS_MAX_VALUE_EACH",
-        });
-      else out.sell.push(c);
-    }
-    out.sell.sort((a, b) => b.value - a.value); // the most valuable first: biggest step towards the next bank slot
+        return res;
+      },
+      slot_of_type: SLOT_OF_TYPE,
+      cfg: CFG,
+      G_items: G.items,
+      sell_value,
+    });
+    out.sell = plan.sell;
+    out.held = plan.held;
+    out.kept = plan.kept;
     return out;
   }
   // true = it handled the situation (sold, or logged a dry run); false = nothing to do
