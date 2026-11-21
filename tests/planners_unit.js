@@ -117,4 +117,44 @@ ok(cg.groups.length === 0 && cg.skipped.length === 1, "a scroll above the allowe
 cg = AL.planners.compound_groups({ groups: [grp(0, 6, 0)], fn: Object.assign(genv([]).fn, { ladder: () => ({ take_triples: (n, L, avail) => Math.min(avail, 1) }) }) });
 ok(cg.groups.length === 1 && cg.groups[0].max_triples === 1, "with the ladder on, the ladder decides how many triples");
 
+// ---- upgrade (stage 7) ----
+const UG = { RANGER_NAME: "R", GEAR_MARGIN: 1.05 };
+const uit = (name, level, extra) => Object.assign({ name, level }, extra);
+const uenv = (items, o) => Object.assign({
+  cfg: UG, G_items: { bow: { upgrade: 1 }, cap: { upgrade: 1 }, junk: {} },
+  items: items.map((it, i) => ({ it, where: { bag: i } })),
+  fn: {
+    upg_ok: (it) => !!it && it.name !== "junk", has_spare: () => true, potential: (it) => 100, best_target: () => null, support_target: () => null,
+    support_names: () => ["W"], wearable: () => true, upg_max: () => 7, scroll_ok: () => true, roster: () => ["R"], fresh_for: () => true,
+    worn_floor: () => ({ slot: "mainhand", score: 80 }), score: () => 100, label: (it) => it.name + " +" + it.level, support_cfg: (w) => w === "W",
+  } }, o);
+let up = AL.planners.upgrade(uenv([uit("bow", 3), null, uit("junk", 0)], { fn: Object.assign(uenv([]).fn, { best_target: () => ({ who: "R", f: { score: 80 } }) }) }));
+ok(up.cands.length === 1 && up.cands[0].for === "R" && up.cands[0].gain === 20 && up.cands[0].bag === 0 && up.diag.upgradable === 1, "a piece that beats the leader's worn gear is a candidate (gain = potential - worn), with its bag position; nulls and non-upgradables are skipped");
+up = AL.planners.upgrade(uenv([uit("bow", 3)], { fn: Object.assign(uenv([]).fn, { has_spare: () => false }) }));
+ok(up.cands.length === 0 && up.diag.no_spare === 1 && up.diag.no_spare_names["bow+3"], "no spare copy: not a candidate, reported in the diagnostics");
+up = AL.planners.upgrade(uenv([uit("bow", 3)]));
+ok(up.cands.length === 0 && up.diag.not_better === 1 && /bow \+3 would score 100 at \+7, but R wears 80 \(needs 84\); W wears 80/.test(up.diag.why), "nobody gains: the diagnostics explain what each character wears: " + up.diag.why);
+up = AL.planners.upgrade(uenv([uit("bow", 3), uit("cap", 5)], { fn: Object.assign(uenv([]).fn, { best_target: (it) => ({ who: it.name === "bow" ? "W" : "R", f: { score: 50 } }), score: (n, l, o) => (o && o.who === "W" ? 130 : 100) }) }));
+ok(up.cands.map((c) => c.it.name).join() === "cap,bow" && up.cands[1].potential === 130 && up.cands[1].gain === 80, "the leader's upgrade comes first even when the support piece gains more; a support target is scored with its own weights");
+up = AL.planners.upgrade(uenv([uit("bow", 3)], { fn: Object.assign(uenv([]).fn, { best_target: () => ({ who: "R", f: { score: 99 } }), score: () => 100 }) }));
+ok(up.notes.length === 1 && up.notes[0].who === "R", "a piece that only wins once a stat scroll is applied is reported as a note");
+
+const supenv = (o) => Object.assign({ cfg: { SUPPORT_UPGRADE_ANY: true, SUPPORT_UPGRADE_NAMES: [], GEAR_MARGIN: 1.05 },
+  fn: { support_names: () => ["W", "P"], fresh_for: (w) => w !== "W", wearable: () => true, worn_floor: () => ({ score: 50 }), score: () => 60, upg_max: () => 7 } }, o);
+ok(AL.planners.support_target(supenv(), uit("bow", 1)).who === "P", "support target: skips a character without a fresh report, takes the next one that gains");
+ok(AL.planners.support_target(supenv({ cfg: { SUPPORT_UPGRADE_ANY: false, SUPPORT_UPGRADE_NAMES: ["x"], GEAR_MARGIN: 1.05 } }), uit("bow", 1)) === null, "support target: only listed names when SUPPORT_UPGRADE_ANY is off");
+ok(AL.planners.support_target(supenv({ fn: Object.assign(supenv().fn, { score: () => 52 }) }), uit("bow", 1)) === null, "support target: no gain beyond the margin, no target");
+
+const gmenv = (o) => Object.assign({ cfg: { UPGRADE_GAMBLE_NAMES: ["fbow"], RANGER_NAME: "R" }, fresh: true,
+  ranger_gear: { slots: { mainhand: { name: "fbow", level: 4 } } }, fn: { beats_worn: () => false, upg_max: () => 7 } }, o);
+ok(AL.planners.gamble_mode(gmenv(), uit("bow", 1)) === "" && AL.planners.gamble_mode(gmenv({ fresh: false }), uit("fbow", 1)) === "", "gamble mode: not a gamble item, or no fresh report: empty");
+ok(AL.planners.gamble_mode(gmenv(), uit("fbow", 1)) === "fodder", "gamble mode: a gamble item that does not beat the worn one is fodder");
+ok(AL.planners.gamble_mode(gmenv({ fn: { beats_worn: () => true, upg_max: () => 7 } }), uit("fbow", 6)) === "aside", "gamble mode: one that beats the worn one is set aside");
+ok(AL.planners.gamble_mode(gmenv({ ranger_gear: { slots: { mainhand: { name: "fbow", level: 7 } } } }), uit("fbow", 1)) === "", "gamble mode: the leader already wears the cap, nothing to gain");
+
+const flenv = (items, o) => Object.assign({ cfg: { FLIP_MIN_GAIN: 0.1 }, items: items.map((it, i) => ({ it, where: { bag: i } })),
+  fn: { flip_ok: (it) => !!it, sell_value: () => 1000, chain_value: (n, l) => (n === "good" ? 1500 : 1050) } }, o);
+const fl = AL.planners.flips(flenv([uit("meh", 0), null, uit("good", 0)]));
+ok(fl.length === 1 && fl[0].it.name === "good" && fl[0].flip === true && fl[0].gain === 500 && fl[0].bag === 2, "flips: only chains that beat selling by FLIP_MIN_GAIN, best first, with position");
+
 process.exit(fails ? 1 : 0);

@@ -64,23 +64,24 @@
     (it.level || 0) < CFG.FLIP_MAX_LEVEL &&
     scroll_grade(it) <= CFG.UPGRADE_MAX_SCROLL_GRADE &&
     !(gear_wearable(it) && !!best_target(it, potential_score(it)));
-  function flip_candidates() {
-    const out = [];
-    const add = (it, where) => {
-      if (!flip_ok(it)) return;
-      const lvl = it.level || 0;
-      const stay = sell_value(it.name, lvl);
-      const ev = chain_value(it.name, lvl) - stay;
-      if (ev > stay * CFG.FLIP_MIN_GAIN && ev > 0)
-        out.push(Object.assign({ it, flip: true, gain: ev }, where));
-    };
+  // every piece in the bag and the bank packs, with where it is (nulls included: the planners skip them)
+  function upg_items() {
+    const items = [];
     for (let i = 0; i < character.isize; i++)
-      add(character.items[i], { bag: i });
+      items.push({ it: character.items[i], where: { bag: i } });
     for (const pack of CFG.UPGRADE_PACKS) {
       const arr = character.bank && character.bank[pack];
-      if (Array.isArray(arr)) arr.forEach((it, i) => add(it, { pack, i }));
+      if (Array.isArray(arr))
+        arr.forEach((it, i) => items.push({ it, where: { pack, i } }));
     }
-    return out.sort((a, b) => b.gain - a.gain);
+    return items;
+  }
+  function flip_candidates() {
+    return AL.planners.flips({
+      items: upg_items(),
+      cfg: CFG,
+      fn: { flip_ok, sell_value, chain_value },
+    });
   }
 
   const upg_paused = () => {
@@ -154,167 +155,60 @@
     return n;
   }
   // "" = not a gamble item (or no fresh report from the leader), "aside" = already beats what SexyDexy wears, "fodder" = does not (and he still wears less than the cap)
-  function gamble_mode(it) {
-    if (
-      !it ||
-      !CFG.UPGRADE_GAMBLE_NAMES ||
-      CFG.UPGRADE_GAMBLE_NAMES.indexOf(it.name) === -1 ||
-      !gear_fresh()
-    )
-      return "";
-    if (beats_worn(it, it.level || 0, CFG.RANGER_NAME)) return "aside";
-    const w =
-      S.ranger_gear && S.ranger_gear.slots && S.ranger_gear.slots.mainhand;
-    if (w && w.name === it.name && (w.level || 0) >= upg_max(it.name))
-      return ""; // he already wears the cap: nothing to gain
-    return "fodder";
-  }
+  const gamble_mode = (it) =>
+    AL.planners.gamble_mode(
+      {
+        cfg: CFG,
+        fresh: gear_fresh(),
+        ranger_gear: S.ranger_gear,
+        fn: { beats_worn, upg_max },
+      },
+      it
+    );
   const upg_has_spare = (it) =>
     gamble_mode(it) === "fodder" || upg_copies(it) >= CFG.UPGRADE_MIN_COPIES;
   const upg_scroll = (it) => "scroll" + scroll_grade(it);
 
+  // the planner's input: the Merchant's own helpers (they read his live state)
+  const upg_env = () => ({
+    cfg: CFG,
+    G_items: G.items,
+    fn: {
+      upg_ok,
+      has_spare: upg_has_spare,
+      potential: potential_score,
+      best_target,
+      support_target: support_upgrade_target,
+      support_names,
+      wearable: gear_wearable,
+      upg_max,
+      scroll_ok: (it) => scroll_grade(it) <= CFG.UPGRADE_MAX_SCROLL_GRADE,
+      roster,
+      fresh_for: gear_fresh_for,
+      worn_floor,
+      score: gear_score,
+      label: upg_label,
+      support_cfg,
+    },
+  });
   // v5: a listed stop-gap piece that would beat what a support character (Warrior / Priest) wears once upgraded to the limit
-  function support_upgrade_target(it) {
-    if (
-      !CFG.SUPPORT_UPGRADE_ANY &&
-      CFG.SUPPORT_UPGRADE_NAMES.indexOf(it.name) === -1
-    )
-      return null;
-    for (const who of support_names()) {
-      if (!gear_fresh_for(who) || !gear_wearable(it, who)) continue;
-      const f = worn_floor(it, who);
-      if (
-        gear_score(it.name, upg_max(it.name), {
-          stat_type: it.stat_type,
-          who,
-        }) >
-        f.score * CFG.GEAR_MARGIN
-      )
-        return { who, f };
-    }
-    return null;
-  }
+  const support_upgrade_target = (it) =>
+    AL.planners.support_target(upg_env(), it);
   // everything upgradable that could beat what the Ranger wears, best first (bag + bank)
   function upgrade_candidates() {
-    const out = [];
-    const diag = (S.upg_diag = {
-      upgradable: 0,
-      ranger_kind: 0,
-      support_kind: 0,
-      level_ok: 0,
-      scroll_ok: 0,
-      better: 0,
-      no_spare: 0,
-      not_better: 0,
-      no_spare_names: {},
-    });
-    const add = (it, where) => {
-      const def = it && G.items[it.name];
-      if (def && def.upgrade && !it.l && !(it.q > 1)) {
-        diag.upgradable++;
-        if (support_names().some((w) => gear_wearable(it, w)))
-          diag.support_kind++;
-        if (
-          gear_wearable(it) ||
-          support_names().some((w) => gear_wearable(it, w))
-        ) {
-          diag.ranger_kind++;
-          if ((it.level || 0) < upg_max(it.name)) {
-            diag.level_ok++;
-            if (scroll_grade(it) <= CFG.UPGRADE_MAX_SCROLL_GRADE)
-              diag.scroll_ok++;
-          }
-        }
+    const plan = AL.planners.upgrade(Object.assign(upg_env(), { items: upg_items() }));
+    S.upg_diag = plan.diag;
+    for (const n of plan.notes) {
+      const k = n.it.name + ":dexpot";
+      if (!S.dexpot_logged) S.dexpot_logged = {};
+      if (!S.dexpot_logged[k]) {
+        S.dexpot_logged[k] = 1;
+        say(
+          "[upgrade] " + upg_label(n.it) + " would beat what " + n.who + " wears once a Dexterity scroll is applied"
+        );
       }
-      if (!upg_ok(it)) return;
-      if (!upg_has_spare(it)) {
-        diag.no_spare++;
-        const nm = it.name + "+" + (it.level || 0);
-        diag.no_spare_names[nm] = true;
-        return;
-      }
-      const potential = potential_score(it);
-      const tg = best_target(it, potential) || support_upgrade_target(it);
-      if (!tg) {
-        diag.not_better++;
-        if (!diag.why) {
-          const parts = [];
-          for (const who of roster().concat(
-            support_names().filter((w) => gear_wearable(it, w))
-          )) {
-            if (!gear_fresh_for(who)) {
-              parts.push(who + ": no fresh gear report");
-              continue;
-            }
-            const f = worn_floor(it, who);
-            parts.push(
-              who +
-                " wears " +
-                Math.round(f.score * 10) / 10 +
-                " (needs " +
-                Math.round(f.score * CFG.GEAR_MARGIN * 10) / 10 +
-                ")"
-            );
-          }
-          diag.why =
-            upg_label(it) +
-            " would score " +
-            Math.round(potential * 10) / 10 +
-            " at +" +
-            upg_max(it.name) +
-            ", but " +
-            parts.join("; ");
-        }
-        return;
-      }
-      const f = tg.f;
-      diag.better++;
-      if (
-        !(
-          gear_score(it.name, upg_max(it.name), {
-            stat_type: it.stat_type,
-          }) >
-          f.score * CFG.GEAR_MARGIN
-        )
-      ) {
-        const k = it.name + ":dexpot";
-        if (!S.dexpot_logged) S.dexpot_logged = {};
-        if (!S.dexpot_logged[k]) {
-          S.dexpot_logged[k] = 1;
-          say(
-            upg_label(it) +
-              " would beat what " +
-              tg.who +
-              " wears once a Dexterity scroll is applied"
-          );
-        }
-      }
-      const pot2 = support_cfg(tg.who)
-        ? gear_score(it.name, upg_max(it.name), {
-            stat_type: it.stat_type,
-            who: tg.who,
-          })
-        : potential; // a Warrior / Priest target: scored with THEIR weights
-      out.push(
-        Object.assign(
-          { it, potential: pot2, gain: pot2 - f.score, for: tg.who },
-          where
-        )
-      );
-    };
-    for (let i = 0; i < character.isize; i++)
-      add(character.items[i], { bag: i });
-    for (const pack of CFG.UPGRADE_PACKS) {
-      const arr = character.bank && character.bank[pack];
-      if (Array.isArray(arr)) arr.forEach((it, i) => add(it, { pack, i }));
     }
-    const lead = (c) => (c.for === CFG.RANGER_NAME ? 0 : 1); // the leader's upgrades are done first
-    return out.sort(
-      (a, b) =>
-        lead(a) - lead(b) ||
-        b.gain - a.gain ||
-        (a.it.level || 0) - (b.it.level || 0)
-    );
+    return plan.cands;
   }
   const upg_due = () =>
     CFG.UPGRADE_ENABLED &&
