@@ -199,10 +199,10 @@
   });
   sched_add({
     name: "mluck_town",
-    label: "Merchant's Luck (Grinch, town)",
+    label: "Merchant's Luck (town)",
     due: () => mluck_town_due(),
     run: () => mluck_town_round(),
-    on: () => CFG.MLUCK_GRINCH && grinch_live(),
+    on: () => CFG.MLUCK_TOWN_ALWAYS || (CFG.MLUCK_GRINCH && grinch_live()),
     next: () => S.mluck_town_next || 0,
   });
   sched_add({

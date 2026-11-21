@@ -110,9 +110,8 @@
   function mluck_town_on() {
     const d = mluck_def();
     return !!(
-      CFG.MLUCK_GRINCH &&
+      ((CFG.MLUCK_GRINCH && grinch_live()) || CFG.MLUCK_TOWN_ALWAYS) &&
       d &&
-      grinch_live() &&
       character.level >= (Number(d.level) || 0) &&
       character.mp >= (Number(d.mp) || 0)
     );
@@ -181,13 +180,13 @@
       }
       done++;
       S.mluck_town_skip[t.name] = Date.now() - CFG.MLUCK_TOWN_RETRY_MS + 30000; // do not recast within 30 s if the buff flag has not shown up yet
-      say("Merchant's Luck (Grinch) cast on " + t.name, "#5BCB5B");
+      say("[mluck] Merchant's Luck (town" + (grinch_live() ? ", Grinch" : "") + ") cast on " + t.name, "#5BCB5B");
     }
     if (done)
       say(
         "Merchant's Luck: buffed " +
           done +
-          " player(s) in town while the Grinch is live",
+          " player(s) in town" + (grinch_live() ? " while the Grinch is live" : ""),
         "#5BCB5B"
       );
     return go_home();

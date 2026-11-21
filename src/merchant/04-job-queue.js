@@ -12,14 +12,21 @@
   }
   const act_remaining_s = () =>
     Math.max(0, (ACT.est_s || 0) - (Date.now() - ACT.at) / 1000);
-  const queued_jobs = () =>
-    S.jobs
+  // the party lead: told by his lead_is messages (fresh for 90 s), else the configured leader
+  const lead_name = () =>
+    S.lead && Date.now() - S.lead.at < 90000 ? S.lead.name : CFG.PARTY_LEADER;
+  // Sean 2026-11-21: the current lead's requests come first, then the others by kind and age
+  const queued_jobs = () => {
+    const lead = lead_name();
+    return S.jobs
       .filter((j) => j.state === "QUEUED" && j !== S.cur)
       .sort(
         (a, b) =>
+          (a.from === lead ? 0 : 1) - (b.from === lead ? 0 : 1) ||
           P.PRIORITY[a.jtype] - P.PRIORITY[b.jtype] ||
           a.created_at - b.created_at
       );
+  };
   const has_jobs = () => queued_jobs().length > 0;
   const yield_now = () => has_jobs();
   const job_est = (j) => P.ETA_S[j.jtype + "_job"] || 60;

@@ -777,6 +777,7 @@ T("C5 courier trip: no Merchant -> the courier shops at Ernis for the whole part
   return [[logged(w, "Dexy2", /No Merchant available - handling it myself/), "fell back to self-service"], [qty(L, "hpot1") >= 245 && qty(L, "mpot1") >= 245, "leader holds " + qty(L, "hpot1") + "/" + qty(L, "mpot1")],
     [logged(w, "SexyDexy", /Courier Dexy2 is back \(ok\)/), "trip finished"]];
 });
+const TOWN_ALWAYS_OFF = /MLUCK_TOWN_ALWAYS/.test(src("AutoMerchant v4.js")) ? [[/MLUCK_TOWN_ALWAYS: true/, "MLUCK_TOWN_ALWAYS: false"]] : []; // v6: the town Merchant's Luck round also runs without the Grinch (Sean 2026-11-21); v5 has no such switch
 const SW_OVR = MERCH_OVR.concat([[/TRUSTED_NAMES: (?:\[[^\]]*\]|C\.TRUSTED_NAMES)/, 'TRUSTED_NAMES: ["Dexy2"]']]);
 T("W1 gear sweep: finished rings in the bank go to the Rangers whose slots they beat, leader first; the leader is told", async (w) => {
   for (let i = 0; i < 3; i++) w.bank.items0.push({ name: "ringsj", level: 3 });
@@ -1592,6 +1593,19 @@ T("P3 real Merchant serves a follower Ranger's restock", async (w) => {
   return [[F.items.some((i) => i && i.name === "hpot1" && i.q >= 90), "follower got potions from the Merchant"], [logged(w, "Goodies", /Job restock from Dexy2/), "Merchant queued Dexy2's request"]];
 });
 // ---- stage 4: party lead (AL.lead) --------------------------------------------------------------------------------
+T("LD7 the Merchant serves the current lead first: a request from the lead jumps ahead of an older request from a follower", async (w) => {
+  if (!HAS_LEAD) return skip_lead;
+  const m = merchant_char(w, { gold: 50000 });
+  const L = fake_ranger(w, { x: -110, y: 15 }); const A = make_char(w, "SexyLexy", { x: -110, y: 25 }); const B = make_char(w, "SexyRexy", { x: -110, y: 35 });
+  L.sb.send_cm("Goodies", { type: "lead_is", epoch: 5, lead: ROSTER.ranger.name });
+  await w.clock.run(2);
+  const order = []; const seen = {};
+  w.clock.every(() => { for (const c of [L, A, B]) if (!seen[c.name] && msgs(c, "job_done").length + msgs(c, "job_failed").length) { seen[c.name] = 1; order.push(c.name); } }, 1000);
+  const req = (c, id) => c.sb.send_cm("Goodies", { type: "job_request", id, jtype: "restock", hp: 10, mp: 0, map: "main", x: -110, y: c.y });
+  req(A, "l1"); await w.clock.run(1); req(B, "l2"); await w.clock.run(1); req(L, "l3");
+  await w.clock.run(300);
+  return [[order.join(",") === "SexyLexy,SexyDexy,SexyRexy", "done order (the first job was already running): " + order.join(",")], [logged(w, "Goodies", /\[lead\] SexyDexy is the party lead/), "the Merchant logged who leads"]];
+});
 T("LD1 Hold / Resume from the lead: the Warrior stops following, the lead's message is logged, Resume brings him back", async (w) => {
   if (!HAS_LEAD) return skip_lead;
   const L = fake_ranger(w, { x: 380, y: 1066 }); L.send = (to, msg) => L.sb.send_cm(to, msg);
@@ -2152,7 +2166,7 @@ T("PR6 Priest attacks the Grinch and heals whoever he targets at a higher thresh
 });
 T("ML1 Grinch live: the Merchant buffs every player in town without Merchant's Luck (strangers too), skips the buffed, the far away and NPCs, and checks again for newcomers", async (w) => {
   w.G.skills = { mluck: { name: "Merchant's Luck", level: 40, mp: 10, range: 320, cooldown: 100, target: "player", duration: 3600000 } };
-  const m = merchant_char(w, { gold: 50000, level: 40, mp: 500, max_mp: 500 }, SW_OVR);
+  const m = merchant_char(w, { gold: 50000, level: 40, mp: 500, max_mp: 500 }, SW_OVR.concat(TOWN_ALWAYS_OFF));
   const casts = []; m.sb.use_skill = (n, t) => { casts.push(t.name); t.s = { mluck: { ms: 3600000, f: "Goodies" } }; return Promise.resolve({}); };
   const E = m.sb.parent.entities;
   const pc = (name, x, y, extra) => { E[name] = Object.assign({ id: name, type: "character", name, x, y, map: "main" }, extra || {}); };
@@ -2165,6 +2179,20 @@ T("ML1 Grinch live: the Merchant buffs every player in town without Merchant's L
   pc("Newbie", -120, 30);
   await w.clock.run(120);
   return [[quiet.length === 0, "nothing while the Grinch is not live: " + quiet.join(",")], [first.slice().sort().join(",") === "Alice,Bob", "Alice and Bob buffed, not Carol (has it), Far, Shopkeep: " + first.join(",")], [casts.length === 3 && casts[2] === "Newbie", "newcomer buffed on the next look, nobody twice: " + casts.join(",")]];
+});
+T("ML1b (v6) no Grinch needed: the town round runs all the time (MLUCK_TOWN_ALWAYS); strangers in town are buffed, the buffed, far away and NPCs are not: the Merchant buffs every player in town without Merchant's Luck (strangers too), skips the buffed, the far away and NPCs, and checks again for newcomers", async (w) => {
+  w.G.skills = { mluck: { name: "Merchant's Luck", level: 40, mp: 10, range: 320, cooldown: 100, target: "player", duration: 3600000 } };
+  const m = merchant_char(w, { gold: 50000, level: 40, mp: 500, max_mp: 500 }, SW_OVR);
+  const casts = []; m.sb.use_skill = (n, t) => { casts.push(t.name); t.s = { mluck: { ms: 3600000, f: "Goodies" } }; return Promise.resolve({}); };
+  const E = m.sb.parent.entities;
+  const pc = (name, x, y, extra) => { E[name] = Object.assign({ id: name, type: "character", name, x, y, map: "main" }, extra || {}); };
+  pc("Alice", -60, 20); pc("Bob", -200, 100); pc("Carol", -90, 0, { s: { mluck: { ms: 3000000 } } }); pc("Far", 900, 900); pc("Shopkeep", -100, 0, { npc: true });
+  if (!/MLUCK_TOWN_ALWAYS/.test(src("AutoMerchant v4.js"))) return [[true, "skipped: v5 has no MLUCK_TOWN_ALWAYS"]];
+  await w.clock.run(240);
+  const first = casts.slice();
+  pc("Newbie", -120, 30);
+  await w.clock.run(120);
+  return [[first.slice().sort().join(",") === "Alice,Bob", "Alice and Bob buffed without any Grinch, not Carol (has it), Far, Shopkeep: " + first.join(",")], [casts.slice().sort().join(",") === "Alice,Bob,Newbie", "the newcomer is buffed on the next look: " + casts.join(",")]];
 });
 const warrior_char = (w, o) => {
   const W = make_char(w, ROSTER.warrior.name, Object.assign({ ctype: "warrior", x: 0, y: 0, hp: 2000, max_hp: 2000, mp: 1500, max_mp: 1500, range: 40, speed: 60, level: 80 }, o), "AutoWarrior v5.js");
@@ -3644,7 +3672,7 @@ T("FF3 forced farm: the leader's own death drops it; set(force_farm, '') ends it
 T("FL1 Merchant's Luck stop: the forced farm sends the leader to the Merchant, who casts on the leader and the reported Warrior (not on a stranger); the leader logs it done", async (w) => {
   if (!IS_R5) return skip_r4;
   w.G.skills = { mluck: { name: "Merchant's Luck", level: 40, mp: 10, range: 320, cooldown: 100, target: "player", duration: 3600000 } };
-  const M = merchant_char(w, { gold: 50000, level: 40, mp: 500, max_mp: 500 }, SW_OVR);
+  const M = merchant_char(w, { gold: 50000, level: 40, mp: 500, max_mp: 500 }, SW_OVR.concat(TOWN_ALWAYS_OFF));
   const casts = []; M.sb.use_skill = (n, t) => { casts.push(t.name); t.s = { mluck: { ms: 3600000 } }; return Promise.resolve({}); };
   const L = ff_world(w, { x: -110, y: 15 }, true);
   const Wr = make_char(w, ROSTER.warrior.name, { ctype: "warrior", x: -100, y: 20 });

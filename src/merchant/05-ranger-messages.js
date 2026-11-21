@@ -11,6 +11,16 @@
       switch (d.type) {
         case "job_request":
           return void on_request(m.name, d);
+        case "lead_is": {
+          // the party lead says so (every 15 s and at a hand-over): serve his requests first (queued_jobs)
+          const ep = Number(d.epoch) || 0;
+          if (d.lead !== m.name) return;
+          if (S.lead && S.lead.name !== m.name && ep < S.lead.epoch) return; // an older lead's late message
+          if (!S.lead || S.lead.name !== m.name)
+            say("[lead] " + m.name + " is the party lead: his requests are served first", "#51D2E1");
+          S.lead = { name: m.name, epoch: ep, at: Date.now() };
+          return;
+        }
         case "job_cancel":
           return void on_cancel(m.name, d);
         case "job_sent":

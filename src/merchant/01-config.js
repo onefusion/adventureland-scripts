@@ -181,6 +181,8 @@
     // v5 (Sean 2026-11-17): while the Grinch is live he buffs EVERY player character in the town area (any player, not only ours): a Merchant's Luck buffed killer can drop extra loot.
     // One round, then a look every minute for new characters without the buff; he walks to those out of range (inside the town area only).
     MLUCK_GRINCH: true,
+    // Sean 2026-11-21: the same town round runs ALL THE TIME, not only while the Grinch is live (the cooldown is low and the extra drops are worth it). Set false to go back to Grinch-only.
+    MLUCK_TOWN_ALWAYS: true,
     MLUCK_TOWN_RADIUS: 450, // town area = this far from the stand (main map)
     MLUCK_TOWN_CHECK_MS: 60000,
     MLUCK_TOWN_MIN_LEFT_MS: 10 * 60000, // a buff with less than this left counts as missing (renewed)

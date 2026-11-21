@@ -78,6 +78,12 @@ AL.lead = (function () {
     function others_known() {
       return peers.map((p) => p.name);
     }
+    // only the lead tells the Merchant (he is outside the election): lead_is carries the epoch, the Merchant keeps the newest
+    function tell_merchant() {
+      const mn = env.merchant && env.merchant.name;
+      if (!mn || !i_lead() || peers.some((p) => p.name === mn)) return;
+      tell(mn, { type: "lead_is", epoch: L.epoch, lead: me.name });
+    }
     function broadcast(msg) {
       for (const n of others_known()) tell(n, msg);
     }
@@ -98,6 +104,7 @@ AL.lead = (function () {
         lead_log("taking over failed: " + ((e && e.message) || e), "#CF575F");
       }
       broadcast({ type: "lead_is", epoch: L.epoch });
+      tell_merchant();
       try {
         if (hooks.announce) hooks.announce(); // E4: tell the others at once (party_state with the focus / farm spot)
       } catch (e) {}
@@ -281,6 +288,7 @@ AL.lead = (function () {
         L.hello_at = now();
         const i = info();
         broadcast({ type: "lead_hello", level: i.level, gear: i.gear, lead: L.lead, epoch: L.epoch });
+        tell_merchant(); // Sean 2026-11-21: the Merchant is not a lead member but learns who leads, so he serves the lead first
       }
       reload_tick();
       merchant_tick();
