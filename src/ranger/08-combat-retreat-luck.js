@@ -107,6 +107,7 @@
   function rotate_farm(force) {
     if (!CFG.FARM_ROTATION.length || !is_leader() || (!force && now() - (R.rot_at || 0) < 300000)) return;
     R.rot_at = now();
+    R.farm_since = now();
     rot_idx();
     R.rot_idx = (R.rot_idx + 1) % CFG.FARM_ROTATION.length;
     for (let k = 0; k < CFG.FARM_ROTATION.length && (farm_avoided(CFG.FARM_ROTATION[R.rot_idx]) || boar_held_farm(CFG.FARM_ROTATION[R.rot_idx])); k++) R.rot_idx = (R.rot_idx + 1) % CFG.FARM_ROTATION.length; // (a monster that just killed somebody is skipped for a while)
@@ -120,7 +121,7 @@
     CFG.FARM_MONSTER = t;
     R.farm_applied = true;
     R.state_sent_at = 0;
-    say("Farm rotation: after the hunt, farming " + ((G.monsters[t] || {}).name || t) + " at " + spot.map + " " + spot.x + "," + spot.y + " until the next hunt is done", "#51D2E1");
+    say("Farm rotation: " + (R.rot_timed ? "time is up (" + Math.round(CFG.FARM_ROTATE_MS / 60000) + " min), " : "after the hunt, ") + "farming " + ((G.monsters[t] || {}).name || t) + " at " + spot.map + " " + spot.x + "," + spot.y + (R.rot_timed ? " for " + Math.round(CFG.FARM_ROTATE_MS / 60000) + " min" : " until the next hunt is done"), "#51D2E1");
   }
   // ===== v5 (Sean 2026-11-20): death on the base farm -> everybody retreats to town together; that monster is skipped for a while =====
   function death_note(name) {

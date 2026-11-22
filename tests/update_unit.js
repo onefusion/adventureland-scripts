@@ -21,6 +21,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   ok(reloads.length === 1 && /bbbb/.test(reloads[0]), "a different build on GitHub triggers one reload");
   U = mk({}); U.tick(); await sleep(20);
   ok(reloads.length === 1, "the same new build is not reloaded again inside min_gap_ms (stale CDN guard)");
+  { // console: update_check_now checks at once (ignores check_ms and the guard) and reports the result
+    store.update_check_now = "1"; remote = "aaaa"; const before = logs.length; U = mk({ check_ms: 3600000 }); U.tick(); await sleep(20);
+    ok(logs.slice(before).some((l) => /checking GitHub now/.test(l)) && logs.slice(before).some((l) => /GitHub has build aaaa, I am running aaaa - up to date/.test(l)) && store.update_check_now === "", "update_check_now: checks at once and reports even when up to date");
+    remote = "bbbb";
+  }
   remote = "cccc"; reason = "a job is running"; U = mk({}); U.tick(); await sleep(20);
   ok(reloads.length === 1 && logs.some((l) => /waiting for a safe moment/.test(l)), "not safe: waits and says why");
   reason = ""; U.try_reload();

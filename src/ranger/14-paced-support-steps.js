@@ -158,6 +158,18 @@
       if (is_leader() && CFG.PARTY_MEMBERS.length && now() - R.state_sent_at >= CFG.STATE_EVERY_MS) send_party_state();
     } catch (e) {}
   }, 2000);
+  // Sean 2026-11-21: with no hunt to end, the base farm still moves on every FARM_ROTATE_MS (poisio, armadillo, croc, porcupine, arcticbee); not during a hunt, goal, boss event, retreat or forced farm
+  const rotate_timer = setInterval(() => {
+    if (!alive()) return clearInterval(rotate_timer);
+    try {
+      if (!CFG.FARM_ROTATE_MS || !CFG.FARM_ROTATION.length || !is_leader() || !CFG.FARM_MONSTER) return;
+      if (!R.farm_since) return (R.farm_since = now());
+      if (now() - R.farm_since < CFG.FARM_ROTATE_MS) return;
+      if (R.mh || R.goal || R.boss || R.retreat || R.force || grinch_fight()) return;
+      R.rot_timed = true;
+      try { rotate_farm(true); } finally { R.rot_timed = false; }
+    } catch (e) {}
+  }, 10000);
   const force_timer = setInterval(() => {
     if (!alive()) return clearInterval(force_timer);
     try { force_tick(); } catch (e) {}

@@ -642,6 +642,18 @@ T("RD1 a party member dies on the base farm: the leader retreats to town at once
     return [[before, "was farming Poisios"], [said, "leader: retreat logged, Poisios skipped"], [told, "the Warrior was told"], [cast, "the Warrior casts town() on the retreat"], [moved, "farm moved on to the Armadillos after the hold"]];
   } finally { global.USE_NEW_RJ = false; }
 });
+T("FR1 the base farm rotates on a timer when no hunt ends (FARM_ROTATE_MS)", async (w) => {
+  if (!IS_R5 || !/FARM_ROTATE_MS/.test(RANGER_SRC)) return skip_r4;
+  global.USE_NEW_RJ = true;
+  try {
+  for (const [k, n] of [["poisio", "Poisio"], ["armadillo", "Armadillo"]]) w.G.monsters[k] = { name: n, attack: 10, frequency: 0.6, hp: 700 };
+  w.G.maps.main.monsters = [{ type: "poisio", count: 5, boundary: [-262, 1198, 20, 1522] }, { type: "armadillo", count: 5, boundary: [376, 1696, 676, 1996] }];
+  const HOVR = RANGER_OVR.filter((o) => !/HUNT_ENABLED/.test(String(o[0]))).concat([[/FARM_ROTATE_MS: 15 \* 60000/, "FARM_ROTATE_MS: 60000"]]);
+  const L = make_char(w, ROSTER.ranger.name, { x: -100, y: 1360, attack: 440, frequency: 2 }, "AutoRanger v4.js", HOVR); L.script_char = true; add_item(L, "hpot1", 250); add_item(L, "mpot1", 250);
+  await w.clock.run(150);
+  return [[logged(w, "SexyDexy", /Farm rotation: .*farming Armadillo/), "after the timer the farm moved to the Armadillos with no hunt"]];
+  } finally { global.USE_NEW_RJ = false; }
+});
 T("RD2 a death during the Grinch fight does not start a retreat", async (w) => {
   if (!IS_R5) return skip_r4;
   const L = make_char(w, ROSTER.ranger.name, { x: -100, y: 1360, attack: 440, frequency: 2 }, "AutoRanger v4.js", RANGER_OVR); L.script_char = true; add_item(L, "hpot1", 250); add_item(L, "mpot1", 250);

@@ -56,6 +56,18 @@ AL.update = (function () {
     // call every few seconds; it fetches version.json at most every check_ms
     function tick() {
       if (cfg.enabled === false) return;
+      // console: set("update_check_now","1") on the lead or the Merchant checks GitHub at once, forgets the same-build guard and reports the result either way
+      let forced = false;
+      try {
+        if (String(get("update_check_now") || "") === "1") {
+          set("update_check_now", "");
+          forced = true;
+          U.last = 0;
+          U.busy = false;
+          set("al_update_guard", "{}");
+          log("checking GitHub now (asked from the console); running " + env.current());
+        }
+      } catch (e) {}
       try_reload();
       const f = env.fetch || (typeof fetch === "function" ? fetch : null);
       if (!f || U.busy || now() - U.last < (cfg.check_ms || 5 * 60000)) return;
@@ -71,6 +83,7 @@ AL.update = (function () {
           U.busy = false;
           const remote = String((v && v.build) || "");
           const mine = String(env.current() || "");
+          if (forced) log("GitHub has build " + (remote || "?") + ", I am running " + (mine || "?") + (remote && remote === mine ? " - up to date (a push that is not on GitHub yet, or GitHub's cache not refreshed, shows up as the same build)" : ""));
           if (!remote || !mine || remote === mine) return;
           if (U.pending !== remote) log("a new build " + remote + " is on GitHub (running " + mine + ")");
           U.pending = remote;
