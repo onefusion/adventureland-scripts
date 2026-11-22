@@ -142,7 +142,9 @@
         want: ["dexearring", "stormfeather"],
         enabled: false, // Sean 2026-11-21: OFF - the search separated the leader from the party (the Warrior died to a Hawk while the leader walked on). Remove this line to search again.
       }, // main map: Earring of Dexterity 12%; Storm Feather (the Wind Belt needs 40) also drops
-      { type: "mvampire", session_min: 20, want: ["dexearring"], enabled: false }, // v5: off while the Phoenix is checked every 30 min (remove "enabled: false" to bring Dracul back)
+      // Dracul (Sean 2026-11-21, ON): 240,000 HP, magical 245 at range 120, one target, respawns every 18 min. Drops 10% EACH of the Strength / Intelligence / Dexterity earrings, 3% Dracul's Attire (lifesteal chest), 5% Fire Staff.
+      // Only the Cave of Beginnings (batcave) spawn has a box the goal code can walk to; the Cave of Darkness entry has none. The Warrior swaps to his resistance set (magical, 240k HP is above ALT_MIN_HP).
+      { type: "mvampire", session_min: 20, every_min: 20, want: ["strearring", "intearring", "dexearring", "mcape", "firestaff"] },
       // // Dracul, Cave of Darkness: respawns every ~18 min
       {
         type: "fireroamer",
