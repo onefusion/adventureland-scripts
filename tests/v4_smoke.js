@@ -1060,12 +1060,12 @@ T("WT2 world watch: raw event entries, the Witch's Cipher board and the ingredie
   const m = merchant_char(w, { gold: 50000 }, MERCH_OVR);
   add_item(m, "verdantspore", 3);
   const S = m.sb.parent.S = { schedule: { server_time: Date.now(), events: [{ id: "g1", event: "goobrawl", status: "scheduled", at: Date.now() + 90 * 60000 }] } };
-  m.sb.parent.server = { status: { witchcipher: [{ mix: ["verdantspore", "frostscale", "embercoal", "gloomfeather", "verdantspore"], clue: 2 }] } };
+  m.sb.parent.server = { status: { event_ends: { halloween: Date.now() + 99999 }, schedule: { server_time: Date.now(), events: [{ id: "g2", event: "witchcipher", status: "scheduled", at: Date.now() + 120 * 60000 }] }, witchcipher: [{ mix: ["verdantspore", "frostscale", "embercoal", "gloomfeather", "verdantspore"], clue: 2 }] } };
   await w.clock.run(70);
   m.sb.parent.server.status.witchcipher.push({ mix: ["frostscale", "frostscale", "embercoal", "gloomfeather", "verdantspore"], clue: 1 });
   await w.clock.run(70);
   const n = (re) => w.logs.filter((l) => l.who === "Goodies" && re.test(l.msg)).length;
-  return [[n(/Event entry: .*goobrawl/) === 1, "the Goo Brawl entry is logged once, raw"], [n(/shared board .*recipes still fit/) === 2, "the board is logged once per change with the number of recipes still possible"], [n(/Witch ingredients in the Merchant's bag: verdantspore 3/) === 1, "the ingredient counts are logged once"]];
+  return [[n(/Event entry: .*goobrawl/) === 1, "the Goo Brawl entry is logged once, raw"], [n(/Event entry: .*witchcipher/) === 1 && n(/event_ends/) === 1, "the lineup in server.status.schedule and the event_ends are read too"], [n(/shared board .*recipes still fit/) === 2, "the board is logged once per change with the number of recipes still possible"], [n(/Witch ingredients in the Merchant's bag: verdantspore 3/) === 1, "the ingredient counts are logged once"]];
 });
 T("W2 gear sweep: a ring that does not beat what the Rangers wear stays in the bank", async (w) => {
   w.bank.items0.push({ name: "ringsj", level: 3 });

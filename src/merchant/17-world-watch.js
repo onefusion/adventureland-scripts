@@ -41,7 +41,15 @@
     try {
       Sv = parent.S;
     } catch (e) {}
-    if (!Sv || typeof Sv !== "object") return;
+    // 2026-11-21 (Sean): the published lineup is in server.status.schedule (events: {event, at, status}) and server.status.event_ends holds the end times of running seasons; parent.S stays the boss source
+    let ST = null;
+    try {
+      ST = (typeof server !== "undefined" && server && server.status) || (parent.server && parent.server.status) || null;
+    } catch (e) {}
+    if (!Sv || typeof Sv !== "object") {
+      if (!ST) return;
+      Sv = {};
+    }
     const t = boss_table();
     let dirty = false;
     const seen = {};
@@ -96,7 +104,7 @@
       } catch (e) {}
     }
     // scheduled events
-    const sch = Sv.schedule;
+    const sch = Sv.schedule || (ST && ST.schedule);
     if (sch && sch.server_time && sch.server_time !== WATCH.synced) {
       WATCH.synced = sch.server_time;
       WATCH.offset = sch.server_time - Date.now();
@@ -126,6 +134,13 @@
       say("Bosses (largest first): " + boss_report());
     }
     watch_events_raw(sch);
+    if (ST && ST.event_ends !== undefined) {
+      const t2 = short(ST.event_ends, 800);
+      if (WATCH.ends !== t2) {
+        WATCH.ends = t2;
+        out("Running seasons / events end at (server.status.event_ends): " + t2);
+      }
+    }
     witch_watch();
   }
   // 2026-11-21 (Goo Brawl / Witch's Cipher plan): learn the live shapes. Everything below only logs, to the game log and the console (copyable).
