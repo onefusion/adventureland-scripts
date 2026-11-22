@@ -37,7 +37,8 @@
     "DEFEND_PARTY": "2026-11-21: new, the leader helps a party member under attack instead of walking on",
     "DEFEND_RANGE_PX": "2026-11-21: new, range for DEFEND_PARTY",
     "GOALS": "2026-11-21: the Phoenix goal is switched off (enabled: false) until the party-separation problem is fixed",
-    "SCROLL_SWAP": "2026-11-21: new, take a worn piece off for the Merchant's stat scroll"
+    "SCROLL_SWAP": "2026-11-21: new, take a worn piece off for the Merchant's stat scroll",
+    "PARTY_BEES_UNTIL_LEVEL": "2026-11-21: off (0), the Warrior and Priest are past 60"
   },
   "AutoPriest": {
     "BAG_SHARE_FROM": "stage 2: who may hand her spare items",

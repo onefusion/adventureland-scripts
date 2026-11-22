@@ -22,7 +22,7 @@
     PARTY_JOIN_MS: 20000, // v5: a follower / the Priest that is not in the leader's party asks to join it this often (the leader accepts requests from his own members only), and the leader invites members that are online but not in his party (only while HE is the party head - when the Merchant leads the party, the Merchant invites)
     PARTY_HUNTS_UNTIL_LEVEL: 50, // v5 (Sean 2026-11-18 16:17): while the party is still in bees-only mode, Daisy hunts are allowed once EVERY member has reached this level, but only the easy ones (HUNT_MAX_DIFFICULTY_BEES_ONLY). Goals and boss events stay off until PARTY_BEES_UNTIL_LEVEL. 0 = off (no hunts while bees-only)
     HUNT_MAX_DIFFICULTY_BEES_ONLY: 0, // v5: difficulty limit for hunts taken in bees-only mode (0 easy / green)
-    PARTY_BEES_UNTIL_LEVEL: 60, // the whole party only farms bees (no goals, no Daisy hunts) until EVERY follower has reached this level; 0 = off
+    PARTY_BEES_UNTIL_LEVEL: 0, // (Sean 2026-11-21: off, the Warrior and Priest are past 60; was 60) the whole party only farms bees (no goals, no Daisy hunts) until EVERY follower has reached this level; 0 = off
     TANK_NAME: C.TANK_NAME, // the Warrior: announces the focus target (the biggest monster hitting the party); we mark it and shoot the rest
     FOCUS_TARGET: true,
     FOCUS_MAX_AGE_MS: 5000,
