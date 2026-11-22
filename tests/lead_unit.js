@@ -124,3 +124,24 @@ console.log('lead_unit OK');
   for(let i=0;i<60;i++){T+=5000;o.L.tick()}assert.strictEqual(o.reloads,0,'a goal / boss / forced farm still blocks it');
   console.log('lead_unit soft wait OK');
 }
+// the lead forces a follower that stays on an older build to reload; the forced reload ignores a plain fight
+{
+  const out=[];global.send_cm=(to,msg)=>out.push({to,msg});
+  global.character={level:50,hp:900,max_hp:1000,slots:{},map:'main',x:1,y:1,xp:5,gold:9,rip:false};
+  const store={};global.get=(k)=>store[k];global.set=(k,v)=>{store[k]=v};
+  globalThis.__AL_BUILD='aaa';globalThis.__AL_LIB_BUILD='lll';
+  const logs=[];const ld=lead.create({CFG:{PARTY_LEADER:'R'},say:(x)=>logs.push(x),alive:()=>true,me:{name:'R',cls:'ranger'},members:[{name:'R',cls:'ranger'},{name:'W',cls:'warrior'}],can_lead:{ranger:true},busy:()=>'',quiet_ms:1000,update:{enabled:false,follower_force_ms:120000},hooks:{}});
+  ld.handle({name:'W',message:{type:'hello',level:50,gear:5,build:'bbb',lib:'lll',cls:'warrior'}});
+  const lag=()=>out.filter((x)=>x.msg&&x.msg.cmd==='reload_now').length;
+  ld.handle({name:'W',message:{type:'lead_hello',level:50,gear:5,lead:'R',epoch:1,build:'bbb',lib:'lll'}});
+  ld.tick();T+=60000;ld.handle({name:'W',message:{type:'lead_hello',level:50,gear:5,lead:'R',epoch:1,build:'bbb',lib:'lll'}});ld.tick();assert.strictEqual(lag(),0,'not forced before follower_force_ms');
+  T+=70000;ld.handle({name:'W',message:{type:'lead_hello',level:50,gear:5,lead:'R',epoch:1,build:'bbb',lib:'lll'}});ld.tick();
+  assert.strictEqual(lag(),1,'forced after follower_force_ms');assert(logs.some((x)=>/forcing it to reload/.test(x)));
+  T+=10000;ld.handle({name:'W',message:{type:'lead_hello',level:50,gear:5,lead:'R',epoch:1,build:'bbb',lib:'lll'}});ld.tick();assert.strictEqual(lag(),1,'not again within 5 min');
+  let reloads=0;const fo=lead.create({CFG:{PARTY_LEADER:'R'},say:()=>{},alive:()=>true,me:{name:'W',cls:'warrior'},members:[{name:'R',cls:'ranger'},{name:'W',cls:'warrior'}],can_lead:{ranger:true},busy:()=>'a hawk is fighting W',quiet_ms:1000,soft_wait_ms:120000,hooks:{reload:()=>{reloads++}}});
+  fo.handle({name:'R',message:{type:'lead_hello',level:60,gear:5,lead:'R',epoch:1}});
+  fo.handle({name:'R',message:{type:'ctl',cmd:'reload_now'}});
+  for(let i=0;i<4;i++){T+=1500;fo.tick()}
+  assert.strictEqual(reloads,1,'reload_now reloads through a plain fight at once');
+  console.log('lead_unit forced reload OK');
+}

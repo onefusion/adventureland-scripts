@@ -63,20 +63,44 @@ try {
     );
     load_budgets();
     add_test_buttons();
-    // GitHub auto-update: the Merchant polls version.json himself and reloads when idle (no job, not in a round, 60 s of quiet)
+    // what a restart must do first: tell the requesters their job failed (they ask again), stop what he is doing, close the stand
+    const restart_stop = async () => {
+      for (const j of S.jobs.slice()) {
+        AL.send(j.from, {
+          type: "job_failed",
+          id: j.id,
+          reason: "merchant_restarting",
+        });
+      }
+      abort();
+      if (character.stand) await call(() => close_stand());
+    };
+    // GitHub auto-update: the Merchant polls version.json himself. He reloads when idle (no job, not in a round, 60 s of quiet); a job or round that keeps him busy for
+    // roster.update.merchant_force_ms (3 min) after the new build is seen is stopped so the update does not wait for hours (Sean 2026-11-21). Not during a boss event (Grinch / Snowman live).
     if (AL.update && AL.config.roster.update && AL.config.roster.update.enabled !== false) {
       let quiet_since = 0;
+      let busy_since = 0;
       const UPD = AL.update.create({
         say,
         cfg: AL.config.roster.update,
         current: () => String(globalThis.__AL_BUILD || ""),
         can_reload: () => {
           const busy = S.cur ? "a job is running" : has_jobs() ? "a job is queued" : ACT.label !== IDLE_LABEL ? "busy: " + ACT.label : "";
-          if (busy) { quiet_since = 0; return busy; }
+          if (busy) {
+            quiet_since = 0;
+            if (!busy_since) busy_since = Date.now();
+            const force = AL.config.roster.update.merchant_force_ms;
+            if (force && Date.now() - busy_since >= force && !boss_live()) {
+              say("UPDATE: stopping '" + busy + "' for the new build (busy for " + Math.round((Date.now() - busy_since) / 1000) + " s)", "#E0A040");
+              return ""; // the reload below stops the job first (restart_stop)
+            }
+            return busy;
+          }
+          busy_since = 0;
           if (!quiet_since) quiet_since = Date.now();
           return Date.now() - quiet_since < 60000 ? "waiting for 60 s of quiet" : "";
         },
-        reload: () => AL.reengage({ say, slot: CFG.SELF_CODE_SLOT, restart: AutoMerchantV5 }),
+        reload: () => AL.reengage({ say, slot: CFG.SELF_CODE_SLOT, restart: AutoMerchantV5, stop: restart_stop }),
       });
       const upd_timer = setInterval(() => (alive() ? UPD.tick() : clearInterval(upd_timer)), 15000);
     }
@@ -84,17 +108,7 @@ try {
       say,
       slot: CFG.SELF_CODE_SLOT,
       restart: AutoMerchantV5,
-      stop: async () => {
-        for (const j of S.jobs.slice()) {
-          AL.send(j.from, {
-            type: "job_failed",
-            id: j.id,
-            reason: "merchant_restarting",
-          });
-        }
-        abort();
-        if (character.stand) await call(() => close_stand());
-      },
+      stop: restart_stop,
     });
     const sm = (t, est) => {
       if (ACT.label !== t || est !== undefined) act(t, est || 0);

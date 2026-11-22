@@ -206,9 +206,7 @@
   // the courier trip brings it to the Merchant like any spare gear, the gear sweep sees it beat the empty slot, apply_support_scrolls puts the scroll on, and the normal hand-over returns it.
   async function request_scroll_swap() {
     const why = (m) => {
-      // at most one explanation per 30 min, so a silent sweep can be understood from the console
-      if (now() - (S.swap_why_at || 0) < 30 * 60000) return;
-      S.swap_why_at = now();
+      // every sweep says why it did not ask (sweeps are 30 min apart, so this is not spam); Sean 2026-11-21 saw no line at all with the old once-per-30-min limit
       say("Stat scroll for worn gear: not asking - " + m, "#8AB4D0");
     };
     if (!CFG.STAT_SCROLL_WORN) return why("STAT_SCROLL_WORN is off");
@@ -216,7 +214,7 @@
     if (!stat_scroll_on(CFG.RANGER_NAME)) return why("STAT_SCROLL_APPLY.ranger is off");
     if (S.swap && now() - S.swap.at > 2 * CFG.STAT_SCROLL_WORN_GAP_MS) S.swap = null; // the piece never came: forget it (it stays in his bag as spare gear, or he still wears it)
     if (S.swap) return why("waiting for " + S.swap.name + " +" + S.swap.level + " from " + S.swap.who + " (asked " + Math.round((now() - S.swap.at) / 60000) + " min ago)");
-    if (now() - S.swap_last < CFG.STAT_SCROLL_WORN_GAP_MS) return;
+    if (now() - S.swap_last < CFG.STAT_SCROLL_WORN_GAP_MS) return why("asked " + Math.round((now() - S.swap_last) / 60000) + " min ago, next ask after " + Math.round(CFG.STAT_SCROLL_WORN_GAP_MS / 60000) + " min");
     const sc = stat_scroll_of(CFG.RANGER_NAME);
     if (!sc) return why("no stat scroll item known (" + CFG.DEX_SCROLL_NAME + ")");
     const price = unit_cost(sc.name);
@@ -267,7 +265,11 @@
       await free_bank_space(); // no-op while the bank has enough free item slots
     }
     await apply_support_scrolls();
-    await request_scroll_swap();
+    try {
+      await request_scroll_swap();
+    } catch (e) {
+      say("Stat scroll for worn gear: failed - " + ((e && e.message) || e), "#CF575F");
+    }
     return go_home();
   }
   const BOOT_AT = now();

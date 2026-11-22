@@ -310,6 +310,19 @@ T("M1 restock: ack with ETA, delivery, job_done", async (w) => {
     [done.length === 1 && done[0].hp === 50 && done[0].mp === 40, "job_done with the amounts"],
     [r.items.some((i) => i && i.name === "hpot1" && i.q === 50), "potions arrived"]];
 });
+T("UP2 auto-update: a Merchant busy with a job when a new build is seen stops it after merchant_force_ms, fails it back to the Ranger and reloads", async (w) => {
+  if (!/merchant_force_ms/.test(src("AL Lib v2.js"))) return skip_v4;
+  global.fetch = (url) => Promise.resolve(/version\.json/.test(url) ? { ok: true, status: 200, json: () => Promise.resolve({ build: "newbuild2" }) } : { ok: false, status: 404 });
+  try {
+    const m = merchant_char(w); const r = fake_ranger(w, { map: "winterland", x: 10, y: 10 });
+    m.sb.fetch = global.fetch;
+    m.sb.AL.config.roster.update.merchant_force_ms = 5000;
+    await w.clock.run(5);
+    r.sb.send_cm("Goodies", { type: "job_request", id: "r9", jtype: "restock", hp: 50, mp: 0, map: "winterland", x: 10, y: 10 });
+    await w.clock.run(90);
+    return [[logged(w, "Goodies", /UPDATE: stopping/), "the busy job is stopped for the new build"], [msgs(r, "job_failed").some((x) => x.reason === "merchant_restarting"), "the Ranger is told the job failed (merchant_restarting)"], [logged(w, "Goodies", /\[update\] reloading to build newbuild2/), "the reload runs"]];
+  } finally { delete global.fetch; }
+});
 T("M2 cancel race: Merchant turns back, cancel_ack, no failure sent", async (w) => {
   const m = merchant_char(w); const r = fake_ranger(w, { map: "winterland", x: 10, y: 10 });
   await w.clock.run(5);

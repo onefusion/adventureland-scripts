@@ -206,6 +206,7 @@ AL.lead = (function () {
           if (cmd === "hold") { L.hold = true; lead_log("HOLD from the lead " + from + ": fight and follow logic paused until Resume", "#CF575F"); }
           else if (cmd === "resume") { L.hold = false; lead_log("RESUME from the lead " + from, "#5BCB5B"); }
           else if (cmd === "reload") request_reload("asked by the lead " + from);
+          else if (cmd === "reload_now") { request_reload("forced by the lead " + from + " (still on an old build)"); L.reload_force = true; }
           return true;
         }
         return true;
@@ -250,6 +251,24 @@ AL.lead = (function () {
       if (bad_b && AR.build && auto_ok("build:" + tb)) request_reload("script build " + mb + " differs from the lead's " + tb);
       else if (bad_l && AR.lib && auto_ok("lib:" + tl)) request_reload("lib build " + ml + " differs from the lead's " + tl);
     }
+    // the lead pushes a follower that stays on an older build than his own (Sean 2026-11-21: the others just kept farming): a forced reload every 5 min, only while the build still differs
+    L.lag = L.lag || {};
+    function push_laggards() {
+      if (!i_lead()) return;
+      const force_ms = (env.update && env.update.follower_force_ms) || 120000, mb = my_build(), ml = my_lib();
+      Object.keys(heard).forEach((n) => {
+        const h = heard[n];
+        if (!h || now() - h.at > 90000 || !mb) return delete L.lag[n];
+        const bad = (h.build && h.build !== mb) || (ml && h.lib && h.lib !== ml);
+        if (!bad) return delete L.lag[n];
+        const g = (L.lag[n] = L.lag[n] || { since: now(), sent: 0 });
+        if (now() - g.since >= force_ms && now() - g.sent >= 300000) {
+          g.sent = now();
+          lead_log("UPDATE: " + n + " has been on build " + (h.build || "?") + " for " + Math.round((now() - g.since) / 1000) + " s (mine " + mb + ") - forcing it to reload", "#E0A040");
+          tell(n, { type: "ctl", cmd: "reload_now" });
+        }
+      });
+    }
     function idle_tick() {
       if (!AR.idle || L.hold || !alive() || character.rip) return (L.idle_since = 0);
       const sig = [character.map, Math.round(character.x), Math.round(character.y), character.xp, character.gold].join("|");
@@ -274,7 +293,7 @@ AL.lead = (function () {
       if (!L.reload) return;
       const why = env.busy ? String(env.busy() || "") : "";
       // Sean 2026-11-21: ordinary farming is a fight all day, so "a fight is going on" alone must not hold a reload back forever. After SOFT_WAIT_MS of waiting, a plain fight (not a boss, Grinch, forced farm, goal or trip) no longer blocks it as long as I am healthy.
-      const soft_ok = !!why && /^a .* is fighting /.test(why) && now() - (L.reload_at || now()) >= SOFT_WAIT_MS && character.hp >= character.max_hp * 0.6;
+      const soft_ok = !!why && /^a .* is fighting /.test(why) && (L.reload_force || now() - (L.reload_at || now()) >= SOFT_WAIT_MS) && character.hp >= character.max_hp * (L.reload_force ? 0.4 : 0.6);
       if (soft_ok) L.reload_quiet_since = L.reload_quiet_since || now() - QUIET_MS;
       if (why && !soft_ok) {
         L.reload_quiet_since = 0;
@@ -288,6 +307,7 @@ AL.lead = (function () {
       if (now() - L.reload_quiet_since < QUIET_MS) return;
       const r = L.reload;
       L.reload = null;
+      L.reload_force = false;
       lead_log("RELOAD now (" + r + "): quiet for " + Math.round((now() - L.reload_quiet_since) / 1000) + " s", "#E0A040");
       try {
         if (hooks.reload) hooks.reload();
@@ -345,6 +365,7 @@ AL.lead = (function () {
       reload_tick();
       idle_tick();
       if (UPD && i_lead()) UPD.tick();
+      push_laggards();
       merchant_tick();
       command_tick();
       if (!i_lead() && now() - L.seen_at >= election_ms && now() - L.started >= election_ms) election();
