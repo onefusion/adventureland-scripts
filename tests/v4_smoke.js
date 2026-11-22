@@ -3979,6 +3979,47 @@ T("WR9 Warrior: no Stomp below level 52 (STOMP_MIN_LEVEL, the game's own gate), 
   return [[!low, "no stomp at level 50"], [ok, "stomp at level 55"]];
 });
 
+T("BA1 Warrior basher trial (BASHER_ALWAYS): the basher stays in hand, sword and shield wait in the bag; a stun-immune focus puts sword and shield back; set() switches the trial off", async (w) => {
+  if (!/BASHER_ALWAYS/.test(src("AutoWarrior v5.js"))) return skip_v4;
+  w.G.skills = Object.assign(w.G.skills || {}, { taunt: { mp: 40, range: 200, cooldown: 3000 }, stomp: { level: 52, mp: 120 } });
+  w.G.items = Object.assign(w.G.items || {}, { sword1: { wtype: "sword" }, shield1: { type: "shield" }, basher1: { wtype: "basher" } });
+  w.G.monsters = Object.assign(w.G.monsters || {}, { bee: { name: "Bee", hp: 100 }, tiger: { name: "Tiger", hp: 12000, immune: true, phresistance: 60 } });
+  const L = make_char(w, ROSTER.ranger.name, { x: 40, y: 0, hp: 1000, max_hp: 1000 });
+  const W = warrior_char(w, { x: 0, y: 0, level: 80, hp: 1800, max_hp: 2000 });
+  const ch = W.sb.character;
+  ch.slots.mainhand = { name: "sword1", level: 3 }; ch.slots.offhand = { name: "shield1", level: 2 };
+  W.sb.equip = (i, slot) => { const it = ch.items[i]; if (!it) return Promise.resolve({}); const sl = slot || (G_is_shield(it) ? "offhand" : "mainhand"); const old = ch.slots[sl]; ch.slots[sl] = { name: it.name, level: it.level || 0 }; ch.items[i] = old && old.name ? { name: old.name, level: old.level || 0 } : null; return Promise.resolve({}); };
+  const G_is_shield = (it) => (w.G.items[it.name] || {}).type === "shield";
+  W.sb.set("basher_always", "1");
+  W.sb.parent.entities.SexyDexy = L;
+  const mon = (id, mtype) => ({ id, type: "monster", mtype, x: 20, y: 0, map: "main", hp: 100, max_hp: 100, target: "SexyWexy", visible: true, dead: false });
+  W.sb.parent.entities.m1 = mon("m1", "bee");
+  await w.clock.run(15);
+  const inHand = ch.slots.mainhand && ch.slots.mainhand.name === "basher1" && !ch.slots.offhand;
+  const wait = ch.items.some((x) => x && x.name === "sword1") && ch.items.some((x) => x && x.name === "shield1");
+  const saved = /sword1/.test(String(W.sb.get("wexy_bm") || ""));
+  delete W.sb.parent.entities.m1; W.sb.parent.entities.m2 = mon("m2", "tiger");
+  await w.clock.run(45);
+  const back = ch.slots.mainhand && ch.slots.mainhand.name === "sword1" && ch.slots.offhand && ch.slots.offhand.name === "shield1";
+  return [[inHand, "the basher is in hand and the off hand is empty"], [wait, "sword and shield are in the bag"], [saved, "the trial state is saved (survives a reload)"], [logged(w, "SexyWexy", /Basher trial: the basher is in hand now/), "it is logged"], [back, "a stun-immune focus (Tiger): sword and shield back on"], [logged(w, "SexyWexy", /Basher trial: sword and shield back on/), "that is logged too"]];
+});
+T("BA2 Warrior stun trial: hits and stuns are counted per monster type and reported (Stomp's own stun is not counted)", async (w) => {
+  if (!/STUN_LOG_MS/.test(src("AutoWarrior v5.js"))) return skip_v4;
+  w.G.skills = Object.assign(w.G.skills || {}, { taunt: { mp: 40, range: 200, cooldown: 3000 }, stomp: { level: 52, mp: 120 } });
+  w.G.monsters = Object.assign(w.G.monsters || {}, { bee: { name: "Bee", hp: 100, phresistance: 60 } });
+  const L = make_char(w, ROSTER.ranger.name, { x: 40, y: 0, hp: 1000, max_hp: 1000 });
+  const W = warrior_char(w, { x: 0, y: 0, level: 80, hp: 1800, max_hp: 2000 });
+  W.sb.parent.entities.SexyDexy = L;
+  const m = { id: "m1", type: "monster", mtype: "bee", x: 20, y: 0, map: "main", hp: 100, max_hp: 100, target: "SexyWexy", visible: true, dead: false };
+  W.sb.parent.entities.m1 = m;
+  await w.clock.run(60);
+  m.s = { stunned: { ms: 3200 } };
+  await w.clock.run(3);
+  delete m.s;
+  await w.clock.run(627);
+  const line = w.logs.filter((l) => l.who === "SexyWexy" && /Stun trial \(hits \/ stuns\): bee \[phres 60\]/.test(l.msg)).pop();
+  return [[!!line, "a stun trial line is logged with the monster's phresistance"], [!!line && /other weapon \d+\/1 /.test(line.msg), "exactly one stun was counted (the sword is in hand here)"]];
+});
 T("GW3 Warrior with no chest and no legs: a Super Sweater (on the junk list) and Heavy Underarmor in the bank are assigned to him, not sold", async (w) => {
   if (!IS_R5) return skip_r4;
   w.G.items.sweaterhs = { g: 160000, type: "chest", vit: 12, armor: 34, resistance: 23, upgrade: { armor: 3 }, grades: [0, 7, 10, 12] };

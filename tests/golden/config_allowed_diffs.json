@@ -52,6 +52,10 @@
   "AutoWarrior": {
     "PARTY_ACCEPT_FROM": "stage 4 (D14): the Merchant is not in the game party (roster.merchant_in_party false)",
     "SELF_CODE_SLOT": "2026-11-21: code slots moved (lib 1, Merchant 2, Ranger 3, Warrior 4, Priest 5)",
-    "TOWN_ON_RETREAT": "2026-11-21: new, cast town() on the leader's retreat"
+    "TOWN_ON_RETREAT": "2026-11-21: new, cast town() on the leader's retreat",
+    "BASHER_ALWAYS": "2026-11-22: new, trial: the Basher stays in hand",
+    "BASHER_MAX_PHRES": "2026-11-22: new, stun-resistant focus -> sword and shield",
+    "BASHER_SWAP_GAP_MS": "2026-11-22: new, minimum time between switches",
+    "STUN_LOG_MS": "2026-11-22: new, stun trial report interval"
   }
 }

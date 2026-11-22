@@ -88,6 +88,10 @@ try {
     STOMP_ROUTINE: true, // also stomp whenever it is ready and something is hitting him (the stun gives the Priest time to heal and drink)
     STOMP_MIN_LEVEL: 52, // v5 (Sean 2026-11-18 15:43): Stomp (and the basher swap) from level 52, the game's own level; it was 60 while the group waited for the boss / hard-farm cycles. The Fire Spirit farm starts once the Warrior and Priest are 52
     STOMP_SWAP: true, // Stomp needs a basher: swap it in for the stomp, then put the sword (and shield) back
+    BASHER_ALWAYS: false, // Sean 2026-11-22 TRIAL: fight with the Basher in hand all the time (its stun % on every hit; Stomp is always ready, no swap). The off hand (shield) is taken off, sword and shield wait in the bag. set("basher_always","1") / set("basher_always","0") on the Warrior console overrides this
+    BASHER_MAX_PHRES: 90, // back to sword + shield against a focus with this much physical resistance or more (it resists stuns: Grinch 90, Mr. Green 100) and against stun-immune monsters (data: immune)
+    BASHER_SWAP_GAP_MS: 30000, // at least this long between two basher/sword switches (the focus must not flap)
+    STUN_LOG_MS: 10 * 60000, // the stun trial: hits and stuns per monster type, with the basher and with the other weapon, logged (console too) this often
     SWAP_FAIL_MAX: 3, // this many failed swaps in a row: stop swapping
     FOCUS_TO: C.FOCUS_TO, // who hears which monster is the focus target
     FOCUS_EVERY_MS: 1500,
@@ -147,6 +151,12 @@ try {
     alt_fail: 0,
     swap_hold: null, // the weapon that is in the bag while the basher is in hand
     swap_off: null, // the off-hand item that is in the bag while the (two-handed) basher is in hand
+    bm: null, // BASHER_ALWAYS: {main, off} = the sword and the shield that wait in the bag while the basher is worn all the time (saved with set(), a reload keeps it)
+    bm_at: 0,
+    bs: {}, // stun trial: mtype -> {bh, bs, oh, os} (hits / stuns with the basher / with another weapon)
+    bs_seen: {}, // monster id -> until when its current stun was counted
+    bs_log_at: 0,
+    stomp_at: 0,
   };
 
   const mover = AL.mover({ say, default_ms: 60000 });
@@ -163,7 +173,7 @@ try {
         if (pool) pool.splice(k, 1); // this copy is the held one; the next identical item is not
         return true;
       },
-      worn: (sl) => (S.alt_on && S.alt_worn[sl] ? S.alt_worn[sl] : character.slots && character.slots[sl]), // the report always shows the MAIN set
+      worn: (sl) => (S.bm && sl === "mainhand" ? S.bm.main : S.bm && sl === "offhand" ? S.bm.off : S.alt_on && S.alt_worn[sl] ? S.alt_worn[sl] : character.slots && character.slots[sl]), // the report always shows the MAIN set (also while the basher trial has the basher on)
       report_extra: () => {
         const alt = {};
         for (const sl of Object.keys(S.alt)) {
@@ -256,7 +266,7 @@ try {
   // never handed to the courier: the keep list, bashers (for Stomp), the second (magic) set and the pieces it replaced, the weapon swapped out for a stomp
   const same_item = (a, it) => !!a && a.name === it.name && (Number(a.level) || 0) === (it.level || 0);
   // Sean 2026-11-19: the pieces held back for the magic set / a Stomp swap are held back ONE COPY EACH, not every item that looks the same (20 +0 Rings of Joy in the bag were all "kept" because one is a magic-set piece)
-  const reserved_pieces = () => Object.keys(S.alt).map((k) => S.alt[k]).concat(Object.keys(S.alt_worn).map((k) => S.alt_worn[k]), [S.swap_hold, S.swap_off]).filter(Boolean);
+  const reserved_pieces = () => Object.keys(S.alt).map((k) => S.alt[k]).concat(Object.keys(S.alt_worn).map((k) => S.alt_worn[k]), [S.swap_hold, S.swap_off], S.bm ? [S.bm.main, S.bm.off] : []).filter(Boolean);
   // ask the Priest for room when spare items wait and she is close; she answers with how many she can take (bag_room_ok), then they are handed over (src/lib/runtime.js)
   const { share_tick, share_give } = AL.runtime.bag_share({ CFG, S, say, alive, slots: () => handoff_slots(), free: () => free_slots() });
   setInterval(share_tick, 5000);
@@ -353,6 +363,7 @@ try {
       S.alt_worn = {};
       for (const sl of Object.keys(S.alt)) {
         const want = S.alt[sl];
+        if (S.bm && (sl === "mainhand" || sl === "offhand")) continue; // the basher is worn on purpose (BASHER_ALWAYS)
         const cur = character.slots && character.slots[sl];
         if (cur && cur.name === want.name && (cur.level || 0) === want.level) continue;
         const i = find_gear(want.name, want.level);
@@ -415,8 +426,89 @@ try {
   }
   async function do_stomp() {
     const r = await with_basher(() => call(() => use_skill("stomp")));
-    if (r && !r.failed) { S.stats.stomps++; return true; }
+    if (r && !r.failed) { S.stats.stomps++; S.stomp_at = now(); return true; }
     return false;
+  }
+  // ---- BASHER_ALWAYS trial (Sean 2026-11-22): the basher stays in hand, the sword and the shield wait in the bag
+  const basher_on_flag = () => {
+    let v = null;
+    try { v = get("basher_always"); } catch (e) {}
+    if (v === "1" || v === 1 || v === true) return true;
+    if (v === "0" || v === 0 || v === false) return false;
+    return !!CFG.BASHER_ALWAYS;
+  };
+  function bm_save() { try { set("wexy_bm", S.bm ? JSON.stringify(S.bm) : ""); } catch (e) {} }
+  function bm_load() {
+    try {
+      const v = get("wexy_bm");
+      const o = typeof v === "string" && v ? JSON.parse(v) : null;
+      const sl = character.slots || {};
+      if (o && wtype_of(sl.mainhand) === "basher") S.bm = { main: o.main || null, off: o.off || null };
+      else if (o) bm_save(); // the basher is not in hand any more (a restart in between): forget it
+    } catch (e) {}
+  }
+  bm_load();
+  // does this focus resist the stun (data: the game's stunned condition uses phresistance as its defense; immune monsters cannot be stunned)?
+  function stun_blocked(m) {
+    const d = (m && G.monsters[m.mtype]) || {};
+    return !!d.immune || Number(d.phresistance || 0) >= CFG.BASHER_MAX_PHRES;
+  }
+  async function basher_set(on) {
+    if (now() - S.bm_at < CFG.BASHER_SWAP_GAP_MS || S.swap_fail >= CFG.SWAP_FAIL_MAX) return;
+    const sl = character.slots || {};
+    if (on) {
+      if (S.bm || wtype_of(sl.mainhand) === "basher") return;
+      let bi = -1;
+      for (let i = 0; i < character.isize; i++) if (wtype_of(character.items[i]) === "basher") { bi = i; break; }
+      if (bi < 0) return;
+      S.bm_at = now();
+      const main = sl.mainhand ? { name: sl.mainhand.name, level: sl.mainhand.level || 0 } : null;
+      const off = sl.offhand ? { name: sl.offhand.name, level: sl.offhand.level || 0 } : null;
+      if (off) { const u = await call(() => unequip("offhand")); if (u && u.failed) { S.swap_fail++; return; } }
+      const e = await call(() => equip(bi));
+      if (e && e.failed) {
+        S.swap_fail++;
+        if (off) { const i = find_item(off.name, off.level); if (i >= 0) await call(() => equip(i, "offhand")); }
+        return;
+      }
+      S.bm = { main, off };
+      bm_save();
+      say("Basher trial: the basher is in hand now (" + (main ? main.name + " +" + main.level : "no weapon") + (off ? " and " + off.name + " +" + off.level : "") + " wait in the bag)", "#B07CFF");
+    } else {
+      if (!S.bm) return;
+      S.bm_at = now();
+      const b = S.bm;
+      if (b.main) { const i = find_item(b.main.name, b.main.level); if (i >= 0) await call(() => equip(i)); }
+      if (b.off) { const i = find_item(b.off.name, b.off.level); if (i >= 0) await call(() => equip(i, "offhand")); }
+      const back = character.slots && character.slots.mainhand;
+      if (b.main && (!back || back.name !== b.main.name)) { S.swap_fail++; return; }
+      S.swap_fail = 0;
+      S.bm = null;
+      bm_save();
+      say("Basher trial: sword and shield back on", "#B07CFF");
+    }
+  }
+  // the stun trial: per monster type, hits and stuns with the basher and with another weapon
+  function stun_count_hit(t) {
+    const o = (S.bs[t.mtype] = S.bs[t.mtype] || { bh: 0, bs: 0, oh: 0, os: 0 });
+    if (wtype_of((character.slots || {}).mainhand) === "basher") o.bh++; else o.oh++;
+  }
+  function stun_watch(t) {
+    if (!t || !t.s || !t.s.stunned || (S.bs_seen[t.id] || 0) > now()) return;
+    S.bs_seen[t.id] = now() + 5000;
+    if (now() - S.stomp_at < 4500) return; // Stomp's own stun
+    const o = (S.bs[t.mtype] = S.bs[t.mtype] || { bh: 0, bs: 0, oh: 0, os: 0 });
+    if (wtype_of((character.slots || {}).mainhand) === "basher") o.bs++; else o.os++;
+  }
+  function stun_report() {
+    if (now() - S.bs_log_at < CFG.STUN_LOG_MS) return;
+    S.bs_log_at = now();
+    const rows = Object.keys(S.bs).filter((k) => S.bs[k].bh + S.bs[k].oh >= 20);
+    if (!rows.length) return;
+    const pct = (a, b) => (b ? (100 * a / b).toFixed(1) + "%" : "-");
+    const m = "Stun trial (hits / stuns): " + rows.map((k) => { const o = S.bs[k]; const ph = (G.monsters[k] || {}).phresistance || 0; return k + " [phres " + ph + "] basher " + o.bh + "/" + o.bs + " " + pct(o.bs, o.bh) + ", other weapon " + o.oh + "/" + o.os + " " + pct(o.os, o.oh); }).join(" | ");
+    say(m, "#B07CFF");
+    try { console.log("[stun] " + m); } catch (e) {}
   }
   async function tank() {
     const party = party_members().map((e) => e.name);
@@ -447,6 +539,15 @@ try {
       } else if (S.alt_on && now() - S.alt_seen_at > CFG.ALT_BACK_MS) await alt_swap(false);
     }
     if (focus) { target = focus; fighting = true; }
+    if (CFG.STOMP && character.level >= CFG.STOMP_MIN_LEVEL) {
+      // the basher trial: in hand unless the focus resists stuns (then sword + shield), and back to sword + shield when the trial is switched off
+      if (basher_on_flag()) {
+        if (focus && stun_blocked(focus)) { if (S.bm) await basher_set(false); }
+        else if (!S.bm && focus) await basher_set(true);
+      } else if (S.bm && !focus) await basher_set(false);
+    }
+    stun_watch(target);
+    stun_report();
     // emergency first: Hard Shell, Stomp
     const hp = hp_pct(character);
     if (CFG.HARDSHELL && on_me.length && hp < CFG.HARDSHELL_BELOW_PCT && skill_ok("hardshell") && character.mp - (Number(G.skills.hardshell.mp) || 0) >= CFG.SKILL_MP_RESERVE) {
@@ -500,6 +601,7 @@ try {
         const r = await call(() => attack(target));
         if (!r.failed) {
           S.stats.attacks++;
+          stun_count_hit(target);
           reduce_cooldown("attack", (character.ping || 0) * 0.95);
         }
       }
