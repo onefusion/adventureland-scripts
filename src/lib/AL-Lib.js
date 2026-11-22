@@ -212,7 +212,16 @@ var AL = (function () {
     const g = (globalThis.__AL_GEN = (globalThis.__AL_GEN || 0) + 1);
     return g;
   }
-  const is_current = (gen) => globalThis.__AL_GEN === gen;
+  // Sean 2026-11-21: after a reload the game opens a NEW code window; the old window is detached (its `parent` is null) but its socket listeners (character.on("cm"), game.on("hit")) stay registered and
+  // keep firing, and each call of get()/set() in them threw "parent is null" (an endless unhandled-rejection flood). A detached instance is never current, so every handler returns at once.
+  const detached = () => {
+    try {
+      return typeof parent === "undefined" || parent === null;
+    } catch (e) {
+      return true;
+    }
+  };
+  const is_current = (gen) => globalThis.__AL_GEN === gen && !detached();
 
   // Drops the running code and restarts the character from its SAVED script.
   //   opts.say     logger
