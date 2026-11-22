@@ -255,7 +255,21 @@
       "#CF575F"
     );
   }
+  // console: set("gear_sweep_now","1") runs a gear sweep at the next chance (also asks for a worn-piece stat scroll swap); the sweep logs why when it cannot
+  const sweep_forced = () => {
+    try {
+      if (String(get("gear_sweep_now") || "") === "1" && !has_jobs() && !is_paused()) {
+        set("gear_sweep_now", "");
+        S.sweep_last = 0;
+        S.swap_last = 0;
+        say("Gear sweep requested from the console", "#8AB4D0");
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  };
   const sweep_due = () =>
+    sweep_forced() ||
     (sweep_blocked_note(), false) ||
     ((CFG.GEAR_SWEEP || (CFG.SURPLUS_SELL && CFG.SURPLUS_COPIES)) &&
       !has_jobs() &&

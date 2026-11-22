@@ -3553,6 +3553,18 @@ T("SW1 worn gear scroll, Merchant side: a Ranger's worn piece with a stat value 
   const req = msgs(L, "scroll_swap");
   return [[req.length === 1 && req[0].slot === "helmet" && req[0].name === "dexcap" && req[0].level === 9, "one scroll_swap request for the helmet: " + JSON.stringify(req)], [logged(w, "Goodies", /Stat scroll for the worn dexcap \+9/), "logged"]];
 });
+T("SW4 console set(gear_sweep_now) runs a sweep at once and the worn-piece scroll request follows", async (w) => {
+  if (!/gear_sweep_now/.test(MERCH_SRC)) return skip_r4;
+  const ovr = Object.assign(SW_OVR.slice(), { ranger_scroll: true });
+  const m = merchant_char(w, { gold: 50000 }, ovr);
+  const L = fake_ranger(w); const F = make_char(w, "Dexy2", { x: -110, y: 25 });
+  const send = () => { gear_rep(L, { helmet: { name: "dexcap", level: 9 } }); gear_rep(F, {}); };
+  send(); w.clock.every(send, 60000);
+  await w.clock.run(20);
+  m.sb.set("gear_sweep_now", "1");
+  await w.clock.run(400);
+  return [[logged(w, "Goodies", /Gear sweep requested from the console/), "forced sweep logged"], [msgs(L, "scroll_swap").length === 1, "scroll_swap sent: " + msgs(L, "scroll_swap").length]];
+});
 T("SW2 worn gear scroll, Merchant side: the piece comes back in the bag, gets its scroll and goes to the Ranger", async (w) => {
   if (!/STAT_SCROLL_WORN/.test(MERCH_SRC)) return skip_r4;
   w.bank.items0.push({ name: "plaincap", level: 0 });
