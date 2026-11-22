@@ -43,7 +43,8 @@ AL.gear = (function () {
             if (i === 7) m = 1.25;
             else if (i === 8) m = 1.5;
             else if (i === 9) m = 2;
-            else if (i >= 10) m = 3;
+            else if (i === 10) m = 3;
+            else if (i >= 11) m = 1.25; // Sean 2026-11-22, Basher tooltips +4..+12: the gain steps are x1.25, x1.5, x2, x3 for +7..+10 and x1.25 again for +11 and +12 (attack 159 -> 170 -> 181, stun 7% -> 8% -> 9%)
           } else {
             if (i === 5) m = 1.25; // confirmed with Book of Cheer (dex 40 -> 48 at +5, 57 at +6, 69 at +7)
             else if (i === 6) m = 1.5;
