@@ -1054,6 +1054,19 @@ T("WT1 world watch: a boss going live and gone is logged, the boss table sorts b
   const warns = w.logs.filter((l) => l.who === "Goodies" && /Event soon: Snowman Hunt/.test(l.msg)).map((l) => l.msg);
   return [[logged(w, "Goodies", /Boss up: Phoenix .*at main 100,200/), "phoenix up logged"], [logged(w, "Goodies", /Boss gone: Phoenix/), "phoenix gone logged"], [rep && rep.msg.indexOf("mvampire") < rep.msg.indexOf("phoenix"), "table lists the bigger boss first: " + (rep && rep.msg)], [warns.length === 3, "one warning per limit passed (60, 15, 5 min): " + warns.length]];
 });
+T("WT2 world watch: raw event entries, the Witch's Cipher board and the ingredient counts are logged once per change", async (w) => {
+  if (!/WATCH_WITCH/.test(src("AutoMerchant v5.js"))) return skip_v4;
+  w.G.items.verdantspore = { name: "Verdant Spore", type: "material", s: 9999 };
+  const m = merchant_char(w, { gold: 50000 }, MERCH_OVR);
+  add_item(m, "verdantspore", 3);
+  const S = m.sb.parent.S = { schedule: { server_time: Date.now(), events: [{ id: "g1", event: "goobrawl", status: "scheduled", at: Date.now() + 90 * 60000 }] } };
+  m.sb.parent.server = { status: { witchcipher: [{ mix: ["verdantspore", "frostscale", "embercoal", "gloomfeather", "verdantspore"], clue: 2 }] } };
+  await w.clock.run(70);
+  m.sb.parent.server.status.witchcipher.push({ mix: ["frostscale", "frostscale", "embercoal", "gloomfeather", "verdantspore"], clue: 1 });
+  await w.clock.run(70);
+  const n = (re) => w.logs.filter((l) => l.who === "Goodies" && re.test(l.msg)).length;
+  return [[n(/Event entry: .*goobrawl/) === 1, "the Goo Brawl entry is logged once, raw"], [n(/shared board .*recipes still fit/) === 2, "the board is logged once per change with the number of recipes still possible"], [n(/Witch ingredients in the Merchant's bag: verdantspore 3/) === 1, "the ingredient counts are logged once"]];
+});
 T("W2 gear sweep: a ring that does not beat what the Rangers wear stays in the bank", async (w) => {
   w.bank.items0.push({ name: "ringsj", level: 3 });
   const m = merchant_char(w, { gold: 50000 }, SW_OVR);

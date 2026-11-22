@@ -21,7 +21,9 @@
     "STAT_SCROLL_WORN": "2026-11-21: new, scroll worn Ranger gear",
     "STAT_SCROLL_WORN_GAP_MS": "2026-11-21: new",
     "WARRIOR_COMPOUND": "2026-11-21: + strearring, stramulet",
-    "RANGER_COMPOUND": "2026-11-21: + intearring, intamulet (Priest)"
+    "RANGER_COMPOUND": "2026-11-21: + intearring, intamulet (Priest)",
+    "WATCH_EVENTS_LOG": "2026-11-21: new, raw schedule entries of the Goo Brawl / Witch's Cipher style events are logged",
+    "WATCH_WITCH": "2026-11-21: new, Witch's Cipher info and ingredient counts are logged"
   },
   "AutoRanger": {
     "BAG_SHARE": "stage 2: Ranger hands spare items to the Priest",

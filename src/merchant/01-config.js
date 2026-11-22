@@ -287,6 +287,8 @@
     WATCH_ENABLED: true,
     WATCH_EVERY_MS: 30000,
     WATCH_EVENT_WARN_MIN: [60, 15, 5], // log a scheduled event this many minutes before it starts
+    WATCH_EVENTS_LOG: ["witchcipher", "goobrawl", "gigacrab", "abtesting"], // 2026-11-21: the schedule entries of these events are logged raw (console too) once per change, so the live shape and the join window can be read
+    WATCH_WITCH: true, // 2026-11-21: log the Witch's Cipher info (witch_cipher_info(), character.witchcipher, the shared board server.status.witchcipher) when it changes and the Witch ingredients in the Merchant's bag
     WATCH_REPORT_MS: 30 * 60000, // every so often: the boss table (largest first, with when each was last seen)
     // ---- Rose's lotteries (Item Lottery ticket + Money Lottery tickets). Spare gold only, never above the daily cap. ----
     // Switch off without editing: set("lottery_off", true) in the game console (false = on again).

@@ -125,4 +125,73 @@
       WATCH.report_at = now();
       say("Bosses (largest first): " + boss_report());
     }
+    watch_events_raw(sch);
+    witch_watch();
+  }
+  // 2026-11-21 (Goo Brawl / Witch's Cipher plan): learn the live shapes. Everything below only logs, to the game log and the console (copyable).
+  const out = (m) => {
+    say(m, "#E0A040");
+    try {
+      console.log("[watch] " + m);
+    } catch (e) {}
+  };
+  const short = (v, n) => {
+    let t = "";
+    try {
+      t = typeof v === "string" ? v : JSON.stringify(v);
+    } catch (e) {
+      t = String(v);
+    }
+    return t && t.length > (n || 700) ? t.slice(0, n || 700) + "...(" + t.length + " chars)" : t;
+  };
+  WATCH.raw = {};
+  function watch_events_raw(sch) {
+    for (const o of (sch && sch.events) || []) {
+      if (!o || (CFG.WATCH_EVENTS_LOG || []).indexOf(o.event) === -1) continue;
+      const key = o.id + "|" + o.status + "|" + o.at;
+      if (WATCH.raw[o.id] === key) continue;
+      WATCH.raw[o.id] = key;
+      const mins = Math.round((o.at - (Date.now() + WATCH.offset)) / 60000);
+      out("Event entry: " + short(o) + " (starts in " + mins + " min; server clock offset " + Math.round(WATCH.offset / 1000) + " s)");
+    }
+  }
+  const WITCH_ITEMS = ["verdantspore", "frostscale", "embercoal", "gloomfeather", "witchparcel", "cipherdraught"];
+  WATCH.witch = { sig: {}, bag: "", asked_at: 0 };
+  function witch_watch() {
+    if (!CFG.WATCH_WITCH) return;
+    const changed = (k, v) => {
+      const t = short(v, 4000);
+      if (WATCH.witch.sig[k] === t) return false;
+      WATCH.witch.sig[k] = t;
+      return true;
+    };
+    try {
+      if (typeof character !== "undefined" && character.witchcipher !== undefined && changed("char", character.witchcipher)) out("Witch's Cipher, this account (character.witchcipher): " + short(character.witchcipher));
+    } catch (e) {}
+    try {
+      const b = parent.server && parent.server.status && parent.server.status.witchcipher;
+      if (b !== undefined && changed("board", b)) out("Witch's Cipher, shared board (server.status.witchcipher): " + short(b, 1500) + (AL.witch && AL.witch.parse_board(b) ? " -> " + AL.witch.candidates(AL.witch.parse_board(b)).length + " recipes still fit" : " -> board shape not read by AL.witch.parse_board"));
+    } catch (e) {}
+    try {
+      const sv = typeof server !== "undefined" ? server : null;
+      const b = sv && sv.status && sv.status.witchcipher;
+      if (b !== undefined && changed("board", b)) out("Witch's Cipher, shared board (server.status.witchcipher): " + short(b, 1500));
+    } catch (e) {}
+    if (typeof witch_cipher_info === "function" && now() - WATCH.witch.asked_at >= 30 * 60000) {
+      WATCH.witch.asked_at = now();
+      Promise.resolve()
+        .then(() => witch_cipher_info())
+        .then((r) => {
+          if (changed("info", r)) out("witch_cipher_info(): " + short(r));
+        })
+        .catch((e) => out("witch_cipher_info() failed: " + ((e && e.message) || e)));
+    }
+    const have = {};
+    for (const it of character.items || []) if (it && WITCH_ITEMS.indexOf(it.name) !== -1) have[it.name] = (have[it.name] || 0) + (it.q || 1);
+    const sig = WITCH_ITEMS.map((k) => k + " " + (have[k] || 0)).join(", ");
+    if (sig !== WATCH.witch.bag) {
+      const first = WATCH.witch.bag === "";
+      WATCH.witch.bag = sig;
+      if (!first || Object.keys(have).length) out("Witch ingredients in the Merchant's bag: " + sig);
+    }
   }
