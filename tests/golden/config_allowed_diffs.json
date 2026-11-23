@@ -23,7 +23,12 @@
     "WARRIOR_COMPOUND": "2026-11-21: + strearring, stramulet",
     "RANGER_COMPOUND": "2026-11-21: + intearring, intamulet (Priest)",
     "WATCH_EVENTS_LOG": "2026-11-21: new, raw schedule entries of the Goo Brawl / Witch's Cipher style events are logged",
-    "WATCH_WITCH": "2026-11-21: new, Witch's Cipher info and ingredient counts are logged"
+    "WATCH_WITCH": "2026-11-21: new, Witch's Cipher info and ingredient counts are logged",
+    "GEAR_MAX_COPIES": "2026-11-22: new, at most 2 copies of any weapon / armor piece, the rest is sold",
+    "GEAR_COPY_TYPES": "2026-11-22: new, the item types GEAR_MAX_COPIES applies to",
+    "KEEP_BEST_COPIES": "2026-11-22: + fireblade 0 (Warrior will not use Fiery Blades, all sold)",
+    "EXCHANGE_PLAN": "2026-11-22: xbox/armorbox 15, mistletoe big run 30 every 12 h",
+    "XBOX_PER_RUN": "2026-11-22: 15"
   },
   "AutoRanger": {
     "BAG_SHARE": "stage 2: Ranger hands spare items to the Priest",

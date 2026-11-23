@@ -201,7 +201,10 @@
       gcape: 3,
       xmashat: 3,
       xmasshoes: 3,
+      fireblade: 0, // Sean 2026-11-22: the Warrior will not use Fiery Blades: every one is sold, upgraded or not
     }, // Sean 2026-11-19: keep only this many of the item (the highest levels), sell every other copy at any level, also while the bank still has room. Super Sweater and Xmas Sweater: the 3 best of each; Grinch Cape, Xmas Hat, Xmas Shoes too (Sean 2026-11-19 16:02 / 16:03). The +0 ones are also on the junk list
+    GEAR_MAX_COPIES: 2, // Sean 2026-11-22: of every WEAPON and ARMOR piece (the item types in GEAR_COPY_TYPES; accessories are not touched) the Merchant keeps at most this many copies in his bag and the bank, the highest levels first, and sells the rest at any level, also while the bank has room. Two is the upgrade pair (one is upgraded, the other stays as the fallback). Names listed in KEEP_BEST_COPIES keep their own number. 0 = off. Only items the game lets you upgrade or compound count; locked, stacked and special items are never sold; an item worth more than SURPLUS_MAX_VALUE_EACH is only listed.
+    GEAR_COPY_TYPES: ["weapon", "shield", "source", "quiver", "misc_offhand", "helmet", "chest", "pants", "gloves", "shoes", "cape"],
     SURPLUS_COPY_LEVEL: 5,
     SURPLUS_COPIES_PER_RANGER: { earring: 2, ring: 2 }, // default 1 per Ranger
     SURPLUS_SELL: true,
@@ -252,7 +255,7 @@
     UPGRADE_MAX_LEVEL: 7, // never upgrade an item above this level
     UPGRADE_MAX_LEVEL_BY_ITEM: { firebow: 8, firestaff: 8, fireblade: 8 }, // Sean 2026-11-21: Fire Bow, Fiery Staff (Priest) and Fiery Blade (Warrior) go to +8 (+7 -> +8 needs scroll2, 1.6M g, allowed by UPGRADE_MAX_SCROLL_GRADE 2; copies that do not beat SexyDexy are fodder and need no spare). v5 (Sean 2026-11-18): items listed here are upgraded up to this level instead of UPGRADE_MAX_LEVEL (and count as finished only there). Fire Bow: scroll1 (40,000 g) is enough up to +7 (its grade changes at +8), so no dearer scroll is bought. Every upgrade can destroy the item: UPGRADE_MIN_COPIES still keeps a spare copy.
     UPGRADE_MIN_CHANCE_BY_ITEM: {}, // v5: per-item success-chance floor instead of UPGRADE_MIN_CHANCE, e.g. { firebow: 0.3 }. The round logs "UPGRADE skipped (below 40%): firebow +6 -> +7 ... NN%" when the floor stops it.
-    UPGRADE_GAMBLE_NAMES: ["firebow", "firestaff", "fireblade"], // 2026-11-21: the wearer is the Ranger (bow), the Priest (staff) or the Warrior (blade). v5 (Sean 2026-11-18 14:04): for these items a copy that does NOT beat what SexyDexy wears is "fodder": it is upgraded even at a low success chance (UPGRADE_GAMBLE_MIN_CHANCE) and without a spare copy (losing it costs nothing he wears). A copy that DOES beat his worn one is SET ASIDE for him (never upgraded further, the gear sweep hands it over). Once he wears the cap level (UPGRADE_MAX_LEVEL_BY_ITEM) nothing is gambled any more.
+    UPGRADE_GAMBLE_NAMES: ["firebow", "firestaff"], // 2026-11-21: the wearer is the Ranger (bow), the Priest (staff) or the Warrior (blade). v5 (Sean 2026-11-18 14:04): for these items a copy that does NOT beat what SexyDexy wears is "fodder": it is upgraded even at a low success chance (UPGRADE_GAMBLE_MIN_CHANCE) and without a spare copy (losing it costs nothing he wears). A copy that DOES beat his worn one is SET ASIDE for him (never upgraded further, the gear sweep hands it over). Once he wears the cap level (UPGRADE_MAX_LEVEL_BY_ITEM) nothing is gambled any more.
     UPGRADE_GAMBLE_MIN_CHANCE: 0.1, // lowest success chance a fodder copy is tried at
     UPGRADE_MIN_COPIES: 2, // an upgrade is only tried while another copy of the same item and level sits in the bag/bank (worn gear never counts). 1 = old behaviour
     UPGRADE_MIN_CHANCE: 0.25, // never attempt below this success chance (asked from the server for the exact item)
@@ -338,7 +341,7 @@
     // G.items[item].e of the item (ornament 20, mistletoe 1, candy cane 1).
     EXCHANGE_PLAN: [
       { item: "ornament", npc: "ornaments", times: 1 },
-      { item: "mistletoe", npc: "mistletoe", times: 10 },
+      { item: "mistletoe", npc: "mistletoe", times: 10, big_times: 30, big_every_ms: 12 * 3600000 }, // Sean 2026-11-22: once every 12 h one run exchanges 30 instead of 10 (6800 mistletoes are piling up in the bank)
       { item: "candycane", npc: "santa", times: 10 },
       // v5 ROUND 2 (round: 2 = its own scheduler task, "exchange2", so a potion request or junk sale in the middle only breaks half of the exchanges):
       // everything at Xyn. npc id "exchange" = Xyn; check with find_npc("exchange") in the console. The Xmas Box crafting (XBOX_*) runs at the start of round 2.
@@ -351,15 +354,15 @@
         round: 2,
       },
       // Xmas Boxes (crafted from the quantum pieces)
-      { item: "xbox", npc: "exchange", times: 3, round: 2 }, // Sean 2026-11-19: 3 per round 2 run (3 are crafted per run, XBOX_PER_RUN)
+      { item: "xbox", npc: "exchange", times: 15, round: 2 }, // Sean 2026-11-22: 15 per run (36 sets of pieces in the bank). Before: 3 per round 2 run; Sean 2026-11-19: 3 per round 2 run (3 are crafted per run, XBOX_PER_RUN)
       // Sean 2026-11-17: Raw Emerald, Armor Box and Weapon Box, 5 per round each (the whole round takes a while)
       { item: "gem0", npc: "exchange", times: 5, round: 2 },
-      { item: "armorbox", npc: "exchange", times: 5, round: 2 },
+      { item: "armorbox", npc: "exchange", times: 15, round: 2 },
       { item: "weaponbox", npc: "exchange", times: 5, round: 2 },
     ],
     EXCHANGE2_EVERY_MS: 30 * 60000, // round 2 (Xyn)
     XBOX_ENABLED: true, // v5: at the start of an exchange run take one of each Quantum Piece (recipe G.craft.xbox) out of the bank and craft a Xmas Box at Leo (craftsman, main map)
-    XBOX_PER_RUN: 3, // Xmas Boxes crafted per exchange run (needs a full set of pieces for each)
+    XBOX_PER_RUN: 15, // Xmas Boxes crafted per exchange run (needs a full set of pieces for each)
     // used when find_npc cannot place the NPC (positions from the game data)
     EXCHANGE_NPC_FALLBACK: {
       ornaments: { map: "winterland", x: -137, y: -193 },

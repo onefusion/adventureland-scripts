@@ -110,9 +110,12 @@ AL.planners = (function () {
     for (const name in by) {
       const def = G_items[name];
       const per = cfg.SURPLUS_COPIES_PER_RANGER[def.type] || 1;
+      const gear_cap = cfg.GEAR_MAX_COPIES > 0 && (cfg.GEAR_COPY_TYPES || []).indexOf(def.type) !== -1; // Sean 2026-11-22: weapons and armor, at most GEAR_MAX_COPIES (the highest levels)
       const allow =
         cfg.KEEP_BEST_COPIES[name] !== undefined
           ? cfg.KEEP_BEST_COPIES[name]
+          : gear_cap
+          ? Math.max(0, cfg.GEAR_MAX_COPIES - by[name].worn)
           : Math.max(0, per * env.n_chars - by[name].worn);
       // keep: items waiting for a Ranger first, then the highest level, then the ones with a Dexterity scroll on them
       const ranked = by[name].owned.sort(

@@ -1086,7 +1086,7 @@ T("W3 leader starts a courier trip when the Merchant says gear is waiting", asyn
   return [[logged(w, "SexyDexy", /Courier trip: better gear is waiting at the Merchant/), "trip for gear"], [logged(w, "SexyDexy", /Courier Dexy2 is back \(ok\)/), "trip finished"]];
 });
 const fill_rest = (w) => { for (const k of ["items0", "items1", "items3"]) while (w.bank[k].length < 42) w.bank[k].push({ name: "wshoes", level: 0 }); };
-const CP_OVR = MERCH_OVR.concat([[/TRUSTED_NAMES: (?:\[[^\]]*\]|C\.TRUSTED_NAMES)/, 'TRUSTED_NAMES: ["Dexy2"]'], [/GEAR_SWEEP: true/, "GEAR_SWEEP: false"]]);
+const CP_OVR = MERCH_OVR.concat([[/TRUSTED_NAMES: (?:\[[^\]]*\]|C\.TRUSTED_NAMES)/, 'TRUSTED_NAMES: ["Dexy2"]'], [/GEAR_SWEEP: true/, "GEAR_SWEEP: false"], [/GEAR_MAX_COPIES: 2/, "GEAR_MAX_COPIES: 0"]]);
 T("X1 consolidate (bank nearly full): both Rangers already wear the +5 piece -> every other +5 of it is sold", async (w) => {
   for (let i = 0; i < 5; i++) w.bank.items0.push({ name: "plaincap", level: 5 });
   w.bank.items0.push({ name: "plaincap", level: 4 }); // below the cap level: untouched
@@ -1121,6 +1121,19 @@ T("X4 copy limit waits while the bank has 10+ free item slots", async (w) => {
   send(); w.clock.every(send, 60000);
   await w.clock.run(400);
   return [[w.bank.items0.filter((x) => x && x.name === "plaincap").length === 5, "nothing sold"], [!logged(w, "Goodies", /Consolidating bank/), "no consolidation"]];
+});
+T("X5 gear cap: of a weapon / armor piece only the 2 best stay, also with bank room; Fiery Blades are all sold", async (w) => {
+  w.G.items.fireblade = { g: 1000, type: "weapon", upgrade: { attack: 1 }, grades: [3, 5, 6, 7] };
+  for (const lv of [1, 7, 3, 0]) w.bank.items0.push({ name: "plaincap", level: lv });
+  for (const lv of [0, 6]) w.bank.items0.push({ name: "fireblade", level: lv });
+  const m = merchant_char(w, { gold: 50000 }, CP_OVR.concat([[/GEAR_MAX_COPIES: 0/, "GEAR_MAX_COPIES: 2"]])); m.sb.calculate_item_value = () => 1000;
+  const L = fake_ranger(w); const F = make_char(w, "Dexy2", { x: -110, y: 25 });
+  const send = () => { gear_rep(L, {}); gear_rep(F, {}); };
+  send(); w.clock.every(send, 60000);
+  await w.clock.run(600);
+  const caps = w.bank.items0.filter((x) => x && x.name === "plaincap").map((x) => x.level).sort();
+  const blades = w.bank.items0.filter((x) => x && x.name === "fireblade").length + m.items.filter((x) => x && x.name === "fireblade").length;
+  return [[caps.join() === "3,7", "kept caps +3,+7 (" + caps.join() + ")"], [blades === 0, "no Fiery Blade left (" + blades + ")"]];
 });
 T("B1 bag tidy: a full Merchant bag sells his junk, banks gear that must wait, and logs what fills it", async (w) => {
   const m = merchant_char(w, { gold: 50000 }, CP_OVR);
@@ -1288,7 +1301,7 @@ T("UPF4 Fiery Staff (Priest) and Fiery Blade (Warrior): the wearer decides fodde
   const L = fake_ranger(w); const F = make_char(w, "Dexy2", { x: -110, y: 25 }); const P = make_char(w, ROSTER.priest.name, { x: -110, y: 35 }); const W = make_char(w, ROSTER.warrior.name, { x: -110, y: 45 });
   const send = () => { gear_rep(L, {}); gear_rep(F, {}); gear_rep(P, { mainhand: { name: "firestaff", level: 7 } }); gear_rep(W, { mainhand: { name: "fireblade", level: 7 } }); }; send(); w.clock.every(send, 60000);
   await w.clock.run(3000);
-  return [[logged(w, "Goodies", /UPGRADE \w+ - firestaff \+6 -> \+7/), "the Priest's staff +6 is tried with no spare (fodder: she wears +7)"], [logged(w, "Goodies", /UPGRADE \w+ - firestaff \+0 -> \+1/), "the staff +0 is tried"], [logged(w, "Goodies", /UPGRADE \w+ - fireblade \+6 -> \+7/), "the Warrior's blade +6 is tried with no spare"]];
+  return [[logged(w, "Goodies", /UPGRADE \w+ - firestaff \+6 -> \+7/), "the Priest's staff +6 is tried with no spare (fodder: she wears +7)"], [logged(w, "Goodies", /UPGRADE \w+ - firestaff \+0 -> \+1/), "the staff +0 is tried"], [!logged(w, "Goodies", /UPGRADE \w+ - fireblade/), "Fiery Blades are no longer upgraded (Warrior will not use them, 2026-11-22)"]];
 });
 T("UPF2 Fire Bow fodder: a bow that does not beat SexyDexy's is upgraded even at a low chance and without a spare; once it beats his, it is set aside and handed to him", async (w) => {
   w.G.items.scroll1 = { g: 40000, s: true, type: "uscroll", grade: 1 }; w.G.items.firebow.wtype = "bow";
@@ -1449,13 +1462,13 @@ T("E4 Market Parcels go to Xyn: 10 per hour, then nothing until the hour is over
 
 T("E6 Exchange round 2 at Xyn: Raw Emerald, Armor Box and Weapon Box, 5 each per round; round 1 leaves them alone", async (w) => {
   if (!IS_R5) return skip_r4;
-  for (const [k, n] of [["gem0", "Raw Emerald"], ["armorbox", "Armor Box"], ["weaponbox", "Weapon Box"]]) { w.G.items[k] = { name: n, type: "box", e: 1, s: 9999, g: 100000 }; w.bank.items0.push({ name: k, q: 12 }); }
+  for (const [k, n] of [["gem0", "Raw Emerald"], ["armorbox", "Armor Box"], ["weaponbox", "Weapon Box"]]) { w.G.items[k] = { name: n, type: "box", e: 1, s: 9999, g: 100000 }; w.bank.items0.push({ name: k, q: k === "armorbox" ? 20 : 12 }); }
   const m = merchant_char(w, { gold: 5000 }, [[/COMPOUND_ENABLED: true/, "COMPOUND_ENABLED: false"], [/UPGRADE_ENABLED: true/, "UPGRADE_ENABLED: false"], [/exch2_next: now\(\) \+ 150000/, "exch2_next: now() + 100000"], [/exch_next: now\(\) \+ 90000/, "exch_next: now() + 1000"]]);
   await w.clock.run(60);
   const at_round1 = m.exchanges.filter((e) => ["gem0", "armorbox", "weaponbox"].indexOf(e.name) !== -1).length;
   await w.clock.run(400);
   const ex = (n) => m.exchanges.filter((e) => e.name === n);
-  return [[at_round1 === 0, "round 1 exchanged none of them: " + at_round1], [ex("gem0").length === 5 && ex("armorbox").length === 5 && ex("weaponbox").length === 5, "5 each in the first round 2: " + ex("gem0").length + "/" + ex("armorbox").length + "/" + ex("weaponbox").length], [ex("gem0")[0] && ex("gem0")[0].map === "main" && ex("gem0")[0].x < -200, "at Xyn"], [logged(w, "Goodies", /Exchange round 2:/), "round 2 is named in the log"]];
+  return [[at_round1 === 0, "round 1 exchanged none of them: " + at_round1], [ex("gem0").length === 5 && ex("armorbox").length === 15 && ex("weaponbox").length === 5, "5 / 15 / 5 in the first round 2: " + ex("gem0").length + "/" + ex("armorbox").length + "/" + ex("weaponbox").length], [ex("gem0")[0] && ex("gem0")[0].map === "main" && ex("gem0")[0].x < -200, "at Xyn"], [logged(w, "Goodies", /Exchange round 2:/), "round 2 is named in the log"]];
 });
 T("E5 quantum pieces: one of each is crafted into a Xmas Box at Leo, the box goes to Xyn, leftovers go back to the bank", async (w) => {
   if (!IS_R5) return skip_r4;
@@ -1474,7 +1487,7 @@ T("E5 quantum pieces: one of each is crafted into a Xmas Box at Leo, the box goe
 
 T("E1 exchange run: right amounts at the right NPCs, rewards sorted, leftovers back in the bank", async (w) => {
   w.bank.items0.push({ name: "mistletoe", q: 30 }, { name: "candycane", q: 12 }, { name: "ornament", q: 45 });
-  const m = merchant_char(w, { gold: 5000 }, [[/COMPOUND_ENABLED: true/, "COMPOUND_ENABLED: false"], [/UPGRADE_ENABLED: true/, "UPGRADE_ENABLED: false"], [/exch_next: now\(\) \+ 90000/, "exch_next: now() + 1000"]]);
+  const m = merchant_char(w, { gold: 5000 }, [[/COMPOUND_ENABLED: true/, "COMPOUND_ENABLED: false"], [/UPGRADE_ENABLED: true/, "UPGRADE_ENABLED: false"], [/exch_next: now\(\) \+ 90000/, "exch_next: now() + 1000"], [/big_every_ms: 12 \* 3600000/, "big_every_ms: 0"]]);
   await w.clock.run(900);
   const ex = (n) => m.exchanges.filter((e) => e.name === n);
   const inbank = (n) => w.bank.items0.filter((x) => x && x.name === n).reduce((a, x) => a + (x.q || 1), 0);
@@ -1486,6 +1499,15 @@ T("E1 exchange run: right amounts at the right NPCs, rewards sorted, leftovers b
     [inbank("hotchocolate") === 20, "useful rewards banked: " + inbank("hotchocolate")],
     [inbag("candycanesword") + w.bank.items0.filter((x) => x && x.name === "candycanesword").length === 0, "unusable weapon sold"],
     [logged(w, "Goodies", /Exchange rewards:/), "reward summary logged"]];
+});
+T("E8 mistletoe big run: the first run exchanges 30, the next ones 10 again until 12 h have passed", async (w) => {
+  w.bank.items0.push({ name: "mistletoe", q: 200 });
+  const m = merchant_char(w, { gold: 5000 }, [[/COMPOUND_ENABLED: true/, "COMPOUND_ENABLED: false"], [/UPGRADE_ENABLED: true/, "UPGRADE_ENABLED: false"], [/exch_next: now\(\) \+ 90000/, "exch_next: now() + 1000"]]);
+  await w.clock.run(900);
+  const n1 = m.exchanges.filter((e) => e.name === "mistletoe").length;
+  await w.clock.run(2400);
+  const n2 = m.exchanges.filter((e) => e.name === "mistletoe").length - n1;
+  return [[n1 === 30, "big run: " + n1], [n2 > 0 && n2 % 10 === 0 && n2 <= 20, "later runs 10 each: " + n2]];
 });
 T("M10 the Compound odds / Compound test buttons are gone (removed at Sean's request)", async (w) => {
   const m = merchant_char(w, { gold: 20000 });

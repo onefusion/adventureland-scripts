@@ -219,7 +219,9 @@
       const g = gear_of(who);
       for (const sl in (g && g.slots) || {}) {
         const w = g.slots[sl];
-        if (w && w.name && (w.level || 0) >= L) worn_names.push(w.name);
+        const gdef = w && w.name && G.items[w.name];
+        const gcap = gdef && CFG.GEAR_MAX_COPIES > 0 && CFG.GEAR_COPY_TYPES.indexOf(gdef.type) !== -1;
+        if (w && w.name && ((w.level || 0) >= L || gcap)) worn_names.push(w.name); // weapons / armor count at any level against the GEAR_MAX_COPIES cap
       }
     }
     const pend = S.gear_pending.slice();
@@ -227,7 +229,8 @@
     const add = (it, where) => {
       const def = it && G.items[it.name];
       if (!def || it.l || it.q > 1 || (!def.upgrade && !def.compound)) return;
-      const kb = !!CFG.KEEP_BEST_COPIES[it.name];
+      if (CFG.UPGRADE_GAMBLE_NAMES.indexOf(it.name) !== -1 && !CFG.KEEP_BEST_COPIES[it.name]) return; // fire bow / staff / blade copies are fodder for the gamble upgrades: never counted
+      const kb = !!CFG.KEEP_BEST_COPIES[it.name] || (CFG.GEAR_MAX_COPIES > 0 && (CFG.GEAR_COPY_TYPES || []).indexOf(def.type) !== -1);
       if (!kb && (!gear_wearable(it) || (it.level || 0) < L)) return;
       const k = pend.findIndex(
         (g) => g.name === it.name && g.level === (it.level || 0)
@@ -265,7 +268,7 @@
     // "Consolidate bank and inventory": only when the bank is running out of ITEM slots (not packs: a pack holds 42)
     const free_items = bank_free_slots();
     const pressure = free_items < CFG.BANKFULL_TRIGGER_FREE; // without it only the KEEP_BEST_COPIES surplus is sold
-    if (!pressure && !Object.keys(CFG.KEEP_BEST_COPIES).length) return;
+    if (!pressure && !Object.keys(CFG.KEEP_BEST_COPIES).length && !(CFG.GEAR_MAX_COPIES > 0)) return;
     if (pressure && S.consol_logged !== true) {
       S.consol_logged = true;
       say(

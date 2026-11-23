@@ -158,3 +158,14 @@ const fl = AL.planners.flips(flenv([uit("meh", 0), null, uit("good", 0)]));
 ok(fl.length === 1 && fl[0].it.name === "good" && fl[0].flip === true && fl[0].gain === 500 && fl[0].bag === 2, "flips: only chains that beat selling by FLIP_MIN_GAIN, best first, with position");
 
 process.exit(fails ? 1 : 0);
+
+// ---- gear cap (max 2 of the same weapon / armor, Sean 2026-11-22) ----
+{
+  const gcfg = Object.assign({}, ccfg, { GEAR_MAX_COPIES: 2, GEAR_COPY_TYPES: ["helmet"] });
+  const GI = Object.assign({}, G_items, { hat1: { type: "helmet" } });
+  const h = (lv, i) => ({ it: { name: "hat1", level: lv }, bag: i, waiting: false, kb: true });
+  let g = AL.planners.copies(cenv({ cfg: gcfg, G_items: GI, owned: [h(1, 0), h(7, 1), h(3, 2), h(0, 3)] }));
+  ok(g.kept === 2 && g.sell.length === 2 && g.sell.every((x) => x.it.level < 3), "weapons/armor: only the 2 highest levels are kept");
+  g = AL.planners.copies(cenv({ cfg: gcfg, G_items: GI, worn_names: ["hat1"], owned: [h(1, 0), h(7, 1), h(3, 2)] }));
+  ok(g.kept === 1 && g.sell.length === 2, "a worn piece counts as one of the 2");
+}

@@ -247,8 +247,10 @@
       }
       const have =
         bag_qty(p.item) + bank_stacks(p.item).reduce((a, b) => a + b.q, 0);
-      const times = Math.min(p.times, Math.floor(have / def.e));
-      if (times > 0) plan.push({ p, def, times, amount: times * def.e });
+      // Sean 2026-11-22: a "big run" entry (big_times / big_every_ms): every big_every_ms this item gets big_times exchanges instead of times
+      const big = p.big_every_ms && now() - ((S.exch_big || {})[p.item] || 0) >= p.big_every_ms;
+      const times = Math.min(big ? p.big_times : p.times, Math.floor(have / def.e));
+      if (times > 0) plan.push({ p, def, times, amount: times * def.e, big });
     }
     if (!plan.length) {
       const back = Math.max(
@@ -342,6 +344,7 @@
         continue;
       }
       act("Exchange " + x.p.item, 50 + x.times * 4, true);
+      if (x.big) (S.exch_big = S.exch_big || {})[x.p.item] = now(); // the 12 h clock of the big run starts now
       if (x.p.every_ms) (S.exch_last = S.exch_last || {})[x.p.item] = now(); // timed entry: the hour starts now, even if the trip fails
       const r = await travel(
         { map: npc.map, x: npc.x, y: npc.y },
