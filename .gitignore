@@ -2,3 +2,4 @@ node_modules/
 _to_delete/
 *.log
 .DS_Store
+mcp/
