@@ -367,6 +367,7 @@
       { item: "gem0", npc: "exchange", times: 5, round: 2 },
       { item: "armorbox", npc: "exchange", times: 15, round: 2 },
       { item: "weaponbox", npc: "exchange", times: 5, round: 2 },
+      { item: "5bucks", npc: "exchange", times: 10, round: 2 }, // Sean 2026-11-22: Old Paper Money at Xyn gives either more Old Paper Money or 800 shells (the cosmetics currency)
     ],
     EXCHANGE2_EVERY_MS: 30 * 60000, // round 2 (Xyn)
     XBOX_ENABLED: true, // v5: at the start of an exchange run take one of each Quantum Piece (recipe G.craft.xbox) out of the bank and craft a Xmas Box at Leo (craftsman, main map)
