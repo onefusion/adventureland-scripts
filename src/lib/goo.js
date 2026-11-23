@@ -61,11 +61,27 @@ AL.goo = (function () {
       for (const fn of ["smart_move", "town", "transport"]) {
         const real = G0[fn];
         if (typeof real !== "function") continue;
+        (G0.__goo_real = G0.__goo_real || {})[fn] = real;
         G0[fn] = function () {
           if (inside()) return Promise.resolve({ failed: true, reason: "goo brawl: staying inside" });
           return real.apply(this, arguments);
         };
       }
+    }
+    let empty_since = 0, no_join_until = 0, last_leave = 0;
+    // the event is over (no monster left for 60 s): leave the island; the game's own "leave" first, then the real town / transport
+    function leave_now(why) {
+      if (Date.now() - last_leave < 15000) return;
+      last_leave = Date.now();
+      no_join_until = Date.now() + 30 * 60000;
+      log("leaving the island: " + why);
+      try { parent.socket.emit("leave"); } catch (e) { log("socket leave failed: " + e.message, "#CF575F"); }
+      setTimeout(() => {
+        if (!inside()) return;
+        const r = G0.__goo_real || {};
+        try { if (r.town) r.town(); } catch (e) {}
+        try { if (r.transport) r.transport("main", 0); } catch (e) {}
+      }, 8000);
     }
     let tries = 0, last_try = 0, last_sig = "", last_log = 0, was_inside = false, was_live = false;
     const manual = () => { try { return String(get("goo_go") || ""); } catch (e) { return ""; } };
@@ -91,7 +107,7 @@ AL.goo = (function () {
         return;
       }
       if (was_inside) { was_inside = false; log("left the Goo Brawl map, now in " + character.map); }
-      if (!st.live || tries >= 40 || Date.now() - last_try < 20000) return;
+      if (!st.live || tries >= 40 || Date.now() - last_try < 20000 || Date.now() < no_join_until) return;
       if (character.rip || character.hp < character.max_hp * 0.5) return;
       last_try = Date.now();
       tries++;
@@ -113,7 +129,12 @@ AL.goo = (function () {
           log("(" + Math.round(character.x) + "," + Math.round(character.y) + ") hp " + Math.round(100 * character.hp / character.max_hp) + "% mp " + character.mp + " | " + (Object.keys(by).map((k) => k + " x" + by[k].n + " near " + by[k].near + " hp " + Math.round(by[k].hp)).join(" | ") || "no monsters") + " | " + party);
         }
         const t = pick_target(mons);
-        if (!t) return;
+        if (!t) {
+          if (!empty_since) empty_since = Date.now();
+          if (Date.now() - empty_since > 60000) leave_now("no monster in view for 60 s, the event looks over");
+          return;
+        }
+        empty_since = 0;
         const range = character.range || 40;
         if (t.dist > range - 5 && cls !== "priest") {
           // walk to a point just inside attack range, on the line to the target
