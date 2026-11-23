@@ -151,6 +151,9 @@ for (const key of Object.keys(golden.values)) {
   if (!v) { mism++; console.log("   missing table " + key); continue; }
   for (let i = 0; i < g.length; i++) {
     total++;
+    // Sean 2026-11-23 (deliberate): a piece made for another class scores -1,000,000 (Hunter Warrior armor on a Ranger); v5 did not look at the class
+    const cd = G.items[names[i]] && G.items[names[i]].class;
+    if (v[i] === -1000000 && Array.isArray(cd) && cd.length && cd.indexOf(key.split("|")[0]) === -1) continue;
     if (!Object.is(g[i], v[i])) { mism++; if (mism <= 15) console.log("   " + key + " " + names[i] + ": golden " + g[i] + " lib " + v[i]); }
   }
 }

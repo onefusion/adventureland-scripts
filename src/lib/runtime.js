@@ -464,12 +464,18 @@ AL.runtime = (function () {
   // takes off any worn piece on the never-wear list (Ice Skates). Each report calls it, so a piece worn from before is removed within a report interval; the Merchant then fills the slot.
   function strip_never_wear(say_fn) {
     try {
-      const l = AL.config && AL.config.lists && AL.config.lists.never_wear;
-      if (!l || !character.slots) return;
+      const l = (AL.config && AL.config.lists && AL.config.lists.never_wear) || [];
+      if (!character.slots) return;
       for (const sl of Object.keys(character.slots)) {
         const it = character.slots[sl];
         if (it && l.indexOf(it.name) !== -1) {
           if (say_fn) say_fn("[gear] taking off " + it.name + " (" + sl + "): it is on the never-wear list (it slows the character too much)", "#E0A040");
+          AL.call(() => unequip(sl));
+        }
+        // Sean 2026-11-23: a piece made for another class (Hunter Warrior armor on a Ranger) comes off too; the Merchant then fills the slot
+        const wd = it && G.items[it.name];
+        if (wd && Array.isArray(wd.class) && wd.class.length && wd.class.indexOf(character.ctype) === -1) {
+          if (say_fn) say_fn("[gear] taking off " + it.name + " (" + sl + "): it is made for " + wd.class.join("/") + ", not for a " + character.ctype, "#E0A040");
           AL.call(() => unequip(sl));
         }
       }

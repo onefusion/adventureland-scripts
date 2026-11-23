@@ -119,6 +119,12 @@ AL.gear = (function () {
       const l = AL.config && AL.config.lists && AL.config.lists.never_wear;
       return !!l && l.indexOf(name) !== -1;
     }
+    // Sean 2026-11-23: a piece made for another class (Hunter Warrior gear on a Ranger) is never worth anything to this character: the game lets him wear it, so the scorer must refuse it
+    wrong_class(name) {
+      const def = this.G.items[name];
+      const mine = this.profile && this.profile.cls ? this.profile.cls : "ranger";
+      return !!(def && Array.isArray(def.class) && def.class.length && def.class.indexOf(mine) === -1);
+    }
     // the score of an item at a level; opts: { who, stat_type: the stat scroll already applied, assume_dex: count a scroll that could still be applied }
     score(name, level, opts) {
       return 0;
@@ -166,7 +172,7 @@ AL.gear = (function () {
       return CFG.GEAR_WEIGHTS[p] !== undefined ? CFG.GEAR_WEIGHTS[p] : (CFG.SET_WEIGHTS || {})[p] || 0;
     }
     score(name, level, opts) {
-      if (this.banned(name)) return -1000000;
+      if (this.banned(name) || this.wrong_class(name)) return -1000000;
       const def = this.G.items[name];
       if (!def) return 0;
       opts = opts || {};
@@ -218,7 +224,7 @@ AL.gear = (function () {
       return p === sup.main ? main_w : sup.weights[p] || 0;
     }
     score(name, level, opts) {
-      if (this.banned(name)) return -1000000;
+      if (this.banned(name) || this.wrong_class(name)) return -1000000;
       const def = this.G.items[name];
       if (!def) return 0;
       opts = opts || {};
