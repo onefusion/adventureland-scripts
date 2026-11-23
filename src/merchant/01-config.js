@@ -329,14 +329,14 @@
     CRAFT_EVERY_MS: 20 * 60000, // how often a missing quiver is checked for
     CRAFT_EMPTY_BACKOFF_MS: 90 * 60000, // materials are missing: look again after this long
     CRAFT_MIN_FREE_SLOTS: 8,
-    CRAFT_MAX_PER_RUN: 3,
+    CRAFT_MAX_PER_RUN: 5, // Sean 2026-11-23: was 3 (30 cores in hand)
     // each recipe names the NPC that makes it (quest field in the game data); none = Leo the craftsman. Quiver, w* gear, rings: Cole (mcollector)
     CRAFT_NPC_FALLBACK: {
       craftsman: { map: "main", x: 92, y: 670 },
       mcollector: { map: "main", x: 81, y: -283 },
     },
     CRAFT_TARGETS: [
-      { item: "venomband", total: 6 },
+      { item: "venomband", total: 30 }, // Sean 2026-11-23: 30 Verdant Cores bought (Ron the Goblin): craft up to 30 and compound the first 27 to a +3
       { item: "orbg", total: 27 },
     ], // orbg (Orb of Beginnings, Sean 2026-11-18 17:31): Cole makes it from 1 Armadillo Scale + 1 Porcupine Leather + 1 Croc Scale + 1 Bee Fur (no gold). total 27 = enough for ONE +3 (three of a level make one of the next); counted as 3^level copies each, and crafting stops once RANGER_COMPOUND has its +3 orb; // v5 (Sean 2026-11-17): make this item until this many exist in total (worn + bag + bank). Venom Band: 1 Ring of Dexterity +2, 1 Verdant Core, 12 Poison Sack, 4 Snake Fang, 240k gold (Leo); more Dex at +0 than a +2 Ring of Dexterity, and it compounds
     EXCHANGE_ENABLED: true,

@@ -166,6 +166,7 @@ AL.config = (function () {
       RANGER_COMPOUND: {
         who: roster.leader.name,
         items: {
+          venomband: { count: 1, level: 3 }, // Sean 2026-11-23: 30 Venom Bands are crafted; 27 of them compound into ONE +3 first (the Ranger wears it)
           dexring: { count: 2, level: 3 },
           orbg: { count: 1, level: 3 },
           intring: { count: 2, level: 3, who: roster.priest.name },

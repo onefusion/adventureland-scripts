@@ -923,7 +923,7 @@ T("ML2 Merchant's Luck: below level 40 or skill unknown -> never casts", async (
   await w.clock.run(300);
   return [[low === 0, "level 30: no cast"], [casts.length === 0, "no skill in G.skills: no cast"]];
 });
-const SW_TARGET = SW_OVR.concat([[/CRAFT_ENABLED: false/, "CRAFT_ENABLED: true"], [/total: 6 \}/, "total: 1 }"]]);
+const SW_TARGET = SW_OVR.concat([[/CRAFT_ENABLED: false/, "CRAFT_ENABLED: true"], [/total: 30 \}/, "total: 1 }"]]);
 const venom_world = (w) => {
   w.G.craft.venomband = { items: [[1, "dexring", 2], [1, "verdantcore"], [12, "poison"], [4, "snakefang"]], cost: 240000 };
   w.G.items.venomband = { name: "Venom Band", type: "ring", compound: { dex: 2.5 }, g: 220000 };
@@ -958,7 +958,7 @@ T("MK5 market watch: Ponty's Snake Fangs are bought for the Venom Band (stack ar
   venom_world(w);
   w.bank.gold = 40000000;
   w.bank.items0.push({ name: "dexring", level: 2 }, { name: "verdantcore", q: 2 }, { name: "poison", q: 30 });
-  const m = merchant_char(w, { gold: 50000 }, MK_OVR(true).concat([[/total: 6 \}/, "total: 1 }"], [/CRAFT_ENABLED: false/, "CRAFT_ENABLED: true"], [/TRUSTED_NAMES: (?:\[[^\]]*\]|C\.TRUSTED_NAMES)/, 'TRUSTED_NAMES: ["Dexy2"]']]));
+  const m = merchant_char(w, { gold: 50000 }, MK_OVR(true).concat([[/total: 30 \}/, "total: 1 }"], [/CRAFT_ENABLED: false/, "CRAFT_ENABLED: true"], [/TRUSTED_NAMES: (?:\[[^\]]*\]|C\.TRUSTED_NAMES)/, 'TRUSTED_NAMES: ["Dexy2"]']]));
   const stock = [{ name: "snakefang", level: 0, rid: "s1", q: 4 }, { name: "snakefang", level: 0, rid: "s2", q: 500 }];
   const hs = {}; m.sb.calculate_item_value = () => 20000;
   m.sb.parent.socket = { on(ev, h) { (hs[ev] = hs[ev] || []).push(h); }, off(ev, h) { hs[ev] = (hs[ev] || []).filter((x) => x !== h); },

@@ -36,7 +36,9 @@
     "TOKEN_NPC_FALLBACK": "2026-11-22: Monster Token buying of Hunter Warrior gear",
     "TOKEN_BUY_LIST": "2026-11-22: Monster Token buying of Hunter Warrior gear",
     "TOKEN_BUY_UNTIL_LEVEL": "2026-11-22",
-    "EXCHANGE_BANK_FIRST": "2026-11-22"
+    "EXCHANGE_BANK_FIRST": "2026-11-22",
+    "CRAFT_TARGETS": "2026-11-23: venomband total 30",
+    "CRAFT_MAX_PER_RUN": "2026-11-23: 5"
   },
   "AutoRanger": {
     "BAG_SHARE": "stage 2: Ranger hands spare items to the Priest",
