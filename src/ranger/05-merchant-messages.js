@@ -41,6 +41,7 @@
     busy: () => (R.boss ? "boss event" : grinch_fight() ? "Grinch fight" : R.force ? (R.force.trial ? "Try monster" : "forced farm") + " of " + R.force.type : R.goal ? "farm goal " + R.goal.type : R.ladder || R.courier || R.trip || R.retreat_go ? "a trip / job is running" : AL.lead.fight_near(party_names(), 500)),
     hooks: { update_window: (ms) => update_window(ms), start_merchant: (n, slot) => call_paced("start", () => start_character(n, slot)), announce: () => { if (CFG.PARTY_MEMBERS.length) send_party_state(); }, reload: () => AL.reengage({ say, slot: CFG.SELF_CODE_SLOT, restart: AutoRangerV5 }) } })); // stage 4
   setInterval(() => { try { LEAD.tick(); } catch (e) {} }, 5000);
+  AL.goo.start({ say, alive, cls: "ranger" }); // Goo Brawl (Sean 2026-11-23)
   character.on("cm", function (m) {
     if (!alive()) return;
     try {

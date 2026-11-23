@@ -223,6 +223,7 @@ try {
   // ============================ MESSAGES ============================
   const LEAD = AL.lead.create(Object.assign(AL.config.lead_env(character.name, "warrior"), { CFG, say, alive, busy: () => AL.lead.fight_near([CFG.PARTY_LEADER, CFG.TANK_NAME].filter(Boolean), 500), hooks: { reload: () => AL.reengage({ say, slot: CFG.SELF_CODE_SLOT, restart: AutoWarriorV5 }) } })); // stage 4: hello heartbeats, hand-over messages, Hold from the lead
   setInterval(() => { try { LEAD.tick(); } catch (e) {} }, 5000);
+  AL.goo.start({ say, alive, cls: "warrior" }); // Goo Brawl (Sean 2026-11-23)
   character.on("cm", function (m) {
     if (!alive()) return;
     try {
