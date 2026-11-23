@@ -2496,7 +2496,7 @@ T("KB1 Super Sweaters: only the 3 best (+4) are kept, the other 11 are sold; sam
     const lv = all.map((x) => x.level || 0).sort().join(",");
     const xm = [].concat(w.bank.items0, w.bank.items1, w.bank.items2, w.bank.items3, w.bank.items4, w.bank.items5, m.items).filter((x) => x && x.name === "xmassweater").map((x) => x.level || 0).sort().join(",");
     return [[all.length === 3 && all.every((x) => (x.level || 0) === 4), "Super Sweaters left: " + all.length + " at levels " + lv], [xm === "2,2,3", "Xmas Sweaters left (the 3 best): " + xm],
-      ...["gcape", "xmashat", "xmasshoes"].map((n) => { const l = [].concat(w.bank.items0, w.bank.items1, w.bank.items2, w.bank.items3, w.bank.items4, w.bank.items5, m.items).filter((x) => x && x.name === n).map((x) => x.level || 0).sort().join(","); return [l === { gcape: "3,3,4", xmashat: "2,3,4", xmasshoes: "3,4,4" }[n], n + " left: " + l]; })];
+      ...["gcape", "xmashat", "xmasshoes"].map((n) => { const l = [].concat(w.bank.items0, w.bank.items1, w.bank.items2, w.bank.items3, w.bank.items4, w.bank.items5, m.items).filter((x) => x && x.name === n).map((x) => x.level || 0).sort().join(","); return [l === { gcape: "", xmashat: "", xmasshoes: "" }[n], n + " left: " + l]; })];
   } finally { global.USE_NEW_RJ = false; }
 });
 T("PF1 base farm is the Poisios: the Ranger farms them at their spawn and tells the party to pull them (FARM_MONSTER)", async (w) => {

@@ -38,7 +38,8 @@
     "TOKEN_BUY_UNTIL_LEVEL": "2026-11-22",
     "EXCHANGE_BANK_FIRST": "2026-11-22",
     "CRAFT_TARGETS": "2026-11-23: venomband total 30",
-    "CRAFT_MAX_PER_RUN": "2026-11-23: 5"
+    "CRAFT_MAX_PER_RUN": "2026-11-23: 5",
+    "JUNK_ANY_LEVEL": "2026-11-23: + fireblade, gcape, mittens, xmashat, xmasshoes"
   },
   "AutoRanger": {
     "BAG_SHARE": "stage 2: Ranger hands spare items to the Priest",
@@ -56,7 +57,8 @@
     "GOALS": "2026-11-21: the Phoenix goal is switched off (enabled: false) until the party-separation problem is fixed",
     "SCROLL_SWAP": "2026-11-21: new, take a worn piece off for the Merchant's stat scroll",
     "PARTY_BEES_UNTIL_LEVEL": "2026-11-21: off (0), the Warrior and Priest are past 60",
-    "FARM_ROTATE_MS": "2026-11-21: new, the base farm rotates every 15 min even when no hunt ended"
+    "FARM_ROTATE_MS": "2026-11-21: new, the base farm rotates every 15 min even when no hunt ended",
+    "JUNK_ANY_LEVEL": "2026-11-23: + fireblade, gcape, mittens, xmashat, xmasshoes"
   },
   "AutoPriest": {
     "BAG_SHARE_FROM": "stage 2: who may hand her spare items",

@@ -198,9 +198,9 @@
     KEEP_BEST_COPIES: {
       sweaterhs: 3,
       xmassweater: 3,
-      gcape: 3,
-      xmashat: 3,
-      xmasshoes: 3,
+      gcape: 0, // Sean 2026-11-23: none of these is worth keeping any more: every copy is sold, whatever its level
+      xmashat: 0, // Sean 2026-11-23: none of these is worth keeping any more: every copy is sold, whatever its level
+      xmasshoes: 0, // Sean 2026-11-23: none of these is worth keeping any more: every copy is sold, whatever its level
       fireblade: 0, // Sean 2026-11-22: the Warrior will not use Fiery Blades: every one is sold, upgraded or not
     }, // Sean 2026-11-19: keep only this many of the item (the highest levels), sell every other copy at any level, also while the bank still has room. Super Sweater and Xmas Sweater: the 3 best of each; Grinch Cape, Xmas Hat, Xmas Shoes too (Sean 2026-11-19 16:02 / 16:03). The +0 ones are also on the junk list
     GEAR_MAX_COPIES: 2, // Sean 2026-11-22: of every WEAPON and ARMOR piece (the item types in GEAR_COPY_TYPES; accessories are not touched) the Merchant keeps at most this many copies in his bag and the bank, the highest levels first, and sells the rest at any level, also while the bank has room. Two is the upgrade pair (one is upgraded, the other stays as the fallback). Names listed in KEEP_BEST_COPIES keep their own number. 0 = off. Only items the game lets you upgrade or compound count; locked, stacked and special items are never sold; an item worth more than SURPLUS_MAX_VALUE_EACH is only listed.

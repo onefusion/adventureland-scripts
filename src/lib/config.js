@@ -83,7 +83,7 @@ AL.config = (function () {
 
   const prefixes_consumables = ["hpot", "mpot", "elixir"]; // never handed over by any class
   const prefixes_scrolls = ["scroll", "cscroll", "xscroll", "uscroll"]; // the Warrior, the Priest and the Rangers' stackables keep scrolls too
-  const junk_any_level = ["ringsj"]; // junk whatever their level (still never a locked one)
+  const junk_any_level = ["ringsj", "fireblade", "gcape", "mittens", "xmashat", "xmasshoes"]; // Sean 2026-11-23: upgraded Fiery Blades, Grinch Capes, Mittens, Xmas Hats and Xmas Shoes are not worth wearing: sold whatever their level // junk whatever their level (still never a locked one)
   const junk_max_level = 0; // nothing upgraded above this level is junk
 
   // ---------------------------------------------------- per-script views (the CFG keys keep their v5 names)
