@@ -342,6 +342,7 @@
     EXCHANGE_ENABLED: true,
     EXCHANGE_EVERY_MS: 30 * 60000,
     EXCHANGE_END: "", // e.g. "2027-01-10": no runs after this date. Empty = keep going while there are items
+    EXCHANGE_BANK_FIRST: true, // Sean 2026-11-22: when the bag has fewer than EXCHANGE_MIN_FREE_SLOTS free slots, an exchange run first stores everything it does not need in the bank (potions + the stand stay) instead of skipping
     EXCHANGE_MIN_FREE_SLOTS: 30, // the run only starts with this much bag space AFTER the stacks it takes from the bank: up to 30 non-stackable rewards can land in the bag at once, and a full bag breaks the run
     EXCHANGE_EMPTY_BACKOFF_MS: 60 * 60000, // nothing to exchange in the bank/bag: look again after this long
     // order = walking order (Jayson, then the inn, then Santa far away). times = number of exchanges; each uses

@@ -1011,7 +1011,7 @@ T("DN2 donation: bank at the floor -> nothing given, says why", async (w) => {
 });
 T("DN3 donation: not enough free bag slots -> no trip (handed-back loot needs room)", async (w) => {
   w.bank.gold = 40000000;
-  const m = merchant_char(w, { gold: 50000 }, DON_OVR.concat([[/BAG_TIDY: true/, "BAG_TIDY: false"]]));
+  const m = merchant_char(w, { gold: 50000 }, DON_OVR.concat([[/BAG_TIDY: true/, "BAG_TIDY: false"], [/EXCHANGE_BANK_FIRST: true/, "EXCHANGE_BANK_FIRST: false"]]));
   for (let i = 0; i < 31; i++) add_item(m, "wshoes", 1);
   await w.clock.run(900);
   return [[w.donations.length === 0, "nothing given"]];
@@ -1368,7 +1368,7 @@ T("G4 Merchant routes a hand-me-down to the follower who would gain", async (w) 
 });
 T("E2 exchange run: fewer than 30 free bag slots -> no bank trip, no exchange", async (w) => {
   w.bank.items0.push({ name: "mistletoe", q: 30 }, { name: "candycane", q: 12 }, { name: "ornament", q: 45 });
-  const m = merchant_char(w, { gold: 5000 }, [[/COMPOUND_ENABLED: true/, "COMPOUND_ENABLED: false"], [/UPGRADE_ENABLED: true/, "UPGRADE_ENABLED: false"], [/exch_next: now\(\) \+ 90000/, "exch_next: now() + 1000"]]);
+  const m = merchant_char(w, { gold: 5000 }, [[/COMPOUND_ENABLED: true/, "COMPOUND_ENABLED: false"], [/UPGRADE_ENABLED: true/, "UPGRADE_ENABLED: false"], [/exch_next: now\(\) \+ 90000/, "exch_next: now() + 1000"], [/EXCHANGE_BANK_FIRST: true/, "EXCHANGE_BANK_FIRST: false"]]);
   for (let i = 0; i < 20; i++) add_item(m, "ascale", 1); // (not junk, so the junk tidy leaves them) 4 potion stacks + 20 = 24 used, 18 free
   await w.clock.run(900);
   return [[m.exchanges.length === 0, "nothing exchanged"], [logged(w, "Goodies", /Exchange run waits: only 18 free bag slots, it needs 30/), "says why it waits"], [!logged(w, "Goodies", /Moving to bank - compound round/) || !logged(w, "Goodies", /Exchange run:/), "no exchange run started"]];
@@ -1414,6 +1414,13 @@ T("TG4 Ranger drops off a load of Grinch gear -> the Merchant tidies his bag rig
   const inM = m.items.filter((i) => i && i.name === "gcape").length;
   const inR = r.items.filter((i) => i && i.name === "gcape").length;
   return [[inR < 30, "the Ranger handed capes over: " + (30 - inR)], [inM === 0, "none left in the Merchant's bag: " + inM], [m.gold > 5000, "sold them: gold " + m.gold]];
+});
+T("E9 exchange run with a full bag: everything not needed goes to the bank first, then the run goes ahead", async (w) => {
+  w.bank.items0.push({ name: "mistletoe", q: 30 });
+  const m = merchant_char(w, { gold: 5000 }, [[/COMPOUND_ENABLED: true/, "COMPOUND_ENABLED: false"], [/UPGRADE_ENABLED: true/, "UPGRADE_ENABLED: false"], [/exch_next: now\(\) \+ 90000/, "exch_next: now() + 1000"]]);
+  for (let i = 0; i < 20; i++) add_item(m, "ascale", 1);
+  await w.clock.run(900);
+  return [[logged(w, "Goodies", /the bag had 18 free slots, \d+ after storing everything/), "stored the excess first"], [m.exchanges.length > 0, "exchanged " + m.exchanges.length + " times"], [m.items.filter((x) => x && x.name === "ascale").length === 0, "the scales are in the bank"]];
 });
 T("E3 exchange run: exactly enough space (event stacks + 30 free) -> it runs", async (w) => {
   w.bank.items0.push({ name: "mistletoe", q: 30 }, { name: "candycane", q: 12 }, { name: "ornament", q: 45 });

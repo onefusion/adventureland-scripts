@@ -18,7 +18,7 @@
     exch_space_ok();
   // not enough bag space: no bank trip at all (logged at most every 30 minutes)
   function exch_space_ok() {
-    if (free_slots() >= CFG.EXCHANGE_MIN_FREE_SLOTS) return true;
+    if (free_slots() >= CFG.EXCHANGE_MIN_FREE_SLOTS || CFG.EXCHANGE_BANK_FIRST) return true; // bank first: the run itself empties the bag
     if (now() - (S.exch_space_warn || 0) > 30 * 60000) {
       S.exch_space_warn = now();
       say(
@@ -305,6 +305,20 @@
     S.exch_turn = rd === 2 ? 1 : 2; // the other round is next, whatever happens to this one
     await drain_stand("an exchange run");
     if (!(await open_bank_for_compound())) return go_home();
+    // Sean 2026-11-22: a full bag made rounds skip. The run needs the room, so everything the exchange does not need goes to the bank first
+    // (the potions and the Merchant's Stand stay, so do upgraded pieces waiting for a Ranger).
+    if (CFG.EXCHANGE_BANK_FIRST && free_slots() < CFG.EXCHANGE_MIN_FREE_SLOTS) {
+      const before = free_slots();
+      const pend = S.gear_pending.slice();
+      const waiting = (it) => {
+        const k = pend.findIndex((g) => g.name === it.name && g.level === (it.level || 0));
+        if (k < 0) return false;
+        pend.splice(k, 1);
+        return true;
+      };
+      await put_back_in_bank((it) => !keeps_in_bag(it) && !waiting(it));
+      say(L + ": the bag had " + before + " free slots, " + free_slots() + " after storing everything the run does not need in the bank");
+    }
     if (free_slots() < CFG.EXCHANGE_MIN_FREE_SLOTS) {
       say(
         L +
