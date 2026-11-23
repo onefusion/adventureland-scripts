@@ -51,13 +51,20 @@ ok(calls.move.length === 1 && calls.move[0][0] > 150 && calls.attack.length === 
 ctx.character.x = 250;
 fight_tick();
 ok(calls.attack[calls.attack.length - 1] === "b", "attacks the Rainbow Goo once in range");
-// leaving: no monsters for 60 s inside -> the game's own leave is emitted, and no re-join for a while
-const emitted = []; ctx.parent.socket = { emit: (m) => emitted.push(m) };
-ctx.parent.entities = {}; ctx.character.map = "goobrawl";
-fight_tick(); ok(emitted.length === 0, "no leave right after the last monster is gone");
-const real_now = Date.now; Date.now = () => real_now() + 61000;
-fight_tick(); ok(emitted[0] === "leave", "leaves the island after 60 s without monsters");
-ctx.character.map = "main"; ctx.server.status.schedule = [{ event: "goobrawl", at: real_now(), status: "scheduled" }];
+// leaving: no monsters for 60 s inside -> walk to the transporter, then transport("main", 9)
+ctx.parent.socket = { emit() {} };
+const moves = [], rides = [];
+ctx.__goo_real.smart_move = (p) => moves.push(p); ctx.__goo_real.transport = (m, s) => rides.push([m, s]);
+ctx.parent.entities = {}; ctx.character.map = "goobrawl"; ctx.character.x = 0; ctx.character.y = 0;
+fight_tick(); ok(timers.length > 2 && moves.length === 0, "no leave right after the last monster is gone");
+const real_now = Date.now; let off = 0; Date.now = () => real_now() + off;
+off = 61000; fight_tick();
+const leave_tick = timers[2];
+off = 62000; leave_tick(); ok(moves.length === 1 && moves[0].x === -347 && moves[0].y === -483, "walks to the transporter NPC");
+ctx.character.x = -340; ctx.character.y = -480; off = 70000; leave_tick();
+ok(rides.length === 1 && rides[0][0] === "main" && rides[0][1] === 9, "rides the transporter to the main map");
+ctx.character.map = "main"; leave_tick();
+ctx.server.status.schedule = [{ event: "goobrawl", at: real_now(), status: "scheduled" }];
 const before = calls.join.length; join_tick();
 ok(calls.join.length === before, "does not join again right after leaving");
 Date.now = real_now;

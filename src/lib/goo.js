@@ -69,19 +69,31 @@ AL.goo = (function () {
       }
     }
     let empty_since = 0, no_join_until = 0, last_leave = 0;
-    // the event is over (no monster left for 60 s): leave the island; the game's own "leave" first, then the real town / transport
+    // the event is over (no monster left for 60 s): walk to the island's transporter NPC (-347,-483, data: places.main = 9) and ride it back to the main map
+    // (Sean 2026-11-23: that NPC is the way out); the game's own "leave" is only the last resort after 40 s
+    const NPC = { x: -347, y: -483, to: "main", spawn: 9 };
+    let leaving = 0;
     function leave_now(why) {
-      if (Date.now() - last_leave < 15000) return;
-      last_leave = Date.now();
+      if (leaving) return;
+      leaving = Date.now();
       no_join_until = Date.now() + 30 * 60000;
-      log("leaving the island: " + why);
-      try { parent.socket.emit("leave"); } catch (e) { log("socket leave failed: " + e.message, "#CF575F"); }
-      setTimeout(() => {
-        if (!inside()) return;
-        const r = G0.__goo_real || {};
-        try { if (r.town) r.town(); } catch (e) {}
-        try { if (r.transport) r.transport("main", 0); } catch (e) {}
-      }, 8000);
+      log("leaving the island: " + why + " - walking to the transporter at (" + NPC.x + "," + NPC.y + ")");
+    }
+    function leave_tick() {
+      if (!leaving) return;
+      if (!inside()) { leaving = 0; return; }
+      if (!alive() || character.rip) return;
+      const r = G0.__goo_real || {};
+      const d = Math.hypot(character.x - NPC.x, character.y - NPC.y);
+      if (d > 120) {
+        try { if (Date.now() - last_leave > 3000) { last_leave = Date.now(); if (r.smart_move) r.smart_move({ x: NPC.x, y: NPC.y }); else move(NPC.x, NPC.y); } } catch (e) {}
+        return;
+      }
+      if (Date.now() - last_leave < 4000) return;
+      last_leave = Date.now();
+      log("at the transporter: transport('" + NPC.to + "', " + NPC.spawn + ")");
+      try { (r.transport || G0.transport)(NPC.to, NPC.spawn); } catch (e) { log("transport failed: " + e.message, "#CF575F"); }
+      if (Date.now() - leaving > 40000) { try { parent.socket.emit("leave"); } catch (e) {} }
     }
     let tries = 0, last_try = 0, last_sig = "", last_log = 0, was_inside = false, was_live = false;
     const manual = () => { try { return String(get("goo_go") || ""); } catch (e) { return ""; } };
@@ -116,7 +128,7 @@ AL.goo = (function () {
       jp.then((r) => log("join('" + MAP + "') try " + tries + " -> " + JSON.stringify(r || {}).slice(0, 200)), (e) => log("join('" + MAP + "') try " + tries + " refused: " + JSON.stringify((e && (e.reason || e.message)) || e).slice(0, 200), "#CF575F"));
     }
     function fight_tick() {
-      if (!alive() || !inside() || character.rip) return;
+      if (!alive() || !inside() || character.rip || leaving) return;
       try {
         const mons = Object.values(parent.entities || {})
           .filter((e) => e && e.type === "monster" && !e.dead && e.hp > 0)
@@ -149,6 +161,7 @@ AL.goo = (function () {
     }
     setInterval(() => { try { join_tick(); } catch (e) {} }, 2000);
     setInterval(() => { try { fight_tick(); } catch (e) {} }, 250);
+    setInterval(() => { try { leave_tick(); } catch (e) {} }, 1500);
   }
   return { start, state_of, pick_target, parse_at, MAP };
 })();
