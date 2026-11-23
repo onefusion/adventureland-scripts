@@ -145,6 +145,8 @@
       // Dracul (Sean 2026-11-21, ON): 240,000 HP, magical 245 at range 120, one target, respawns every 18 min. Drops 10% EACH of the Strength / Intelligence / Dexterity earrings, 3% Dracul's Attire (lifesteal chest), 5% Fire Staff.
       // Only the Cave of Beginnings (batcave) spawn has a box the goal code can walk to; the Cave of Darkness entry has none. The Warrior swaps to his resistance set (magical, 240k HP is above ALT_MIN_HP).
       { type: "mvampire", session_min: 20, every_min: 20, want: ["strearring", "intearring", "dexearring", "mcape", "firestaff"] },
+      // Froggies (Sean 2026-11-23): evasion 99 (slow to kill), only 2 at a time on the main map (box -1353..-896, 720..1516). They drop Old Paper Money (the game data says 1 in 100,000, Sean saw 1 in 25 kills): Xyn turns it into 800+ shells. One hour out of every six. A Grinch event overrides the goal like any other (boss events come first).
+      { type: "frog", session_min: 60, every_min: 360, want: ["5bucks", "seashell"] },
       // // Dracul, Cave of Darkness: respawns every ~18 min
       {
         type: "fireroamer",
