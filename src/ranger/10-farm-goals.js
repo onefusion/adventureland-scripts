@@ -141,6 +141,15 @@
         t.rows.push({ at: new Date().toISOString(), min: Math.round((now() - g.started) / 60000), kills: g.kills, loot: g.loot });
         if (t.rows.length > 300) t.rows = t.rows.slice(-300);
         set(key, JSON.stringify(t));
+        // Sean 2026-11-23: also post the row to a Google Sheet (a tiny Apps Script web app, see agent/drop-tally-google-sheet.md) so server restarts / a cleared browser never lose it.
+        // CFG.TALLY_URL "" = off. Posted with fetch (no-cors, fire and forget); a failure only costs one console line.
+        const tally_url = (() => { try { return String(get("tally_url") || "") || CFG.TALLY_URL; } catch (e) { return CFG.TALLY_URL; } })();
+        if (tally_url) {
+          try {
+            const row = { who: character.name, type: g.type, at: new Date().toISOString(), min: Math.round((now() - g.started) / 60000), kills: g.kills, loot: g.loot };
+            fetch(tally_url, { method: "POST", mode: "no-cors", headers: { "Content-Type": "text/plain" }, body: JSON.stringify(row) }).then(() => console.log("[tally] sent to the sheet"), (e) => console.log("[tally] sheet post failed: " + ((e && e.message) || e)));
+          } catch (e) {}
+        }
         const tot = { min: 0, kills: 0, loot: {} };
         for (const r of t.rows) { tot.min += r.min; tot.kills += r.kills; for (const n in r.loot) tot.loot[n] = (tot.loot[n] || 0) + r.loot[n]; }
         const line = "TALLY " + g.type + ": " + t.rows.length + " sessions, " + tot.min + " min, " + tot.kills + " kills, loot " + loot_text(tot.loot) + (tot.kills && tot.loot["5bucks"] ? " - Old Paper Money 1 per " + Math.round(tot.kills / tot.loot["5bucks"]) + " kills" : "") + "  (full list: console.log(get(\"" + key + "\")))";
