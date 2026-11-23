@@ -15,7 +15,7 @@ const AL = mod.exports;
 let fails = 0; const ok = (c, m) => { console.log((c ? "ok   " : "FAIL ") + m); if (!c) fails++; };
 const said = [];
 AL.runtime.strip_never_wear((m) => said.push(m));
-ok(unequipped.length === 1 && unequipped[0] === "chest", "a Ranger takes off Armor of the Hunter Warrior and keeps the Xmas Hat");
+ok(unequipped.length === 0, "a worn wrong-class piece is NOT taken off by the character (the slot must never be empty; the Merchant swaps a proper one in)");
 ctx.character.ctype = "warrior"; unequipped.length = 0;
 AL.runtime.strip_never_wear(() => {});
 ok(unequipped.length === 0, "the Warrior keeps it");

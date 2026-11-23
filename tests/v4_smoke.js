@@ -1543,6 +1543,15 @@ T("TK1 Monster Tokens: the Merchant buys ONE Hunter Warrior piece at a time (nex
   const r4 = m.token_buys.join(",");
   return [[r1 === "mwarmor", "first only the chest: " + r1], [r2 === "mwarmor", "no second piece while it is upgraded: " + r2], [r3 === "mwarmor,mwarmor", "a broken chest is bought again: " + r3], [r4 === "mwarmor,mwarmor,mwpants", "pants follow once the chest is +7: " + r4]];
 });
+T("WC1 a Ranger wearing a piece made for another class: the Merchant runs a gear sweep at once", async (w) => {
+  w.G.items.mwarmor = { name: "Armor of the Hunter Warrior", type: "chest", class: ["warrior"], g: 96000, upgrade: { armor: 1 }, grades: [0, 5, 10, 12] };
+  const m = merchant_char(w, { gold: 50000 }, CP_OVR);
+  const L = fake_ranger(w); const F = make_char(w, "Dexy2", { x: -110, y: 25 });
+  const send = () => { gear_rep(L, { chest: { name: "mwarmor", level: 6 } }); gear_rep(F, {}); };
+  send(); w.clock.every(send, 60000);
+  await w.clock.run(300);
+  return [[logged(w, "Goodies", /wears mwarmor \(chest\) made for another class - gear sweep now/), "the Merchant noticed and asked for a sweep"]];
+});
 T("M10 the Compound odds / Compound test buttons are gone (removed at Sean's request)", async (w) => {
   const m = merchant_char(w, { gold: 20000 });
   await w.clock.run(10);

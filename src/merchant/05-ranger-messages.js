@@ -166,6 +166,21 @@
             y: Number(d.y),
             at: now(),
           };
+          // Sean 2026-11-23: a worn piece made for another class (Hunter Warrior armor on a Ranger) is worth nothing to him now: run a gear sweep at once so the Merchant takes a proper
+          // piece out of the bank and the courier swaps it in (the old piece stays on until the new one is in his bag, so the slot is never empty)
+          try {
+            const cls = (support_cfg(m.name) && support_cfg(m.name).cls) || "ranger";
+            const wrong = Object.keys(slots).filter((k) => {
+              const dd = G.items[slots[k].name];
+              return dd && Array.isArray(dd.class) && dd.class.length && dd.class.indexOf(cls) === -1;
+            });
+            S.wc_nudge = S.wc_nudge || {};
+            if (wrong.length && now() - (S.wc_nudge[m.name] || 0) > 10 * 60000) {
+              S.wc_nudge[m.name] = now();
+              S.sweep_last = 0;
+              say(m.name + " wears " + wrong.map((k) => slots[k].name + " (" + k + ")").join(", ") + " made for another class - gear sweep now to swap in a proper piece from the bank", "#E0A040");
+            }
+          } catch (e) {}
           stat_note(m.name, d.stat);
           if (m.name === CFG.RANGER_NAME) S.ranger_gear = rep_;
           else S.gears[m.name] = rep_;
