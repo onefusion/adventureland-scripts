@@ -5,7 +5,7 @@
     "SUPPORT_SCROLL_MAX_GOLD": "stage 1 (D5): replaced by STAT_SCROLL_MAX_GOLD",
     "STAT_SCROLL_APPLY": "stage 1 (D5): new, per class",
     "STAT_SCROLL_MAX_GOLD": "stage 1 (D5): new, any class",
-    "UPGRADE_MAX_LEVEL_BY_ITEM": "2026-11-21: Fire Bow cap +8 (v5 had +7)",
+    "UPGRADE_MAX_LEVEL_BY_ITEM": "2026-11-22: Monster Token buying of Hunter Warrior gear",
     "MLUCK_TOWN_ALWAYS": "2026-11-21: new, the town Merchant's Luck round also runs without the Grinch",
     "GEAR_TRACE": "stage 1: scorer trace switch",
     "PARTY_ENABLED": "stage 4 (D14): the Merchant is not in the game party (roster.merchant_in_party false)",
@@ -28,7 +28,14 @@
     "GEAR_COPY_TYPES": "2026-11-22: new, the item types GEAR_MAX_COPIES applies to",
     "KEEP_BEST_COPIES": "2026-11-22: + fireblade 0 (Warrior will not use Fiery Blades, all sold)",
     "EXCHANGE_PLAN": "2026-11-22: xbox/armorbox 15, mistletoe big run 30 every 12 h",
-    "XBOX_PER_RUN": "2026-11-22: 15"
+    "XBOX_PER_RUN": "2026-11-22: 15",
+    "UPGRADE_NO_SPARE_NAMES": "2026-11-22: Monster Token buying of Hunter Warrior gear",
+    "TOKEN_BUY_ENABLED": "2026-11-22: Monster Token buying of Hunter Warrior gear",
+    "TOKEN_BUY_ITEM": "2026-11-22: Monster Token buying of Hunter Warrior gear",
+    "TOKEN_NPC": "2026-11-22: Monster Token buying of Hunter Warrior gear",
+    "TOKEN_NPC_FALLBACK": "2026-11-22: Monster Token buying of Hunter Warrior gear",
+    "TOKEN_BUY_LIST": "2026-11-22: Monster Token buying of Hunter Warrior gear",
+    "TOKEN_BUY_UNTIL_LEVEL": "2026-11-22"
   },
   "AutoRanger": {
     "BAG_SHARE": "stage 2: Ranger hands spare items to the Priest",

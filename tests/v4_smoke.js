@@ -196,7 +196,7 @@ function make_char(world, name, o, script, overrides) {
   sb.loot = () => {}; sb.get_target = () => null; sb.change_target = () => {}; sb.is_in_range = () => ch.in_range !== false; sb.reduce_cooldown = () => {};
   sb.respawn = () => Promise.resolve({});
   sb.wait_for = (cond, ms) => new Promise((res, rej) => { const t0 = world.clock.t; const poll = () => { let ok = false; try { ok = cond(); } catch (e) {} if (ok) return res(true); if (world.clock.t - t0 >= ms) return rej({ reason: "timed out" }); world.clock.set(poll, 100); }; poll(); });
-  const NPC = { fancypots: { map: "main", x: -60, y: -100 }, basics: { map: "main", x: -89, y: -165 }, scrolls: { map: "main", x: -150, y: -60 }, newupgrade: { map: "main", x: -140, y: -90 }, monsterhunter: { map: "main", x: 126, y: -413 }, ornaments: { map: "winterland", x: -137, y: -193 }, mistletoe: { map: "winter_inn", x: 94, y: -181 }, santa: { map: "winterland", x: 1242, y: -1631 }, craftsman: { map: "main", x: 92, y: 670 }, mcollector: { map: "main", x: 81, y: -283 }, lotterylady: { map: "main", x: -341, y: 168 }, lostandfound: { map: "woffice", x: -24, y: -178 }, exchange: { map: "main", x: -300, y: -250 } };
+  const NPC = { monsterhunter: { map: "main", x: 126, y: -413 }, fancypots: { map: "main", x: -60, y: -100 }, basics: { map: "main", x: -89, y: -165 }, scrolls: { map: "main", x: -150, y: -60 }, newupgrade: { map: "main", x: -140, y: -90 }, monsterhunter: { map: "main", x: 126, y: -413 }, ornaments: { map: "winterland", x: -137, y: -193 }, mistletoe: { map: "winter_inn", x: 94, y: -181 }, santa: { map: "winterland", x: 1242, y: -1631 }, craftsman: { map: "main", x: 92, y: 670 }, mcollector: { map: "main", x: 81, y: -283 }, lotterylady: { map: "main", x: -341, y: 168 }, lostandfound: { map: "woffice", x: -24, y: -178 }, exchange: { map: "main", x: -300, y: -250 } };
   sb.find_npc = (n) => NPC[n] || null;
   sb.open_stand = () => { ch.stand = true; return Promise.resolve({}); }; sb.close_stand = () => { ch.stand = false; return Promise.resolve({}); };
   sb.trade = (i, slot, price, q) => { const it = take_item(ch, i, q); ch.slots["trade" + slot] = { name: it.name, q: it.q }; return Promise.resolve({}); };
@@ -219,6 +219,13 @@ function make_char(world, name, o, script, overrides) {
     ch.exchanges.push({ name: it.name, x: ch.x, y: ch.y, map: ch.map });
     ch.q.exchange = true;
     return world.after(2000, () => { ch.q.exchange = false; it.q -= e; if (!it.q) ch.items[i] = null; const rw = it.name === "ornament" ? "candycanesword" : "hotchocolate"; const f = ch.items.findIndex((x) => !x); ch.items[f] = rw === "hotchocolate" ? { name: rw, q: 1 } : { name: rw, level: 0 }; return { success: true, reward: { name: rw } }; });
+  };
+  ch.token_buys = [];
+  sb.exchange_buy = (token, name) => {
+    const cost = ((world.G.tokens || {})[token] || {})[name]; const i = ch.items.findIndex((x) => x && x.name === token);
+    if (!cost || i < 0 || (ch.items[i].q || 1) < cost) return Promise.reject({ reason: "not_enough_tokens" });
+    if (Math.hypot(ch.x - 126, ch.y + 413) > 400) return Promise.reject({ reason: "too far from Daisy" });
+    return world.after(1000, () => { ch.items[i].q -= cost; if (!ch.items[i].q) ch.items[i] = null; ch.token_buys.push(name); add_item(ch, name, 1); return {}; });
   };
   world.donations = world.donations || [];
   sb.donate_gold = (g) => {
@@ -1508,6 +1515,26 @@ T("E8 mistletoe big run: the first run exchanges 30, the next ones 10 again unti
   await w.clock.run(2400);
   const n2 = m.exchanges.filter((e) => e.name === "mistletoe").length - n1;
   return [[n1 === 30, "big run: " + n1], [n2 > 0 && n2 % 10 === 0 && n2 <= 20, "later runs 10 each: " + n2]];
+});
+T("TK1 Monster Tokens: the Merchant buys ONE Hunter Warrior piece at a time (next one only after +7, a broken one again)", async (w) => {
+  w.G.tokens = { monstertoken: { mwboots: 15, mwarmor: 12, mwpants: 11, mwgloves: 8, mwhelmet: 7 } };
+  for (const k of ["mwboots", "mwarmor", "mwpants", "mwgloves", "mwhelmet"]) w.G.items[k] = { name: k, type: { mwboots: "shoes", mwarmor: "chest", mwpants: "pants", mwgloves: "gloves", mwhelmet: "helmet" }[k], upgrade: { stat: 1 }, grades: [0, 5, 10, 12], g: 1000 };
+  w.G.items.monstertoken = { name: "Monster Token", type: "token", s: 9999, g: 12000 };
+  w.bank.items0.push({ name: "monstertoken", q: 98 });
+  const m = merchant_char(w, { gold: 5000 }, [[/COMPOUND_ENABLED: true/, "COMPOUND_ENABLED: false"], [/UPGRADE_ENABLED: true/, "UPGRADE_ENABLED: false"], [/exch2_next: now\(\) \+ 150000/, "exch2_next: now() + 100"], [/exch_next: now\(\) \+ 90000/, "exch_next: now() + 100000000"]]);
+  const find = (k) => w.bank.items0.find((x) => x && x.name === k) || m.items.find((x) => x && x.name === k);
+  const drop = (k) => { const b = w.bank.items0.findIndex((x) => x && x.name === k); if (b >= 0) w.bank.items0[b] = null; const g = m.items.findIndex((x) => x && x.name === k); if (g >= 0) m.items[g] = null; };
+  await w.clock.run(900);
+  const r1 = m.token_buys.join(",");
+  await w.clock.run(3700);
+  const r2 = m.token_buys.join(","); // still upgrading the chest: nothing new
+  drop("mwarmor"); // it broke
+  await w.clock.run(3700);
+  const r3 = m.token_buys.join(",");
+  find("mwarmor").level = 7; // reaches +7
+  await w.clock.run(3700);
+  const r4 = m.token_buys.join(",");
+  return [[r1 === "mwarmor", "first only the chest: " + r1], [r2 === "mwarmor", "no second piece while it is upgraded: " + r2], [r3 === "mwarmor,mwarmor", "a broken chest is bought again: " + r3], [r4 === "mwarmor,mwarmor,mwpants", "pants follow once the chest is +7: " + r4]];
 });
 T("M10 the Compound odds / Compound test buttons are gone (removed at Sean's request)", async (w) => {
   const m = merchant_char(w, { gold: 20000 });

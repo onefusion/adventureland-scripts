@@ -168,7 +168,7 @@
   const gamble_info = (it) => AL.planners.gamble_info(gamble_env(), it);
   const gamble_mode = (it) => gamble_info(it).mode;
   const upg_has_spare = (it) =>
-    gamble_mode(it) === "fodder" || upg_copies(it) >= CFG.UPGRADE_MIN_COPIES;
+    gamble_mode(it) === "fodder" || CFG.UPGRADE_NO_SPARE_NAMES.indexOf(it.name) !== -1 || upg_copies(it) >= CFG.UPGRADE_MIN_COPIES;
   const upg_scroll = (it) => "scroll" + scroll_grade(it);
 
   // the planner's input: the Merchant's own helpers (they read his live state)

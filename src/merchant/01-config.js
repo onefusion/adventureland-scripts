@@ -253,10 +253,17 @@
     // then walks to the Ranger and hands over anything better than what is equipped (he equips it himself).
     UPGRADE_ENABLED: true,
     UPGRADE_MAX_LEVEL: 7, // never upgrade an item above this level
-    UPGRADE_MAX_LEVEL_BY_ITEM: { firebow: 8, firestaff: 8, fireblade: 8 }, // Sean 2026-11-21: Fire Bow, Fiery Staff (Priest) and Fiery Blade (Warrior) go to +8 (+7 -> +8 needs scroll2, 1.6M g, allowed by UPGRADE_MAX_SCROLL_GRADE 2; copies that do not beat SexyDexy are fodder and need no spare). v5 (Sean 2026-11-18): items listed here are upgraded up to this level instead of UPGRADE_MAX_LEVEL (and count as finished only there). Fire Bow: scroll1 (40,000 g) is enough up to +7 (its grade changes at +8), so no dearer scroll is bought. Every upgrade can destroy the item: UPGRADE_MIN_COPIES still keeps a spare copy.
+    UPGRADE_MAX_LEVEL_BY_ITEM: { firebow: 8, firestaff: 8, mwhelmet: 7, mwarmor: 7, mwpants: 7, mwgloves: 7, mwboots: 7 }, // Sean 2026-11-21: Fire Bow, Fiery Staff (Priest) and Fiery Blade (Warrior) go to +8 (+7 -> +8 needs scroll2, 1.6M g, allowed by UPGRADE_MAX_SCROLL_GRADE 2; copies that do not beat SexyDexy are fodder and need no spare). v5 (Sean 2026-11-18): items listed here are upgraded up to this level instead of UPGRADE_MAX_LEVEL (and count as finished only there). Fire Bow: scroll1 (40,000 g) is enough up to +7 (its grade changes at +8), so no dearer scroll is bought. Every upgrade can destroy the item: UPGRADE_MIN_COPIES still keeps a spare copy.
     UPGRADE_MIN_CHANCE_BY_ITEM: {}, // v5: per-item success-chance floor instead of UPGRADE_MIN_CHANCE, e.g. { firebow: 0.3 }. The round logs "UPGRADE skipped (below 40%): firebow +6 -> +7 ... NN%" when the floor stops it.
     UPGRADE_GAMBLE_NAMES: ["firebow", "firestaff"], // 2026-11-21: the wearer is the Ranger (bow), the Priest (staff) or the Warrior (blade). v5 (Sean 2026-11-18 14:04): for these items a copy that does NOT beat what SexyDexy wears is "fodder": it is upgraded even at a low success chance (UPGRADE_GAMBLE_MIN_CHANCE) and without a spare copy (losing it costs nothing he wears). A copy that DOES beat his worn one is SET ASIDE for him (never upgraded further, the gear sweep hands it over). Once he wears the cap level (UPGRADE_MAX_LEVEL_BY_ITEM) nothing is gambled any more.
     UPGRADE_GAMBLE_MIN_CHANCE: 0.1, // lowest success chance a fodder copy is tried at
+    UPGRADE_NO_SPARE_NAMES: ["mwhelmet", "mwarmor", "mwpants", "mwgloves", "mwboots"], // Sean 2026-11-22: Hunter Warrior pieces are upgraded to +7 without a spare copy (a few will break on the way, he accepts it)
+    TOKEN_BUY_ENABLED: true, // Sean 2026-11-22: Monster Tokens in the bank are spent at Daisy on Hunter Warrior gear (round 2 of the exchange runs)
+    TOKEN_BUY_ITEM: "monstertoken",
+    TOKEN_NPC: "monsterhunter",
+    TOKEN_NPC_FALLBACK: { map: "main", x: 126, y: -413 },
+    TOKEN_BUY_LIST: ["mwarmor", "mwpants", "mwhelmet", "mwgloves", "mwboots"], // bought ONE piece at a time in this order: the next piece is only bought when the one before has reached TOKEN_BUY_UNTIL_LEVEL (a piece that breaks on the way is simply bought again). Prices from G.tokens.monstertoken (chest 12, pants 11, helmet 7, gloves 8, boots 15)
+    TOKEN_BUY_UNTIL_LEVEL: 7,
     UPGRADE_MIN_COPIES: 2, // an upgrade is only tried while another copy of the same item and level sits in the bag/bank (worn gear never counts). 1 = old behaviour
     UPGRADE_MIN_CHANCE: 0.25, // never attempt below this success chance (asked from the server for the exact item)
     UPGRADE_MAX_SCROLL_GRADE: 2, // highest scroll tier to buy (0 = scroll0 1,000g | 1 = scroll1 40,000g | 2 = scroll2 1.6M)

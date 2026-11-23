@@ -207,6 +207,95 @@
     await put_back_in_bank((it) => !!names[it.name]);
     return names;
   }
+  // Sean 2026-11-22: Monster Tokens (in the bank) -> Hunter Warrior gear at Daisy (npc "monsterhunter"), exchange_buy("monstertoken", name).
+  // The pieces then go through the normal upgrade rounds (+7) and the gear sweep hands them to the Warrior. Returns false when nothing was done.
+  // best level of any copy of the piece the Merchant knows of (bag, bank, worn by anyone); -1 = none
+  const token_best = (name) => {
+    let best = -1;
+    const see = (it) => {
+      if (it && it.name === name) best = Math.max(best, it.level || 0);
+    };
+    for (let i = 0; i < character.isize; i++) see(character.items[i]);
+    for (const pack of CFG.UPGRADE_PACKS) {
+      const arr = character.bank && character.bank[pack];
+      if (Array.isArray(arr)) arr.forEach(see);
+    }
+    for (const who of roster()) {
+      const g = gear_of(who);
+      for (const sl in (g && g.slots) || {}) see(g.slots[sl]);
+    }
+    return best;
+  };
+  async function token_step() {
+    if (!CFG.TOKEN_BUY_ENABLED) return;
+    const tok = CFG.TOKEN_BUY_ITEM;
+    const costs = (G.tokens && G.tokens[tok]) || null;
+    if (!costs) return;
+    const have = mats_have(tok);
+    // ONE piece at a time (Sean 2026-11-22): the first piece of the list that has no copy at TOKEN_BUY_UNTIL_LEVEL yet.
+    // A copy that exists but is still below it is being upgraded: nothing is bought until it is done. A broken piece (no copy left) is bought again.
+    const buy = [];
+    for (const name of CFG.TOKEN_BUY_LIST) {
+      const best = token_best(name);
+      if (best >= CFG.TOKEN_BUY_UNTIL_LEVEL) continue; // this slot is finished
+      if (best >= 0) {
+        const sig = "tok-wait:" + name + best;
+        if (S.token_sig !== sig) say("Monster Tokens: " + name + " +" + best + " is being upgraded to +" + CFG.TOKEN_BUY_UNTIL_LEVEL + " first, nothing new is bought");
+        S.token_sig = sig;
+        return;
+      }
+      const c = costs[name];
+      if (c && have >= c) buy.push(name);
+      else {
+        const sig = "tok-short:" + name + have;
+        if (S.token_sig !== sig) say("Monster Tokens: next piece is " + name + " (" + c + " tokens), " + have + " in the bank - waiting");
+        S.token_sig = sig;
+      }
+      break;
+    }
+    if (!buy.length) return;
+    let left = have - buy.reduce((a, n) => a + costs[n], 0);
+    const need = have - left;
+    if (free_slots() < buy.length + 2) {
+      say("Monster Tokens skipped: needs " + (buy.length + 2) + " free bag slots, has " + free_slots(), "#CF575F");
+      return;
+    }
+    for (const st of bank_stacks(tok).sort((a, b) => b.q - a.q)) {
+      if (bag_qty(tok) >= need) break;
+      const before = bag_qty(tok);
+      const res = await call(() => bank_retrieve(st.pack, st.i));
+      const ok = await call(() => wait_for(() => bag_qty(tok) > before, 4000));
+      if (res.failed || ok.failed) {
+        say("Monster Tokens: could not take them out of the bank: " + (res.reason || ok.reason), "#CF575F");
+        break;
+      }
+    }
+    const npc = find_npc(CFG.TOKEN_NPC) || CFG.TOKEN_NPC_FALLBACK;
+    say("Monster Tokens: buying " + buy.join(", ") + " (" + need + " of " + have + " tokens)");
+    act("Buy hunter gear", 60, true);
+    const r = await travel({ map: npc.map, x: npc.x, y: npc.y }, 0, "buying Hunter gear with Monster Tokens");
+    if (r.failed) say("Monster Tokens: could not reach Daisy: " + r.reason, "#CF575F");
+    else
+      for (const name of buy) {
+        const before = bag_qty(name);
+        const t0 = bag_qty(tok);
+        const res = await call(() => exchange_buy(tok, name));
+        const ok = await call(() => wait_for(() => bag_qty(name) > before && bag_qty(tok) < t0, 6000));
+        if (res.failed || ok.failed) {
+          say("Monster Tokens: buying " + name + " failed: " + (res.reason || ok.reason), "#CF575F");
+          break;
+        }
+        say("Bought " + name + " for " + costs[name] + " Monster Tokens", "#5BCB5B");
+      }
+    if (!(await open_bank_for_compound())) {
+      go_home();
+      return null;
+    }
+    const keep = {};
+    keep[tok] = true;
+    for (const name of CFG.TOKEN_BUY_LIST) keep[name] = true;
+    await put_back_in_bank((it) => !!keep[it.name]);
+  }
   async function exchange_round(rd) {
     rd = rd === 2 ? 2 : 1; // round 1 = the Christmas NPCs (Winterland), round 2 = everything at Xyn (plan entries with round: 2) + the Xmas Box crafting
     const KN = rd === 2 ? "exch2_next" : "exch_next";
@@ -229,6 +318,7 @@
     }
     const xnames = rd === 2 ? await xbox_step() : {}; // quantum pieces -> Xmas Box at Leo (back to the bank afterwards)
     if (xnames === null) return go_home();
+    if (rd === 2 && (await token_step()) === null) return;
     // what is there to do?
     const plan = [];
     let soonest = Infinity; // timed entries (every_ms) that are not due yet
