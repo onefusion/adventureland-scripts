@@ -133,6 +133,21 @@
       );
     }
     R.goal_end[g.type] = now();
+    // Sean 2026-11-23: a persistent tally per goal type (CFG.GOAL_TALLY) that survives reloads: one row per session {at, min, kills, loot}. Read it in the game console:  console.log(get("al_tally_frog"))
+    try {
+      if ((CFG.GOAL_TALLY || []).indexOf(g.type) !== -1) {
+        const key = "al_tally_" + g.type;
+        const t = JSON.parse(get(key) || "null") || { rows: [] };
+        t.rows.push({ at: new Date().toISOString(), min: Math.round((now() - g.started) / 60000), kills: g.kills, loot: g.loot });
+        if (t.rows.length > 300) t.rows = t.rows.slice(-300);
+        set(key, JSON.stringify(t));
+        const tot = { min: 0, kills: 0, loot: {} };
+        for (const r of t.rows) { tot.min += r.min; tot.kills += r.kills; for (const n in r.loot) tot.loot[n] = (tot.loot[n] || 0) + r.loot[n]; }
+        const line = "TALLY " + g.type + ": " + t.rows.length + " sessions, " + tot.min + " min, " + tot.kills + " kills, loot " + loot_text(tot.loot) + (tot.kills && tot.loot["5bucks"] ? " - Old Paper Money 1 per " + Math.round(tot.kills / tot.loot["5bucks"]) + " kills" : "") + "  (full list: console.log(get(\"" + key + "\")))";
+        say(line, "#51D2E1");
+        try { console.log(line); } catch (e) {}
+      }
+    } catch (e) {}
     if (cool_ms) R.goal_cool[g.type] = now() + cool_ms;
     R.goal = null;
     R.lock = null;

@@ -113,6 +113,7 @@
     // A goal is skipped when the monster is too tough, one kill would take too long, or it has no regular spawn he can walk to.
     // Switch off / on from the game console:  set("farm_goals", "off")  /  set("farm_goals", "")
     GOALS_ENABLED: true,
+    GOAL_TALLY: ["frog"], // Sean 2026-11-23: these goal types keep a persistent per-session tally (set/get "al_tally_<type>") and log the running totals after every session
     GOAL_MAX_HP: 1000000, // never farm monsters with more HP than this
     GOAL_MAX_TTK_S: 900, // skip a goal when one kill would take longer than this (estimated: HP / (attack x frequency x HUNT_EFFICIENCY))
     GOAL_MAX_DIFFICULTY: 1, // the game's HP-bar rating, as for hunts

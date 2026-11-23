@@ -58,7 +58,8 @@
     "SCROLL_SWAP": "2026-11-21: new, take a worn piece off for the Merchant's stat scroll",
     "PARTY_BEES_UNTIL_LEVEL": "2026-11-21: off (0), the Warrior and Priest are past 60",
     "FARM_ROTATE_MS": "2026-11-21: new, the base farm rotates every 15 min even when no hunt ended",
-    "JUNK_ANY_LEVEL": "2026-11-23: + fireblade, gcape, mittens, xmashat, xmasshoes"
+    "JUNK_ANY_LEVEL": "2026-11-23: + fireblade, gcape, mittens, xmashat, xmasshoes",
+    "GOAL_TALLY": "2026-11-23"
   },
   "AutoPriest": {
     "BAG_SHARE_FROM": "stage 2: who may hand her spare items",
