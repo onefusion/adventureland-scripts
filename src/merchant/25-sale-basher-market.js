@@ -214,10 +214,34 @@
     },
   });
   // ---- v5: market watch (Ponty) ----
+  // Sean 2026-11-24: the same visit runs for Ponty (secondhands) and for Ron the Goblin (Lost and Found). Ron's list comes from the "lostandfound" socket message, a purchase is sbuy { rid, f: true } (game client functions.js lostandfound_buy);
+  // his budget is a share of the bank gold (RON_BANK_PCT) taken out before the visit, and his own price factor is learned from the first purchase.
+  const mk_ponty = () => ({
+    who: "Ponty", npc: CFG.MARKET_NPC, fallback: CFG.MARKET_NPC_FALLBACK, factor: "market_factor", next: "market_next", every: CFG.MARKET_EVERY_MS, markup: CFG.MARKET_MARKUP,
+    max_spend: CFG.MARKET_MAX_SPEND, max_each: CFG.MARKET_MAX_PRICE_EACH, bank_floor: CFG.MARKET_BANK_FLOOR, bank_pct: 0,
+    list: () => sock_ask("secondhands", undefined, "secondhands", 8000),
+    pay: (rid) => sock_ask("sbuy", { rid }, "sbuy", 3000),
+    off: () => !CFG.MARKET_BUY, kill: () => { CFG.MARKET_BUY = false; },
+  });
+  const mk_ron = () => ({
+    who: "Ron the Goblin", npc: "lostandfound", fallback: CFG.DONATE_NPC_FALLBACK, factor: "ron_factor", next: "ron_next", every: CFG.RON_EVERY_MS, markup: CFG.RON_MARKUP,
+    max_spend: 0, max_each: CFG.RON_MAX_PRICE_EACH, bank_floor: 0, bank_pct: CFG.RON_BANK_PCT,
+    list: () => sock_ask("lostandfound", undefined, "lostandfound", 8000),
+    pay: (rid) => sock_ask("sbuy", { rid, f: true }, "sbuy", 3000),
+    off: () => S.ron_off === true, kill: () => { S.ron_off = true; },
+  });
+  let MK = mk_ponty();
   const market_price = (it) => {
-    const f = Number(S.market_factor) > 0 ? S.market_factor : CFG.MARKET_MARKUP;
+    const f = Number(S[MK.factor]) > 0 ? S[MK.factor] : MK.markup;
     return Math.round(raw_value(it.name, it.level || 0) * f);
   };
+  function ron_due() {
+    if (!CFG.RON_ENABLED || !CFG.MARKET_BUY || has_jobs() || is_paused() || !gear_fresh()) return false;
+    try {
+      if (String(get("ron_check") || "")) { set("ron_check", ""); S.ron_next = 0; }
+    } catch (e) {}
+    return now() >= (S.ron_next || 0);
+  }
   function market_due() {
     if (!CFG.MARKET_ENABLED || has_jobs() || is_paused() || !gear_fresh())
       return false;
@@ -230,33 +254,35 @@
     } catch (e) {}
     return now() >= (S.market_next || 0);
   }
-  async function market_round() {
-    S.market_next = now() + CFG.MARKET_EVERY_MS;
+  async function market_round(src) {
+    MK = src || mk_ponty();
+    S[MK.next] = now() + MK.every;
     await drain_stand("the market check");
-    let npc = find_npc(CFG.MARKET_NPC) || CFG.MARKET_NPC_FALLBACK;
+    let npc = find_npc(MK.npc) || MK.fallback;
     if (!npc) {
       say(
         "Market watch: cannot place " +
-          CFG.MARKET_NPC +
+          MK.npc +
           " (set MARKET_NPC_FALLBACK)",
         "#CF575F"
       );
       return go_home();
     }
+    if (MK.bank_pct > 0 && (await open_bank_for_compound())) MK.max_spend = Math.floor((Number(character.bank && character.bank.gold) || 0) * MK.bank_pct); // Ron: a share of the bank gold
     if (
       CFG.MARKET_BUY &&
-      character.gold - CFG.MARKET_GOLD_FLOOR < CFG.MARKET_MAX_SPEND &&
+      character.gold - CFG.MARKET_GOLD_FLOOR < MK.max_spend &&
       (await open_bank_for_compound())
     ) {
       // he carries little gold: take what a visit may spend out of the spare bank gold (leftovers go back with the normal banking)
       const spare = Math.max(
         0,
         (Number(character.bank && character.bank.gold) || 0) -
-          CFG.MARKET_BANK_FLOOR
+          MK.bank_floor
       );
       const amount = Math.floor(
         Math.min(
-          CFG.MARKET_MAX_SPEND + CFG.MARKET_GOLD_FLOOR - character.gold,
+          MK.max_spend + CFG.MARKET_GOLD_FLOOR - character.gold,
           spare
         )
       );
@@ -268,7 +294,7 @@
         );
         if (wd.failed || done.failed)
           say(
-            "Market watch: withdrawal of " +
+            "Market watch (" + MK.who + "): withdrawal of " +
               amount +
               " failed: " +
               (wd.reason || done.reason),
@@ -276,30 +302,29 @@
           );
         else
           say(
-            "Market watch: took " +
+            "Market watch (" + MK.who + "): took " +
               amount +
-              " spare gold out of the bank for purchases"
+              " gold out of the bank for purchases"
           );
       } else
         say(
-          "Market watch: no spare bank gold above " +
-            CFG.MARKET_BANK_FLOOR +
-            " for purchases"
+          "Market watch (" + MK.who + "): no spare bank gold for purchases"
         );
     }
     act("Market watch", 60, true);
     const r = await travel(
       { map: npc.map, x: npc.x, y: npc.y },
       0,
-      "market watch at Ponty"
+      "market watch at " + MK.who
     );
     if (r.failed) {
-      say("Market watch: could not reach Ponty: " + r.reason, "#CF575F");
+      say("Market watch: could not reach " + MK.who + ": " + r.reason, "#CF575F");
       return go_home();
     }
-    const list = await sock_ask("secondhands", undefined, "secondhands", 8000);
+    const list = await MK.list();
+    if (MK.who !== "Ponty") { try { set("ron_last_list", JSON.stringify(Array.isArray(list) ? list.slice(0, 60) : list)); } catch (e) {} } // the first look at the real list shape: console.log(get("ron_last_list"))
     if (!Array.isArray(list)) {
-      say("Market watch: Ponty gave no list", "#CF575F");
+      say("Market watch: " + MK.who + " gave no list (" + JSON.stringify(list || null).slice(0, 200) + ")", "#CF575F");
       return go_home();
     }
     const by = {};
@@ -452,7 +477,7 @@
           list.length +
           " item(s) at Ponty, nothing that beats what the Rangers wear and no compound set to complete"
       );
-    if (!CFG.MARKET_BUY) {
+    if (MK.off()) {
       if (plan.length || sets.length)
         say("Market watch: report only (MARKET_BUY is false) - nothing bought");
       return go_home();
@@ -464,7 +489,7 @@
       const n0 = bag_list(
         (x) => x.name === it.name && (x.level || 0) === (it.level || 0)
       ).length;
-      await sock_ask("sbuy", { rid }, "sbuy", 3000);
+      await MK.pay(rid);
       const ok = await call(() =>
         wait_for(
           () =>
@@ -483,12 +508,12 @@
             " did not work (nothing arrived) - buying is switched off until restart",
           "#CF575F"
         );
-        CFG.MARKET_BUY = false;
+        MK.kill();
         return false;
       }
       const paid = g0 - character.gold;
       const raw = raw_value(it.name, it.level || 0);
-      if (paid > 0 && raw >= 1000) S.market_factor = paid / raw;
+      if (paid > 0 && raw >= 1000) S[MK.factor] = paid / raw;
       say(
         "Market watch: bought " +
           it.name +
@@ -512,9 +537,9 @@
     for (const pl of plan) {
       const price = pl.g.price;
       const why_not =
-        price > CFG.MARKET_MAX_PRICE_EACH
-          ? "dearer than MARKET_MAX_PRICE_EACH"
-          : spent + price > CFG.MARKET_MAX_SPEND
+        price > MK.max_each
+          ? "dearer than the price limit"
+          : spent + price > MK.max_spend
           ? "over MARKET_MAX_SPEND"
           : character.gold - price < CFG.MARKET_GOLD_FLOOR
           ? "not enough gold in the bag above MARKET_GOLD_FLOOR (" +
@@ -558,7 +583,7 @@
         for (let i = 0; i < want; i++) {
           if (
             s.price > CFG.MARKET_COMPOUND_MAX_EACH ||
-            spent + s.price > CFG.MARKET_MAX_SPEND ||
+            spent + s.price > MK.max_spend ||
             character.gold - s.price < CFG.MARKET_GOLD_FLOOR
           )
             break;
@@ -583,15 +608,15 @@
             const units = e.q || 1;
             const price = Math.round(
               raw_value(name, lv) *
-                (Number(S.market_factor) > 0
-                  ? S.market_factor
-                  : CFG.MARKET_MARKUP) *
+                (Number(S[MK.factor]) > 0
+                  ? S[MK.factor]
+                  : MK.markup) *
                 units
             );
             if (units > missing + CFG.MARKET_CRAFT_OVERBUY) continue; // a listing far bigger than the need: leave it
             if (
-              price > CFG.MARKET_MAX_PRICE_EACH ||
-              spent + price > CFG.MARKET_MAX_SPEND ||
+              price > MK.max_each ||
+              spent + price > MK.max_spend ||
               character.gold - price < CFG.MARKET_GOLD_FLOOR
             ) {
               say(
@@ -610,7 +635,7 @@
             }
             const g0 = character.gold;
             const n0 = bag_qty(name, lv);
-            await sock_ask("sbuy", { rid: e.rid }, "sbuy", 3000);
+            await MK.pay(e.rid);
             const ok = await call(() =>
               wait_for(() => bag_qty(name, lv) > n0, 4000)
             );

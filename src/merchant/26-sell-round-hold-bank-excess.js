@@ -280,6 +280,14 @@
     next: () => S.market_next,
   });
   sched_add({
+    name: "ron",
+    label: "Ron the Goblin",
+    due: () => ron_due(),
+    run: () => market_round(mk_ron()),
+    on: () => CFG.RON_ENABLED && CFG.MARKET_BUY,
+    next: () => S.ron_next,
+  });
+  sched_add({
     name: "mluck",
     label: "Merchant's Luck",
     due: () => mluck_due(),

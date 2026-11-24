@@ -58,6 +58,13 @@
     MARKET_COMPOUND_MAX_EACH: 500000, // per copy; Ponty charges 2x the game value, so a ringsj +2 costs about 333k
     MARKET_COMPOUND_MAX_LEVEL: 2, // only copies up to this level are bought for compounding (three +2 make a +3; Sean 2026-11-16: compounds are worth it up to +3, dearer than that waits for a bigger gold surplus)
     MARKET_COMPOUND_MAX_COPIES: 3,
+    // Sean 2026-11-24: Ron the Goblin (Lost and Found) sells rare monster drops and gear for fair prices. The same visit as Ponty's, every RON_EVERY_MS: up to RON_BANK_PCT of the bank gold is taken out first
+    // (the donation amount is not touched), then everything that is a target gear piece (even one that still needs an upgrade / compound) or a craft ingredient (Venom Band) is bought within the limits below.
+    RON_ENABLED: true,
+    RON_EVERY_MS: 4 * 3600000,
+    RON_BANK_PCT: 0.1, // spending budget per visit = this share of the bank gold
+    RON_MAX_PRICE_EACH: 15000000, // never buy anything dearer (estimated)
+    RON_MARKUP: 2.0, // price estimate = game value x this until the first real purchase tells the real factor
     MARKET_CRAFT_BUY: true, // v5: also buy the missing ingredients of a CRAFT_TARGETS item (Venom Band) at Ponty, within the limits above (needs MARKET_BUY)
     MARKET_CRAFT_OVERBUY: 10, // ...a listing may exceed what is missing by at most this many units
     SALE_FIRST_SLOT: 5, // trade slots 1-4 belong to the potion listings
@@ -144,7 +151,7 @@
     // 1 of each other accessory per Ranger) gets a +1 first, then the surplus is compounded to +2 for all slots, then +3, up to the target.
     // Only the best accessory of each kind is compounded; the rest is surplus (sold when the bank is nearly full).
     COMPOUND_TARGET_LEVEL: 5, // the ladder stops here (the scroll grade limit and the session budget stop it earlier when scrolls get dear)
-    COMPOUND_KEEP_COPIES: 3, // a compound only runs while this many copies of the same item and level stay behind (6 held = 1 triple; a failure still leaves a full triple). 0 = old behaviour
+    COMPOUND_KEEP_COPIES: 0, // Sean 2026-11-24: 0 = a triple is compounded as soon as 3 copies are held (worn gear is high enough that no spare triple is needed). It was 3: a compound only ran while this many copies of the same item and level stayed behind (6 held = 1 triple)
     COMPOUND_MIN_CHANCE: 0.4, // never attempt below this success chance (asked from the server for the exact items)
     COMPOUND_MAX_SCROLL_GRADE: 1, // highest scroll tier to buy (0 = cscroll0 only, 1 = cscroll1 at 240k each...); higher-grade items are skipped
     COMPOUND_SCROLL_NPC: "scrolls", // sells the scrolls (main town)
@@ -253,11 +260,11 @@
     // then walks to the Ranger and hands over anything better than what is equipped (he equips it himself).
     UPGRADE_ENABLED: true,
     UPGRADE_MAX_LEVEL: 7, // never upgrade an item above this level
-    UPGRADE_MAX_LEVEL_BY_ITEM: { firebow: 8, firestaff: 8, mwhelmet: 7, mwarmor: 7, mwpants: 7, mwgloves: 7, mwboots: 7 }, // Sean 2026-11-21: Fire Bow, Fiery Staff (Priest) and Fiery Blade (Warrior) go to +8 (+7 -> +8 needs scroll2, 1.6M g, allowed by UPGRADE_MAX_SCROLL_GRADE 2; copies that do not beat SexyDexy are fodder and need no spare). v5 (Sean 2026-11-18): items listed here are upgraded up to this level instead of UPGRADE_MAX_LEVEL (and count as finished only there). Fire Bow: scroll1 (40,000 g) is enough up to +7 (its grade changes at +8), so no dearer scroll is bought. Every upgrade can destroy the item: UPGRADE_MIN_COPIES still keeps a spare copy.
+    UPGRADE_MAX_LEVEL_BY_ITEM: { t2quiver: 5, firebow: 8, firestaff: 8, mwhelmet: 7, mwarmor: 7, mwpants: 7, mwgloves: 7, mwboots: 7 }, // Sean 2026-11-21: Fire Bow, Fiery Staff (Priest) and Fiery Blade (Warrior) go to +8 (+7 -> +8 needs scroll2, 1.6M g, allowed by UPGRADE_MAX_SCROLL_GRADE 2; copies that do not beat SexyDexy are fodder and need no spare). v5 (Sean 2026-11-18): items listed here are upgraded up to this level instead of UPGRADE_MAX_LEVEL (and count as finished only there). Fire Bow: scroll1 (40,000 g) is enough up to +7 (its grade changes at +8), so no dearer scroll is bought. Every upgrade can destroy the item: UPGRADE_MIN_COPIES still keeps a spare copy.
     UPGRADE_MIN_CHANCE_BY_ITEM: {}, // v5: per-item success-chance floor instead of UPGRADE_MIN_CHANCE, e.g. { firebow: 0.3 }. The round logs "UPGRADE skipped (below 40%): firebow +6 -> +7 ... NN%" when the floor stops it.
     UPGRADE_GAMBLE_NAMES: ["firebow", "firestaff"], // 2026-11-21: the wearer is the Ranger (bow), the Priest (staff) or the Warrior (blade). v5 (Sean 2026-11-18 14:04): for these items a copy that does NOT beat what SexyDexy wears is "fodder": it is upgraded even at a low success chance (UPGRADE_GAMBLE_MIN_CHANCE) and without a spare copy (losing it costs nothing he wears). A copy that DOES beat his worn one is SET ASIDE for him (never upgraded further, the gear sweep hands it over). Once he wears the cap level (UPGRADE_MAX_LEVEL_BY_ITEM) nothing is gambled any more.
     UPGRADE_GAMBLE_MIN_CHANCE: 0.1, // lowest success chance a fodder copy is tried at
-    UPGRADE_NO_SPARE_NAMES: ["mwhelmet", "mwarmor", "mwpants", "mwgloves", "mwboots"], // Sean 2026-11-22: Hunter Warrior pieces are upgraded to +7 without a spare copy (a few will break on the way, he accepts it)
+    UPGRADE_NO_SPARE_NAMES: ["mwhelmet", "mwarmor", "mwpants", "mwgloves", "mwboots", "t2quiver", "mcape"], // Sean 2026-11-22: Hunter Warrior pieces are upgraded to +7 without a spare copy (a few will break on the way, he accepts it)
     TOKEN_BUY_ENABLED: true, // Sean 2026-11-22: Monster Tokens in the bank are spent at Daisy on Hunter Warrior gear (round 2 of the exchange runs)
     TOKEN_BUY_ITEM: "monstertoken",
     TOKEN_NPC: "monsterhunter",

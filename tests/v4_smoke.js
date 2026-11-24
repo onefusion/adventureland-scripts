@@ -278,7 +278,7 @@ const RANGER_OVR = [[/PARTY_MEMBERS: (?:\[[^\]]*\]|C\.PARTY_MEMBERS)/, "PARTY_ME
 const WC_OFF = [/WARRIOR_COMPOUND: (?:\{[^\n]*\n|C\.WARRIOR_COMPOUND,\n)/, "WARRIOR_COMPOUND: null,\n", true]; // v5: the Warrior compound set is tested on its own (WC1, WC2)
 const RC_OFF = [/RANGER_COMPOUND: (?:\{[^\n]*\n|C\.RANGER_COMPOUND,\n)/, "RANGER_COMPOUND: {},\n", true]; // v5: the Ranger compound focus (dexring) is tested on its own (CF1, CF2)
 const MERCH_OVR = [WC_OFF, RC_OFF, [/COMPOUND_ENABLED: true/, "COMPOUND_ENABLED: false"], [/UPGRADE_ENABLED: true/, "UPGRADE_ENABLED: false"], [/CRAFT_ENABLED: true/, "CRAFT_ENABLED: false"], [/LOTTERY_ENABLED: true/, "LOTTERY_ENABLED: false"]];
-const MERCH_OVR_COMPOUND = [WC_OFF, RC_OFF, [/UPGRADE_ENABLED: true/, "UPGRADE_ENABLED: false"], [/CRAFT_ENABLED: true/, "CRAFT_ENABLED: false"], [/LOTTERY_ENABLED: true/, "LOTTERY_ENABLED: false"]];
+const MERCH_OVR_COMPOUND = [[/COMPOUND_KEEP_COPIES: 0,/, "COMPOUND_KEEP_COPIES: 3,"], WC_OFF, RC_OFF, [/UPGRADE_ENABLED: true/, "UPGRADE_ENABLED: false"], [/CRAFT_ENABLED: true/, "CRAFT_ENABLED: false"], [/LOTTERY_ENABLED: true/, "LOTTERY_ENABLED: false"]];
 
 function merchant_char(world, o, ovr) {
   const m = make_char(world, ROSTER.merchant.name, Object.assign({ ctype: "merchant", x: -115, y: -5, gold: 20000 }, o), "AutoMerchant v4.js", ovr || MERCH_OVR);
@@ -874,7 +874,7 @@ T("W4 gear sweep: a finished quiver goes to the Ranger with an empty offhand slo
 });
 T("W5 gear sweep: an Agile Quiver (t2quiver) in the bank goes to SexyDexy although everyone wears a base quiver, and he gets it at his next meeting", async (w) => {
   w.bank.items1.push({ name: "t2quiver", level: 4 });
-  const m = merchant_char(w, { gold: 50000 }, SW_OVR);
+  const m = merchant_char(w, { gold: 50000 }, SW_OVR.concat([[/UPGRADE_MAX_LEVEL_BY_ITEM: \{ t2quiver: 5,/, "UPGRADE_MAX_LEVEL_BY_ITEM: {"], [/"t2quiver", "mcape"\]/, "]"]]));
   const L = fake_ranger(w); const F = make_char(w, "Dexy2", { x: -110, y: 25 });
   const send = () => { gear_rep(L, { offhand: { name: "quiver", level: 5 } }); gear_rep(F, { offhand: { name: "quiver", level: 3 } }); };
   send(); w.clock.every(send, 60000);
@@ -1252,6 +1252,16 @@ T("L4 compound ladder: only the best accessory of a kind is compounded", async (
   const n = (nm, lv) => all.filter((x) => x && x.name === nm && (x.level || 0) === lv).length;
   return [[n("ringsj", 1) === 1 && n("ringsj", 0) === 3, "ringsj: one triple made one +1, three +0 stay behind"], [n("badring", 0) === 6 && n("badring", 1) === 0, "badring left alone"]];
 });
+T("CP2 compound with COMPOUND_KEEP_COPIES 0: exactly three identical rings are compounded (no spare triple needed)", async (w) => {
+  for (let i = 0; i < 3; i++) w.bank.items0.push({ name: "ringsj", level: 0 });
+  const m = merchant_char(w, { gold: 50000 }, LAD_OVR.filter((x) => !/COMPOUND_KEEP_COPIES/.test(String(x[0]))));
+  const L = fake_ranger(w); const F = make_char(w, "Dexy2", { x: -110, y: 25 });
+  const send = () => { gear_rep(L, {}); gear_rep(F, {}); }; send(); w.clock.every(send, 60000);
+  await w.clock.run(900);
+  const all = [].concat(w.bank.items0, w.bank.items1, w.bank.items3, m.items);
+  const n0 = all.filter((x) => x && x.name === "ringsj" && !(x.level > 0)).length;
+  return [[logged(w, "Goodies", /COMPOUND (SUCCESS|FAIL)|compounding|Compound(ed)?/i) || n0 < 3, "three +0 rings were compounded (+0 left: " + n0 + ")"]];
+});
 T("CP1 compound safety: five identical rings -> nothing is compounded (a failure would destroy the last triple)", async (w) => {
   for (let i = 0; i < 5; i++) w.bank.items0.push({ name: "ringsj", level: 0 });
   const m = lad_world(w);
@@ -1339,6 +1349,19 @@ T("UPF3 Fire Bow set aside: bows that already beat SexyDexy's are not upgraded (
   const send = () => { gear_rep(L, { mainhand: { name: "firebow", level: 4 } }); gear_rep(F, {}); }; send(); w.clock.every(send, 60000);
   await w.clock.run(2400);
   return [[!logged(w, "Goodies", /UPGRADE SUCCESS/), "nothing upgraded"], [logged(w, "Goodies", /Gear sweep: firebow \+6 for SexyDexy/), "a +6 is set aside for SexyDexy"]];
+});
+T("UPNS1 Agile Quiver +1 (single copy) is upgraded without a spare, SexyDexy wears a +4; it stops at +5", async (w) => {
+  w.G.items.scroll1 = { g: 40000, s: true, type: "uscroll", grade: 1 }; w.G.items.scroll2 = { g: 1600000, s: true, type: "uscroll", grade: 2 };
+  w.bank.items0.push({ name: "t2quiver", level: 1 });
+  const ovr = UPG_REAL.concat([[/UPGRADE_SESSION_PCT: 0\.1/, "UPGRADE_SESSION_PCT: 1"]]);
+  const m = merchant_char(w, { gold: 20000000 }, ovr);
+  const real = m.sb.upgrade; m.sb.upgrade = (a, si, off, only) => (only ? Promise.resolve({ chance: 0.9, grace: 0 }) : real(a, si, off, only));
+  const L = fake_ranger(w); const F = make_char(w, "Dexy2", { x: -110, y: 25 });
+  const send = () => { gear_rep(L, { offhand: { name: "t2quiver", level: 4 } }); gear_rep(F, {}); }; send(); w.clock.every(send, 60000);
+  await w.clock.run(2000);
+  const all = [].concat(w.bank.items0, w.bank.items1, w.bank.items3, m.items);
+  const top = Math.max(0, ...all.filter((i) => i && i.name === "t2quiver").map((i) => i.level || 0));
+  return [[logged(w, "Goodies", /UPGRADE \w+ - t2quiver \+1 -> \+2/), "the single +1 is tried"], [top <= 5, "never above +5: " + top]];
 });
 T("UP2 upgrade safety: two copies -> one is upgraded, the other stays as the fallback", async (w) => {
   w.bank.items0.push({ name: "plaincap", level: 0 }, { name: "plaincap", level: 0 });
@@ -3354,7 +3377,7 @@ const TASK_ORDER = () => [...MERCH_SRC.matchAll(/sched_add\(\{\s*name: "(\w+)"/g
 T("SC1 scheduler: the task order is the one agreed with Sean (guards against an accidental reorder)", async (w) => {
   if (!IS_V5) return skip_v4;
   const got = TASK_ORDER().join(",");
-  const want = "kit,manual,hold,bankxs,sellnow,sale,tidy,sweep,mluck_town,mluck_party,exchange,exchange2,compound,upgrade,craft,donate,lottery,market,mluck"; // Sean-approved order (Phase 3); v4 was manual,exchange,donate,lottery,mluck,craft,compound,tidy,sweep,upgrade
+  const want = "kit,manual,hold,bankxs,sellnow,sale,tidy,sweep,mluck_town,mluck_party,exchange,exchange2,compound,upgrade,craft,donate,lottery,market,ron,mluck"; // Sean-approved order (Phase 3); v4 was manual,exchange,donate,lottery,mluck,craft,compound,tidy,sweep,upgrade
   return [[got === want, "order is " + got]];
 });
 T("SC2 scheduler: set(\"sched_status\",\"1\") prints every task's timer and clears the key", async (w) => {

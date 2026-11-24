@@ -25,6 +25,7 @@
     lottery_next: now() + 240000,
     donate_next: now() + 300000,
     market_next: now() + 420000,
+    ron_next: now() + 900000,
     craft_sig: "",
     manual: null, // set by the top buttons: { real: bool }
     exch_empty_until: 0,
