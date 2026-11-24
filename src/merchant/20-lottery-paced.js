@@ -107,7 +107,8 @@
     await drain_stand("the lottery");
     if (!(await open_bank_for_compound())) return go_home();
     const bank_gold = Number(character.bank && character.bank.gold) || 0;
-    const spare = Math.max(0, bank_gold - CFG.LOTTERY_BANK_FLOOR);
+    const floor = Math.round(bank_gold * CFG.LOTTERY_BANK_FLOOR_PCT);
+    const spare = Math.max(0, bank_gold - floor);
     const budget = Math.min(spare, lottery_left());
     if (budget < 100000) {
       lsay(
@@ -116,7 +117,7 @@
           " (bank " +
           bank_gold +
           " minus floor " +
-          CFG.LOTTERY_BANK_FLOOR +
+          floor +
           "), daily cap left " +
           lottery_left()
       );

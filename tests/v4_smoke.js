@@ -983,8 +983,8 @@ T("LT5 lottery: the account may buy 2 item tickets a day -> both are bought (the
   const spent = JSON.parse(w.store["Goodies:lottery_ledger"] || "{}").spent;
   return [[w.lottery.buys.filter((b) => b === "item").length === 2 && w.lottery.buys.filter((b) => b === "money").length === 5, "bought " + w.lottery.buys.join(",")], [spent === 4500000, "ledger " + spent]];
 });
-T("LT2 lottery: bank below the floor -> nothing bought, says why", async (w) => {
-  w.bank.gold = 9000000;
+T("LT2 lottery: bank nearly empty -> nothing bought, says why", async (w) => {
+  w.bank.gold = 50000;
   const m = merchant_char(w, { gold: 50000 }, LOT_OVR);
   await w.clock.run(900);
   return [[w.lottery.buys.length === 0, "nothing bought"], [logged(w, "Goodies", /Lottery: nothing to spend/), "explained"]];
