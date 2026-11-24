@@ -303,7 +303,7 @@
     // ---- Rose's lotteries (Item Lottery ticket + Money Lottery tickets). Spare gold only, never above the daily cap. ----
     // Switch off without editing: set("lottery_off", true) in the game console (false = on again).
     LOTTERY_ENABLED: true,
-    LOTTERY_DAILY_CAP: 2500000, // most gold spent on tickets per UTC day (item ticket + money tickets together)
+    LOTTERY_DAILY_CAP: 4500000, // most gold spent on tickets per UTC day (item tickets + money tickets together). Sean 2026-11-23: an account may buy 2 Item Lottery tickets a day now (2 x 2M) + 5 money tickets (5 x 100k) = 4.5M; it was 2.5M for ONE item ticket
     LOTTERY_BANK_FLOOR: 10000000, // spare gold = bank gold above this (it sits above the compound floor and the upgrade budget)
     LOTTERY_EVERY_MS: 60 * 60000, // how often a purchase trip is considered
     LOTTERY_ITEM: true, // buy the Item Lottery ticket

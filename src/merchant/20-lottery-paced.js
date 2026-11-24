@@ -160,13 +160,11 @@
     const ic = item && item.available && item.current;
     if (CFG.LOTTERY_ITEM && ic) {
       closes.push(Date.parse(ic.closesAt));
-      const room = (ic.accountLimit || 1) - (item.accountTickets || 0);
-      if (
-        ic.purchasesPermitted &&
-        room > 0 &&
-        ic.ticketPrice <= left &&
-        ic.ticketPrice <= lottery_left()
-      ) {
+      // Sean 2026-11-23: an account may now buy 2 Item Lottery tickets per day (accountLimit says so): buy every ticket that is left, one after the other,
+      // each with its own requestId (a retry of ONE ticket reuses its id, so a ticket is never bought twice)
+      let room = (ic.accountLimit || 1) - (item.accountTickets || 0);
+      let bought = 0;
+      while (room > 0 && ic.purchasesPermitted && ic.ticketPrice <= left && ic.ticketPrice <= lottery_left()) {
         const rid = "i" + Date.now() + Math.random().toString(36).slice(2, 10);
         let res = null;
         for (let t = 0; t < 5; t++) {
@@ -181,27 +179,34 @@
         }
         if (res && res.success) {
           left -= ic.ticketPrice;
+          room--;
+          bought++;
           lottery_spend(
             ic.ticketPrice,
-            "an Item Lottery ticket (prize " +
+            "an Item Lottery ticket " + (bought + (item.accountTickets || 0)) + " of " + (ic.accountLimit || 1) + " (prize " +
               JSON.stringify(ic.prize).slice(0, 120) +
               ")"
           );
-        } else
+        } else {
           say(
             "Lottery: item ticket not bought: " +
               JSON.stringify(res || "no answer"),
             "#CF575F"
           );
-      } else
+          break;
+        }
+      }
+      if (!bought)
         say(
           "Lottery: no item ticket - " +
             (!ic.purchasesPermitted
               ? "purchases closed"
               : room <= 0
-              ? "ticket limit reached"
+              ? "ticket limit reached (" + (item.accountTickets || 0) + " of " + (ic.accountLimit || 1) + ")"
               : "price " + ic.ticketPrice + " is above what is left to spend")
         );
+      else if (room > 0)
+        say("Lottery: " + room + " more item ticket(s) allowed today, not bought (price " + ic.ticketPrice + ", left to spend " + Math.min(left, lottery_left()) + ")");
     }
     // money lottery
     const mc = money && money.available && money.current;
