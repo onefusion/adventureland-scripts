@@ -5,6 +5,15 @@
   //   money_lottery_status -> money_lottery_status {product:"money_lottery", current:{drawId, jackpotGold, ticketPrice, accountLimit, closesAt, purchasesPermitted}, accountTickets}
   //   money_lottery_quick_pick -> money_lottery_quick_pick {success, numbers}
   //   money_lottery_purchase {requestId, numbers, drawId} -> money_lottery_purchase {success, receipt:{numbers}}
+  // Sean 2026-11-24: every lottery message is also kept in the game's storage (last 40), so the reason for a missed ticket can be read later even after the log scrolled away:  console.log(get("lottery_notes"))
+  function lsay(msg, color) {
+    say(msg, color);
+    try {
+      const n = JSON.parse(get("lottery_notes") || "[]");
+      n.push(new Date().toISOString() + " " + msg);
+      set("lottery_notes", JSON.stringify(n.slice(-40)));
+    } catch (e) {}
+  }
   const lottery_day = () => String(Math.floor(Date.now() / 86400000)); // UTC day number
   function lottery_ledger() {
     let l = null;
@@ -23,7 +32,7 @@
       set("lottery_ledger", JSON.stringify(l));
     } catch (e) {}
     donate_track_out(n);
-    say(
+    lsay(
       "Lottery: bought " +
         what +
         " for " +
@@ -101,7 +110,7 @@
     const spare = Math.max(0, bank_gold - CFG.LOTTERY_BANK_FLOOR);
     const budget = Math.min(spare, lottery_left());
     if (budget < 100000) {
-      say(
+      lsay(
         "Lottery: nothing to spend - spare gold " +
           spare +
           " (bank " +
@@ -119,7 +128,7 @@
       wait_for(() => character.gold >= before + budget - 1, 5000)
     );
     if (dep.failed || got.failed) {
-      say(
+      lsay(
         "Lottery: could not withdraw " +
           budget +
           ": " +
@@ -137,7 +146,7 @@
       "visiting Rose (lottery)"
     );
     if (r.failed) {
-      say("Lottery: could not reach Rose: " + r.reason, "#CF575F");
+      lsay("Lottery: could not reach Rose: " + r.reason, "#CF575F");
       return go_home();
     }
     let left = budget;
@@ -148,11 +157,11 @@
       {},
       "money_lottery_status"
     );
-    say(
+    lsay(
       "Lottery status - item: " +
         JSON.stringify(item || "no answer").slice(0, 400)
     );
-    say(
+    lsay(
       "Lottery status - money: " +
         JSON.stringify(money || "no answer").slice(0, 400)
     );
@@ -188,7 +197,7 @@
               ")"
           );
         } else {
-          say(
+          lsay(
             "Lottery: item ticket not bought: " +
               JSON.stringify(res || "no answer"),
             "#CF575F"
@@ -197,7 +206,7 @@
         }
       }
       if (!bought)
-        say(
+        lsay(
           "Lottery: no item ticket - " +
             (!ic.purchasesPermitted
               ? "purchases closed"
@@ -206,7 +215,7 @@
               : "price " + ic.ticketPrice + " is above what is left to spend")
         );
       else if (room > 0)
-        say("Lottery: " + room + " more item ticket(s) allowed today, not bought (price " + ic.ticketPrice + ", left to spend " + Math.min(left, lottery_left()) + ")");
+        lsay("Lottery: " + room + " more item ticket(s) allowed today, not bought (price " + ic.ticketPrice + ", left to spend " + Math.min(left, lottery_left()) + ")");
     }
     // money lottery
     const mc = money && money.available && money.current;
@@ -234,7 +243,7 @@
           if (!(q && q.reason === "throttled")) break;
         }
         if (!q || !q.success || !q.numbers) {
-          say(
+          lsay(
             "Lottery: quick pick failed: " + JSON.stringify(q || "no answer"),
             "#CF575F"
           );
@@ -253,7 +262,7 @@
           if (!(res && res.reason === "throttled")) break; // same requestId on a retry, so a ticket can never be bought twice
         }
         if (!res || !res.success) {
-          say(
+          lsay(
             "Lottery: money ticket not bought: " +
               JSON.stringify(res || "no answer"),
             "#CF575F"
@@ -277,7 +286,7 @@
         now() + 10 * 60000,
         Math.min(now() + 6 * 3600000, next_draw + 30000)
       );
-    say(
+    lsay(
       "Lottery done: spent " +
         (budget - left) +
         " gold; next visit " +
