@@ -171,6 +171,7 @@ AL.runtime = (function () {
       const tp = hooks.tank_pos ? hooks.tank_pos() : null;
       const pos = tp || R.leader_pos();
       if (!pos) return false;
+      if (pos.map === "bank") return false; // Sean 2026-11-24: the bank holds ONE character at a time: nobody follows the leader in (they would queue at the door); they wait outside until he is back
       if (now() < (S.boar_until || 0) && CFG.BOAR_MAPS.indexOf(pos.map) !== -1) return false; // (boars) not back into Winterland yet
       const near = character.map === pos.map && d2(character, pos) <= (tp ? Math.min(CFG.TANK_NEAR_PX, (character.range || 120) * 0.6) : CFG.FOLLOW_FAR_PX);
       if (near) return false;
