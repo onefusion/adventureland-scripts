@@ -209,10 +209,10 @@
       if (!bought)
         lsay(
           "Lottery: no item ticket - " +
-            (!ic.purchasesPermitted
-              ? "purchases closed"
-              : room <= 0
+            (room <= 0
               ? "ticket limit reached (" + (item.accountTickets || 0) + " of " + (ic.accountLimit || 1) + ")"
+              : !ic.purchasesPermitted
+              ? "the server says purchases are not permitted (state " + item.state + ")"
               : "price " + ic.ticketPrice + " is above what is left to spend")
         );
       else if (room > 0)
