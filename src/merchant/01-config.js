@@ -303,6 +303,8 @@
     // ---- world watch: live bosses and scheduled events, read from the server info the game publishes (read only, no actions) ----
     WATCH_ENABLED: true,
     WATCH_EVERY_MS: 30000,
+    EVENT_QUIET_MIN: 5, // Sean 2026-11-24: this many minutes before a scheduled event the Merchant takes no new round except the ones in EVENT_QUIET_ALLOW (0 = off)
+    EVENT_QUIET_ALLOW: ["hold", "kit", "bankxs", "sellnow", "tidy", "sweep"], // hold = manual hold, kit = the Warrior's Basher, bankxs / sellnow = junk and bank excess sale, tidy = bag tidy, sweep = gear sweep (hands over upgraded / compounded pieces)
     WATCH_EVENT_WARN_MIN: [60, 15, 5], // log a scheduled event this many minutes before it starts
     WATCH_EVENTS_LOG: ["witchcipher", "goobrawl", "gigacrab", "abtesting"], // 2026-11-21: the schedule entries of these events are logged raw (console too) once per change, so the live shape and the join window can be read
     WATCH_WITCH: true, // 2026-11-21: log the Witch's Cipher info (witch_cipher_info(), character.witchcipher, the shared board server.status.witchcipher) when it changes and the Witch ingredients in the Merchant's bag

@@ -225,7 +225,7 @@ try {
           (t) => t.wait_since && now() - t.wait_since > CFG.SCHED_MAX_WAIT_MS
         );
         for (const t of starved) {
-          if (!t.due()) continue;
+          if (quiet_blocks(t) || !t.due()) continue;
           say(
             "Schedule: " +
               t.label +
@@ -241,7 +241,7 @@ try {
         if (ran) continue;
         for (const t of SCHED.tasks) {
           if (t.pre) t.pre();
-          if (!t.due()) continue;
+          if (quiet_blocks(t) || !t.due()) continue;
           await sched_run(t, sm);
           ran = true;
           break;

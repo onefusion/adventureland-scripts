@@ -1068,6 +1068,27 @@ T("WT1 world watch: a boss going live and gone is logged, the boss table sorts b
   const warns = w.logs.filter((l) => l.who === "Goodies" && /Event soon: Snowman Hunt/.test(l.msg)).map((l) => l.msg);
   return [[logged(w, "Goodies", /Boss up: Phoenix .*at main 100,200/), "phoenix up logged"], [logged(w, "Goodies", /Boss gone: Phoenix/), "phoenix gone logged"], [rep && rep.msg.indexOf("mvampire") < rep.msg.indexOf("phoenix"), "table lists the bigger boss first: " + (rep && rep.msg)], [warns.length === 3, "one warning per limit passed (60, 15, 5 min): " + warns.length]];
 });
+T("EQ1 event quiet window: 3 min before an event the Merchant starts no market round", async (w) => {
+  w.G.events = { goobrawl: { name: "Goo Brawl" } };
+  const m = merchant_char(w, { gold: 50000 }, MERCH_OVR);
+  const L = fake_ranger(w); const F = make_char(w, "Dexy2", { x: -110, y: 25 });
+  const send = () => { gear_rep(L, {}); gear_rep(F, {}); }; send(); w.clock.every(send, 60000);
+  m.sb.parent.S = { schedule: { server_time: Date.now(), events: [{ id: "q", event: "goobrawl", status: "scheduled", at: Date.now() + 3 * 60000 }] } };
+  await w.clock.run(60);
+  w.store["Goodies:market_check"] = "1";
+  await w.clock.run(120);
+  return [[!logged(w, "Goodies", /Market watch/), "no market round inside the quiet window"], [logged(w, "Goodies", /no new rounds except/), "the window is announced"]];
+});
+T("EQ2 event quiet window: 30 min before an event the market round runs as usual", async (w) => {
+  w.G.events = { goobrawl: { name: "Goo Brawl" } };
+  const m = merchant_char(w, { gold: 50000 }, MERCH_OVR);
+  const L = fake_ranger(w); const F = make_char(w, "Dexy2", { x: -110, y: 25 });
+  const send = () => { gear_rep(L, {}); gear_rep(F, {}); }; send(); w.clock.every(send, 60000);
+  m.sb.parent.S = { schedule: { server_time: Date.now(), events: [{ id: "q", event: "goobrawl", status: "scheduled", at: Date.now() + 30 * 60000 }] } };
+  w.store["Goodies:market_check"] = "1";
+  await w.clock.run(120);
+  return [[logged(w, "Goodies", /Market watch/), "the market round started"], [!logged(w, "Goodies", /no new rounds except/), "no quiet window yet"]];
+});
 T("WT2 world watch: raw event entries, the Witch's Cipher board and the ingredient counts are logged once per change", async (w) => {
   if (!/WATCH_WITCH/.test(src("AutoMerchant v5.js"))) return skip_v4;
   w.G.items.verdantspore = { name: "Verdant Spore", type: "material", s: 9999 };

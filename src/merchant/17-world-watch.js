@@ -2,7 +2,15 @@
   // The game keeps the server info in S: every live boss is S[monster] = {live, hp, max_hp, map, x, y, target} and
   // the published event lineup is S.schedule.events = [{id, event, at, status}]. Nothing here acts; it only logs.
   // Boss table is kept across reloads in get/set("boss_log"): { monster: {max_hp, last_seen, map, x, y} }.
-  const WATCH = { up: {}, warned: {}, report_at: 0, offset: 0, synced: null };
+  const WATCH = { up: {}, warned: {}, report_at: 0, offset: 0, synced: null, next_at: 0, quiet_said: "" };
+  // Sean 2026-11-24: in the last CFG.EVENT_QUIET_MIN minutes before a scheduled event the Merchant starts nothing new except the tasks in CFG.EVENT_QUIET_ALLOW (junk sale, gear sweep, bag tidy ...),
+  // so the party can hand him everything at the pre-event visit and he gives them the upgraded / compounded pieces. WATCH.next_at = local time (ms) of the next scheduled event.
+  function event_quiet() {
+    if (!CFG.EVENT_QUIET_MIN || !WATCH.next_at) return false;
+    const left = WATCH.next_at - Date.now();
+    return left > 0 && left <= CFG.EVENT_QUIET_MIN * 60000;
+  }
+  const quiet_blocks = (t) => event_quiet() && CFG.EVENT_QUIET_ALLOW.indexOf(t.name) === -1;
   function boss_table() {
     try {
       return JSON.parse(get("boss_log") || "{}") || {};
@@ -110,6 +118,18 @@
       WATCH.offset = sch.server_time - Date.now();
     }
     const here = Date.now() + WATCH.offset;
+    let next_ev = 0;
+    for (const o of (sch && sch.events) || []) {
+      if (o && o.status === "scheduled" && o.at > here && (!next_ev || o.at < next_ev)) next_ev = o.at;
+    }
+    WATCH.next_at = next_ev ? Date.now() + (next_ev - here) : 0;
+    if (event_quiet()) {
+      const key = String(next_ev);
+      if (WATCH.quiet_said !== key) {
+        WATCH.quiet_said = key;
+        say("Event in " + Math.ceil((WATCH.next_at - Date.now()) / 60000) + " min or less: no new rounds except " + CFG.EVENT_QUIET_ALLOW.join(", ") + " until it starts (the party hands over its bags first)", "#E0A040");
+      }
+    }
     for (const o of (sch && sch.events) || []) {
       if (!o || o.status !== "scheduled" || !(o.at > here)) continue;
       const mins = (o.at - here) / 60000;
