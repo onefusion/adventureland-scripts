@@ -181,7 +181,7 @@
     HUNT_NPC_FALLBACK: { map: "main", x: 126, y: -413 }, // used if find_npc cannot place her
     HUNT_MAX_DIFFICULTY: 1, // the game's HP-bar rating: 0 easy (green), 1 medium (orange), 2 hard (red). Harder hunts are skipped
     HUNT_MAX_MONSTER_HP: 250000, // never attempt monsters with more HP than this (bosses)
-    HUNT_AVOID_TYPES: ["ghost"], // monster types (G.monsters keys) to never hunt, even if they look doable. Sean 2026-11-24: ghost - the walk there goes through a cave of vampire bats that aggro hard and fast (the Ranger died twice, the Warrior and Priest followed)
+    HUNT_AVOID_TYPES: ["ghost", "booboo"], // Sean 2026-11-25: booboo added. monster types (G.monsters keys) to never hunt, even if they look doable. Sean 2026-11-24: ghost - the walk there goes through a cave of vampire bats that aggro hard and fast (the Ranger died twice, the Warrior and Priest followed)
     ESCORT: true, // Sean 2026-11-20: the Warrior or Priest has not been within ESCORT_NEAR_PX of me (or on my map) for ESCORT_AFTER_MS: stop and walk to them (never on my own junk / potion trip, a courier trip, a retreat or a boss event). Twice within 10 min = this farm keeps splitting the party: it is skipped for a while
     ESCORT_AFTER_MS: 60000,
     ESCORT_NEAR_PX: 700,
