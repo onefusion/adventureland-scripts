@@ -176,7 +176,8 @@
       let bought = 0;
       let buy_failed = false;
       while (room > 0 && ic.purchasesPermitted && ic.ticketPrice <= left && ic.ticketPrice <= lottery_left()) {
-        const rid = "i" + Date.now() + Math.random().toString(36).slice(2, 10);
+        // the game's own window sends a 32-character letters-and-digits id with the drawId (captured 2026-11-24: {"requestId":"qTMuadCF...","drawId":"LTD_20261125000000"})
+        const rid = Array.from({ length: 32 }, () => "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"[Math.floor(Math.random() * 62)]).join("");
         let res = null;
         // Sean 2026-11-24: the server answered {"success":false,"reason":"invalid_purchase_request"} to { requestId } alone. The money lottery sends the drawId too, so the item ticket is tried with the drawId first,
         // then (if the server still calls it invalid) with the requestId alone. The same requestId throughout, so a ticket can never be bought twice.
