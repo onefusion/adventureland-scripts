@@ -1290,6 +1290,19 @@ T("CP2 compound with COMPOUND_KEEP_COPIES 0: exactly three identical rings are c
   const n0 = all.filter((x) => x && x.name === "ringsj" && !(x.level > 0)).length;
   return [[logged(w, "Goodies", /COMPOUND (SUCCESS|FAIL)|compounding|Compound(ed)?/i) || n0 < 3, "three +0 rings were compounded (+0 left: " + n0 + ")"]];
 });
+T("HP2 Amulets of HP: a +3 is held for the Warrior (not worn yet) - the +0 copies are not compounded and are sold, even though they would beat his empty slot", async (w) => {
+  if (!IS_R5) return skip_r4;
+  for (let i = 0; i < 30; i++) w.bank.items0.push({ name: "hpamulet", level: 0 });
+  w.bank.items1.push({ name: "hpamulet", level: 3 });
+  const m = merchant_char(w, { gold: 50000 }, WC_ON(LAD_OVR));
+  const L = fake_ranger(w); const F = make_char(w, "Dexy2", { x: -110, y: 25 }); const W = make_char(w, ROSTER.warrior.name, { x: -110, y: 35 });
+  const send = () => { gear_rep(L, {}); gear_rep(F, {}); gear_rep(W, {}); };
+  send(); w.clock.every(send, 60000);
+  await w.clock.run(1500);
+  const all = [].concat(w.bank.items0, w.bank.items1, w.bank.items3, m.items).filter((x) => x && x.name === "hpamulet");
+  const n = (lv) => all.filter((x) => (x.level || 0) === lv).length;
+  return [[n(1) === 0 && n(3) === 1, "no compound, +3 kept: +1=" + n(1) + " +3=" + n(3)], [n(0) === 0, "surplus +0 sold: " + n(0)]];
+});
 T("CP3 compound: Rings of Dexterity +2 are never used as compound input (the Venom Band needs them), +0 rings still go up", async (w) => {
   for (let i = 0; i < 9; i++) w.bank.items0.push({ name: "dexring", level: 2 });
   const m = lad_world(w);

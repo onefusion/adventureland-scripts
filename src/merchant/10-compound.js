@@ -49,6 +49,7 @@
       CFG.WARRIOR_COMPOUND.items[name]) ||
     null;
   const WC_CACHE = {};
+  let WC_BANK = null;
   function wc_info(name) {
     const c = WC_CACHE[name];
     if (c && now() - c.at < 700) return c;
@@ -69,14 +70,21 @@
         copies.push(it);
     };
     for (let i = 0; i < character.isize; i++) add(character.items[i]);
+    // Sean 2026-11-25: the bank contents are only readable while standing in the bank. Away from it (at Gabriel selling the surplus) the last count of qualifying bank copies is used,
+    // otherwise a +3 that sits in the bank made the set look incomplete and the surplus +0 copies were never sold.
+    WC_BANK = WC_BANK || {};
+    const bank_ok = CFG.COMPOUND_PACKS.some((pack) => Array.isArray(character.bank && character.bank[pack]));
+    const n_bag = copies.length;
     for (const pack of CFG.COMPOUND_PACKS) {
       const arr = character.bank && character.bank[pack];
       if (Array.isArray(arr)) arr.forEach(add);
     }
+    if (bank_ok) WC_BANK[name] = copies.length - n_bag;
+    const unseen = bank_ok ? 0 : WC_BANK[name] || 0; // qualifying copies known to be in the bank but not visible now
     copies.sort((a, b) => (a.level || 0) - (b.level || 0)); // the lowest qualifying copies are the ones kept, the better ones can go
     const need = Math.max(0, cfg.count - have);
     const keep = new Set(copies.slice(0, need));
-    const out = { at: now(), done: have + copies.length >= cfg.count, keep };
+    const out = { at: now(), done: have + copies.length + unseen >= cfg.count, keep };
     WC_CACHE[name] = out;
     return out;
   }
@@ -146,7 +154,7 @@
     };
   }
   const never_sell = (it) =>
-    !!it && (CFG.NEVER_SELL.indexOf(it.name) !== -1 || support_wants(it));
+    !!it && (CFG.NEVER_SELL.indexOf(it.name) !== -1 || (!wc_surplus(it) && support_wants(it))); // Sean 2026-11-25: a copy beyond the Warrior's finished set is surplus even if it would still beat what he wears now (the +3 is on its way)
   const target_of = (name) =>
     focus_of(name) ? focus_of(name).target : CFG.COMPOUND_TARGET_LEVEL;
   const keep_of = (name) =>
