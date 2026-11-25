@@ -363,6 +363,8 @@
       S.compound_next = now() + 3000;
       return;
     }
+    // scrolls stored in the bank come first (before any gold is spent)
+    for (const nm of scroll_names) await scrolls_from_bank(nm, planned[nm]);
     // gold for the scrolls (only above the bank floor)
     const to_buy = {};
     let cost = 0;

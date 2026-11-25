@@ -246,6 +246,7 @@
     BANK_SORT_STEP_MS: 350, // pause between two moves
     BANK_MERGE: true, // v5: before sorting, stackables of the same kind that sit in several bank slots are joined into one stack (when the total fits the game's stack size)
     BANK_MERGE_MAX: 40, // joins per bank visit
+    COMPOUND_MAX_INPUT_BY_ITEM: { dexring: 1 }, // Sean 2026-11-24: Rings of Dexterity +2 are NOT compounded into +3: the Venom Band recipe needs a +2 ring each, so that would be a loss. Item name -> highest level that may be used as compound input (+0 and +1 still go up to +2)
     COMPOUND_SKIP: [], // item names never compounded (e.g. ["ringsj"] if you would rather sell those)
     // Triples (3 items -> 1) per round. 8 = 24 items picked up and compounded per run, to clear a bank that is full of
     // excess compoundable gear. Once the bank is tidy (everything compounded and sold) 3 per run is enough: set this back to 3.

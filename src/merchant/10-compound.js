@@ -163,6 +163,7 @@
     !!G.items[it.name] &&
     !!G.items[it.name].compound &&
     (it.level || 0) <= comp_max_input(it.name) &&
+    (it.level || 0) <= (CFG.COMPOUND_MAX_INPUT_BY_ITEM && CFG.COMPOUND_MAX_INPUT_BY_ITEM[it.name] !== undefined ? CFG.COMPOUND_MAX_INPUT_BY_ITEM[it.name] : 99) &&
     CFG.COMPOUND_SKIP.indexOf(it.name) === -1 &&
     !(wc_cfg(it.name) && wc_done(it.name)); // the Warrior's set is complete: no more of it
   const comp_key = (it) => it.name + "|" + (it.level || 0) + "|" + (it.p || "");
@@ -218,6 +219,24 @@
     return g;
   }
   const scroll_for = (it) => "cscroll" + scroll_grade(it);
+  // Sean 2026-11-24: scrolls already stored in the bank are used BEFORE any are bought (saves gold over time). Takes whole stacks out of the bank until `want` are in the bag; only goes to the bank
+  // when the last-seen bank contents show a stack. Returns how many came out.
+  async function scrolls_from_bank(name, want) {
+    if (quantity(name) >= want) return 0;
+    if (!bank_stacks(name).length) return 0;
+    if (!(await open_bank_for_compound())) return 0;
+    let taken = 0;
+    for (const st of bank_stacks(name).sort((a, b) => b.q - a.q)) {
+      if (quantity(name) >= want || free_slots() < 1) break;
+      const before = quantity(name);
+      const res = await call(() => bank_retrieve(st.pack, st.i));
+      const ok = await call(() => wait_for(() => quantity(name) > before, 4000));
+      if (res.failed || ok.failed) break;
+      taken += quantity(name) - before;
+    }
+    if (taken) say("Scrolls: took " + taken + "x " + name + " out of the bank before buying any", "#8AB4D0");
+    return taken;
+  }
   // ---- compound ladder: what the Rangers still lack, per accessory ----
   // held(name, t) = copies at +t or better that the Rangers wear or the Merchant holds (bag + bank); demand D = Rangers x slots.
   // The compound ladder lives in AL.planners.ladder (src/lib/planners.js, pure); this wrapper hands it the pieces held.

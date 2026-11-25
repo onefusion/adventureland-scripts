@@ -435,7 +435,8 @@
           w.stop_all = true;
           break;
         }
-        // scroll in the bag? else buy one (withdraw gold from the bank first when short)
+        // scroll in the bag? else one from the bank, else buy one (withdraw gold from the bank first when short)
+        await scrolls_from_bank(sname, 1);
         if (quantity(sname) < 1) {
           if (character.gold < price) {
             if (!(await open_bank_for_compound())) {

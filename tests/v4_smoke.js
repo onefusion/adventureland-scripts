@@ -1290,6 +1290,21 @@ T("CP2 compound with COMPOUND_KEEP_COPIES 0: exactly three identical rings are c
   const n0 = all.filter((x) => x && x.name === "ringsj" && !(x.level > 0)).length;
   return [[logged(w, "Goodies", /COMPOUND (SUCCESS|FAIL)|compounding|Compound(ed)?/i) || n0 < 3, "three +0 rings were compounded (+0 left: " + n0 + ")"]];
 });
+T("CP3 compound: Rings of Dexterity +2 are never used as compound input (the Venom Band needs them), +0 rings still go up", async (w) => {
+  for (let i = 0; i < 9; i++) w.bank.items0.push({ name: "dexring", level: 2 });
+  const m = lad_world(w);
+  await w.clock.run(900);
+  const all = [].concat(w.bank.items0, w.bank.items1, w.bank.items3, m.items);
+  const l2 = all.filter((x) => x && x.name === "dexring" && x.level === 2).length, l3 = all.filter((x) => x && x.name === "dexring" && x.level === 3).length;
+  return [[l2 === 9 && l3 === 0, "still nine +2 and no +3: +2=" + l2 + " +3=" + l3]];
+});
+T("CS1 compound scrolls from the bank: a stack of cscroll0 in the bank is used first - none is bought", async (w) => {
+  for (let i = 0; i < 9; i++) w.bank.items0.push({ name: "ringsj", level: 0 });
+  w.bank.items1.push({ name: "cscroll0", q: 10 });
+  const m = lad_world(w);
+  await w.clock.run(900);
+  return [[logged(w, "Goodies", /Scrolls: took \d+x cscroll0 out of the bank/), "scrolls taken from the bank"], [!logged(w, "Goodies", /Bought \d+x cscroll0/), "none bought"]];
+});
 T("CP1 compound safety: five identical rings -> nothing is compounded (a failure would destroy the last triple)", async (w) => {
   for (let i = 0; i < 5; i++) w.bank.items0.push({ name: "ringsj", level: 0 });
   const m = lad_world(w);
@@ -1390,6 +1405,15 @@ T("UPNS1 Agile Quiver +1 (single copy) is upgraded without a spare, SexyDexy wea
   const all = [].concat(w.bank.items0, w.bank.items1, w.bank.items3, m.items);
   const top = Math.max(0, ...all.filter((i) => i && i.name === "t2quiver").map((i) => i.level || 0));
   return [[logged(w, "Goodies", /UPGRADE \w+ - t2quiver \+1 -> \+2/), "the single +1 is tried"], [top <= 5, "never above +5: " + top]];
+});
+T("US1 upgrade scrolls from the bank: a scroll0 stack in the bank is used for the upgrade - none is bought", async (w) => {
+  w.bank.items0.push({ name: "plaincap", level: 0 }, { name: "plaincap", level: 0 });
+  w.bank.items1.push({ name: "scroll0", q: 5 });
+  const m = merchant_char(w, { gold: 50000 }, UPG_REAL.concat([[/UPGRADE_MAX_LEVEL: 1/, "UPGRADE_MAX_LEVEL: 3"]]));
+  const L = fake_ranger(w); const F = make_char(w, "Dexy2", { x: -110, y: 25 });
+  const send = () => { gear_rep(L, {}); gear_rep(F, {}); }; send(); w.clock.every(send, 60000);
+  await w.clock.run(900);
+  return [[logged(w, "Goodies", /Scrolls: took \d+x scroll0 out of the bank/), "taken from the bank"], [logged(w, "Goodies", /UPGRADE SUCCESS/), "an upgrade ran"], [!logged(w, "Goodies", /Buying scroll0|Bought .*scroll0/), "none bought"]];
 });
 T("UP2 upgrade safety: two copies -> one is upgraded, the other stays as the fallback", async (w) => {
   w.bank.items0.push({ name: "plaincap", level: 0 }, { name: "plaincap", level: 0 });
