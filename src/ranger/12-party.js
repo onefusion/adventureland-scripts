@@ -65,8 +65,9 @@
               farm,
               bees: !!R.bees_only,
               force: R.force ? R.force.type : null,
+              visit: !!(R.force && R.force.visit),
               wiggle: !!R.wiggle,
-              types: goal ? [] : (CFG.TARGET_TYPES || []).slice(0, 5), // what the Warrior may pull when nothing is fighting yet
+              types: goal || (R.force && R.force.visit) ? [] : (CFG.TARGET_TYPES || []).slice(0, 5), // what the Warrior may pull when nothing is fighting yet
             })
           );
   }

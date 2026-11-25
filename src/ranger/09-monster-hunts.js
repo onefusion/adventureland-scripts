@@ -526,6 +526,30 @@
       });
     } catch (e) {}
   }
+  // Sean 2026-11-25: "Pink Goblins" button: the group walks to the Pink Goblin spawn and stands there; nobody shoots one unless it attacks the party first (the Priest keeps everybody alive); click again to leave
+  const VISIT_MONSTER = "pinkgoblin";
+  function visit_button_refresh(force) {
+    try {
+      if (typeof add_top_button !== "function" || !is_leader()) return;
+      const on = !!(R.force && R.force.visit);
+      const label = on ? "Visiting: " + ((G.monsters[R.force.type] || {}).name || R.force.type) + " (stop)" : "Pink Goblins";
+      if (!force && R.visit_label === label) return;
+      R.visit_label = label;
+      add_top_button("al_visit_pink", label, () => {
+        if (!alive()) return;
+        if (R.force && R.force.visit) {
+          force_restore();
+          R.force_check_at = 0;
+          say("Visit button: visit ended - back to the normal farm", "#E0A040");
+          return;
+        }
+        if (R.force) return say("Visit button: a forced farm / trial is running - stop it first", "#CF575F");
+        force_apply(VISIT_MONSTER, false, true);
+        R.force_check_at = 0;
+        visit_button_refresh(false);
+      });
+    } catch (e) {}
+  }
   function farm_button_refresh(force) {
     try {
       if (typeof add_top_button !== "function" || !is_leader()) return;
@@ -566,5 +590,6 @@
       });
       farm_button_refresh(true);
       try_button_refresh(true);
+      visit_button_refresh(true);
     } catch (e) {}
   }
