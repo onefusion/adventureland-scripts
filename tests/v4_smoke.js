@@ -144,9 +144,10 @@ function make_char(world, name, o, script, overrides) {
       on(ev, h) { (hs[ev] = hs[ev] || []).push(h); }, off(ev, h) { hs[ev] = (hs[ev] || []).filter((x) => x !== h); },
       emit(ev, d) {
         const send = (e, p) => world.after(300, () => { for (const h of (hs[e] || []).slice()) h(p); return {}; });
-        if (ev === "lottery_status") send("lottery_status", { product: "daily_item", available: true, accountTickets: L.item, current: { prize: { name: "dexring" }, ticketPrice: L.item_price, accountLimit: L.item_limit || 1, closesAt: L.closes, purchasesPermitted: true } });
+        if (ev === "lottery_status") send("lottery_status", { product: "daily_item", available: true, accountTickets: L.item, current: { prize: { name: "dexring" }, ticketPrice: L.item_price, accountLimit: L.item_limit || 1, closesAt: L.closes, purchasesPermitted: true, drawId: "LTD_1" } });
         else if (ev === "money_lottery_status") send("money_lottery_status", { product: "money_lottery", available: true, accountTickets: L.money.length, current: { drawId: "d1", jackpotGold: 5000000, ticketPrice: L.money_price, accountLimit: 5, closesAt: L.closes, purchasesPermitted: true } });
-        else if (ev === "lottery_purchase") { L.item++; L.buys.push("item"); ch.gold -= L.item_price; send("lottery_purchase", { success: true }); }
+        else if (ev === "lottery_purchase" && L.reject_draw && d && d.drawId) { (L.seen = L.seen || []).push(Object.keys(d).join("+")); send("lottery_purchase", { success: false, reason: "invalid_purchase_request" }); }
+        else if (ev === "lottery_purchase") { (L.seen = L.seen || []).push(Object.keys(d || {}).join("+")); L.item++; L.buys.push("item"); ch.gold -= L.item_price; send("lottery_purchase", { success: true }); }
         else if (ev === "money_lottery_quick_pick") send("money_lottery_quick_pick", { success: true, numbers: [1, 2, 3, 4, 5 + L.money.length] });
         else if (ev === "money_lottery_purchase") { L.money.push(d.numbers); L.buys.push("money"); ch.gold -= L.money_price; send("money_lottery_purchase", { success: true, receipt: { numbers: d.numbers } }); }
       },
@@ -982,6 +983,12 @@ T("LT5 lottery: the account may buy 2 item tickets a day -> both are bought (the
   await w.clock.run(1500);
   const spent = JSON.parse(w.store["Goodies:lottery_ledger"] || "{}").spent;
   return [[w.lottery.buys.filter((b) => b === "item").length === 2 && w.lottery.buys.filter((b) => b === "money").length === 5, "bought " + w.lottery.buys.join(",")], [spent === 4500000, "ledger " + spent]];
+});
+T("LT6 lottery: the server rejects the item ticket request that carries a drawId as invalid -> it is sent again with the requestId alone and bought", async (w) => {
+  w.bank.gold = 30000000; w.lottery = { item: 0, money: [], buys: [], item_price: 2000000, money_price: 100000, item_limit: 1, reject_draw: true, closes: new Date(Date.now() + 5 * 3600000).toISOString() };
+  const m = merchant_char(w, { gold: 50000 }, LOT_OVR);
+  await w.clock.run(900);
+  return [[w.lottery.buys.filter((b) => b === "item").length === 1, "the item ticket was bought: " + w.lottery.buys.join(",")], [(w.lottery.seen || []).join("|") === "requestId+drawId|requestId", "forms tried: " + (w.lottery.seen || []).join("|")], [!logged(w, "Goodies", /is above what is left to spend/), "no misleading price line"]];
 });
 T("LT2 lottery: bank nearly empty -> nothing bought, says why", async (w) => {
   w.bank.gold = 50000;

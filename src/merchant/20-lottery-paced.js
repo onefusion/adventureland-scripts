@@ -174,18 +174,28 @@
       // each with its own requestId (a retry of ONE ticket reuses its id, so a ticket is never bought twice)
       let room = (ic.accountLimit || 1) - (item.accountTickets || 0);
       let bought = 0;
+      let buy_failed = false;
       while (room > 0 && ic.purchasesPermitted && ic.ticketPrice <= left && ic.ticketPrice <= lottery_left()) {
         const rid = "i" + Date.now() + Math.random().toString(36).slice(2, 10);
         let res = null;
-        for (let t = 0; t < 5; t++) {
+        // Sean 2026-11-24: the server answered {"success":false,"reason":"invalid_purchase_request"} to { requestId } alone. The money lottery sends the drawId too, so the item ticket is tried with the drawId first,
+        // then (if the server still calls it invalid) with the requestId alone. The same requestId throughout, so a ticket can never be bought twice.
+        const variants = [{ requestId: rid, drawId: ic.drawId }, { requestId: rid }];
+        let vi = 0;
+        for (let t = 0; t < 6; t++) {
           await wait(1500 + t * 2500);
           res = await sock_ask(
             "lottery_purchase",
-            { requestId: rid },
+            variants[vi],
             "lottery_purchase",
             10000
           );
-          if (!(res && res.reason === "throttled")) break; // same requestId on a retry, so a ticket can never be bought twice
+          if (res && res.reason === "invalid_purchase_request" && vi < variants.length - 1) {
+            lsay("Lottery: the server called the item ticket request invalid (" + JSON.stringify(variants[vi]).slice(0, 120) + ") - trying another form");
+            vi++;
+            continue;
+          }
+          if (!(res && res.reason === "throttled")) break;
         }
         if (res && res.success) {
           left -= ic.ticketPrice;
@@ -203,10 +213,13 @@
               JSON.stringify(res || "no answer"),
             "#CF575F"
           );
+          buy_failed = true;
           break;
         }
       }
-      if (!bought)
+      if (!bought && buy_failed) {
+        // the reason was logged above ("item ticket not bought: ...")
+      } else if (!bought)
         lsay(
           "Lottery: no item ticket - " +
             (room <= 0
