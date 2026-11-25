@@ -686,36 +686,6 @@ const try_setup = async (w, extra) => {
   await w.clock.run(60);
   return { L, W };
 };
-const visit_setup = async (w) => {
-  global.USE_NEW_RJ = true;
-  for (const [k, n] of [["poisio", "Poisio"], ["pinkgoblin", "Pink Goblin"]]) w.G.monsters[k] = { name: n, attack: 10, frequency: 0.6, hp: 700, xp: 100 };
-  w.G.maps.main.monsters = [{ type: "poisio", count: 5, boundary: [-262, 1198, 20, 1522] }, { type: "pinkgoblin", count: 3, boundary: [696, 1498, 906, 1922] }];
-  const L = make_char(w, ROSTER.ranger.name, { x: 800, y: 1710, attack: 440, frequency: 2 }, "AutoRanger v4.js", RANGER_OVR); L.script_char = true; add_item(L, "hpot1", 250); add_item(L, "mpot1", 250);
-  L.shots = 0; const oa = L.sb.attack, ou = L.sb.use_skill; L.sb.attack = (t) => { L.shots++; return oa(t); }; L.sb.use_skill = (n, t) => { if (n !== "huntersmark") L.shots++; return ou(n, t); };
-  const W = warrior_char(w, { x: 790, y: 1710 }); L.sb.parent.entities.SexyWexy = W; W.sb.parent.entities.SexyDexy = L;
-  const e = L.sb.parent.entities;
-  e.g1 = { id: "g1", type: "monster", mtype: "pinkgoblin", visible: true, dead: false, x: 820, y: 1710, hp: 700, max_hp: 700, target: null };
-  e.g2 = { id: "g2", type: "monster", mtype: "pinkgoblin", visible: true, dead: false, x: 830, y: 1712, hp: 700, max_hp: 700, target: null };
-  await w.clock.run(10);
-  L.buttons.al_visit_pink();
-  await w.clock.run(60);
-  return { L, W, e };
-};
-T("PV1 Pink Goblins button: the group goes to the spawn and shoots nothing while no goblin attacks; one that aggros on the party gets shot; clicking again ends the visit", async (w) => {
-  if (!IS_R5) return skip_r4;
-  try {
-    const { L, e } = await visit_setup(w);
-    const started = logged(w, "SexyDexy", /VISIT: Pink Goblin at main/);
-    const quiet = L.shots === 0;
-    const label_on = /Visiting/.test(L.button_labels.al_visit_pink || "");
-    e.g1.target = "SexyDexy"; // it aggroed on the party
-    await w.clock.run(20);
-    const shot = L.shots > 0;
-    L.buttons.al_visit_pink();
-    await w.clock.run(5);
-    return [[started, "visit started"], [quiet, "no shots at passive goblins: " + L.shots], [label_on, "button shows the visit"], [shot, "defended itself against the one that aggroed: " + L.shots], [logged(w, "SexyDexy", /Visit button: visit ended/), "visit ended by the button"]];
-  } finally { global.USE_NEW_RJ = false; }
-});
 T("TM1 Try monster: the group goes to the nearest spawn, takes on ONE croc; when it dies and nobody died the trial reports SUCCESS and the normal farm resumes", async (w) => {
   if (!IS_R5) return skip_r4;
   try {

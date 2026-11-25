@@ -185,8 +185,6 @@
   }
   // ===== v5 (Sean 2026-11-18): forced hard-monster farm =====
   // the monster type the group is forced onto: the leader's own override, or what the leader's party_state says (followers)
-  // Sean 2026-11-25: "visit" mode (Pink Goblin button): the group walks to the monster and stands there; nobody attacks it unless it hits the party first
-  const visit_on = () => (R.force ? !!R.force.visit : is_follower() && !!R.leader && !!R.leader.visit && now() - R.leader.at < CFG.STATE_STALE_MS);
   const force_type = () => (R.force ? R.force.type : is_follower() && R.leader && R.leader.force && now() - R.leader.at < CFG.STATE_STALE_MS ? R.leader.force : null);
   function force_restore() {
     const f = R.force;
@@ -210,20 +208,19 @@
     if (R.force.trial) return trial_end(false, name + " died", name);
     force_drop(name + " died");
   }
-  function force_apply(type, trial, visit) {
+  function force_apply(type, trial) {
     farm_monster_apply(); // settle the old FARM_MONSTER first so the saved values are the real ones
     const def = G.monsters[type];
     if (!def) { try { set("force_farm", ""); } catch (e) {} return say("force_farm: '" + type + "' is not a monster in the game data", "#CF575F"); }
     const sp = nearest_spawn(type);
     if (!sp) { try { set("force_farm", ""); } catch (e) {} return say("force_farm: no regular spawn found for " + (def.name || type), "#CF575F"); }
     if (R.force) force_restore();
-    R.force = { type, started: now(), saved: { FARM_SPOT: CFG.FARM_SPOT, TARGET_TYPES: CFG.TARGET_TYPES }, visit: !!visit, trial: trial ? { id: null, at: 0, hp: 1, deadline: now() + CFG.TRY_MONSTER_MS } : null };
+    R.force = { type, started: now(), saved: { FARM_SPOT: CFG.FARM_SPOT, TARGET_TYPES: CFG.TARGET_TYPES }, trial: trial ? { id: null, at: 0, hp: 1, deadline: now() + CFG.TRY_MONSTER_MS } : null };
     CFG.FARM_SPOT = { map: sp.map, x: Math.round(sp.x), y: Math.round(sp.y) };
     CFG.TARGET_TYPES = [type];
     R.force_rip = {};
     for (const n of CFG.PARTY_MEMBERS.concat(CFG.PARTY_SUPPORT)) { let p = null; try { p = get_player(n); } catch (e) {} if (p) R.force_rip[n] = !!p.rip; }
     R.state_sent_at = 0;
-    if (visit) return say("VISIT: " + (def.name || type) + " at " + sp.map + " " + CFG.FARM_SPOT.x + "," + CFG.FARM_SPOT.y + " - the group goes there and does NOT attack; it only fights what attacks it first (click the button again to stop; any death ends the visit)", "#E0A040");
     if (CFG.LUCK_STOP && !trial) R.luck_need = { why: "forced farm", at: now() };
     if (trial) return say("TRY MONSTER: " + (def.name || type) + " at " + sp.map + " " + CFG.FARM_SPOT.x + "," + CFG.FARM_SPOT.y + " - the group takes on ONE of them with single-target shots (success = it dies with nobody dead; failure = a death or " + Math.round(CFG.TRY_MONSTER_MS / 60000) + " min without a kill)", "#E0A040");
     say("FORCED FARM: " + (def.name || type) + " at " + sp.map + " " + CFG.FARM_SPOT.x + "," + CFG.FARM_SPOT.y + " (difficulty limit bypassed for it only; any death drops it)" + (party_bees_only() ? " - the party is still below the bees-only level, forcing anyway" : ""), "#E0A040");
@@ -276,7 +273,6 @@
       else if (R.force) return say("TRY MONSTER: a forced farm of " + ((G.monsters[R.force.type] || {}).name || R.force.type) + " is running - stop it first", "#CF575F");
       return force_apply(tv, true);
     }
-    if (R.force && R.force.visit) return; // (a visit runs until the button is clicked again or somebody dies)
     if (R.force && R.force.trial) return; // (the trial runs on its own; the forced-farm key is not looked at meanwhile)
     let v = "";
     try { v = String(get("force_farm") || "").trim().toLowerCase(); } catch (e) {}
@@ -307,7 +303,6 @@
     trial_watch();
     farm_button_refresh(false);
     try_button_refresh(false);
-    visit_button_refresh(false);
   }
 
   // ===== v5 (Sean 2026-11-18): Merchant's Luck stop =====
@@ -465,8 +460,7 @@
       R.lock = fe.id;
       return fe;
     }
-    const vis = visit_on();
-    const pri = vis ? [] : priority_targets();
+    const pri = priority_targets();
     if (pri.length) {
       R.lock = null;
       return pri[0];
@@ -476,7 +470,6 @@
       R.lock = df[0].id;
       return df[0];
     }
-    if (vis) { R.lock = null; return null; } // visit: only what attacks the party gets shot
     // Finish what we already chose: the rating depends on our HP and the monster's HP,
     // so it can flip mid-fight and we don't want to dither between targets.
     const lt = leader_target();
@@ -518,7 +511,7 @@
         (e) => e && e !== target && e.type === "monster" && !e.dead && !e.rip && e.visible !== false && e.target && names.indexOf(e.target) !== -1 && is_in_range(e)
       );
     }
-    const single0 = CFG.TRI_SHOT_MONSTERS.indexOf(target.mtype) === -1 || CFG.SINGLE_TARGET_TYPES.indexOf(target.mtype) !== -1 || !!boss_cfg(target.mtype) || !!(R.force && R.force.trial && target.mtype === R.force.type) || visit_on(); // boss events and the Try monster trial: one target, so 3shot/5shot only waste MP
+    const single0 = CFG.TRI_SHOT_MONSTERS.indexOf(target.mtype) === -1 || CFG.SINGLE_TARGET_TYPES.indexOf(target.mtype) !== -1 || !!boss_cfg(target.mtype) || !!(R.force && R.force.trial && target.mtype === R.force.type); // boss events and the Try monster trial: one target, so 3shot/5shot only waste MP
     const single = tank_mode ? tank_others.length < 2 : single0;
     if (tank_mode && !single) in_range = [target].concat(tank_others);
     let res;

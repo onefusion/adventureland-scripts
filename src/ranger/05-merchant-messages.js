@@ -135,7 +135,6 @@
           goal: str(d.goal) && G.monsters[d.goal] ? d.goal : null,
           bees: !!d.bees,
           force: str(d.force) && G.monsters[d.force] ? d.force : null,
-          visit: !!d.visit,
           at: now(),
         };
         R.follow_goal = R.leader.goal;
