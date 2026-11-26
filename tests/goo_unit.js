@@ -1,16 +1,17 @@
 // AL.goo unit check: node tests/goo_unit.js (after node build/build.js)
 const fs = require("fs"), vm = require("vm");
 const timers = [];
-const calls = { join: [], move: [], attack: [], sm: [] };
+const calls = { join: [], move: [], attack: [], sm: [], skill: [] };
 const ctx = {
   console, setTimeout, clearInterval, Promise, Date, JSON, Math, Object, Array, Number, String,
   setInterval: (f) => timers.push(f),
-  character: { name: "Dexy", map: "main", x: 0, y: 0, hp: 1000, max_hp: 1000, mp: 500, range: 100, rip: false },
+  character: { name: "Dexy", map: "main", x: 0, y: 0, hp: 1000, max_hp: 1000, mp: 500, max_mp: 1000, level: 90, range: 100, rip: false },
   parent: { S: {}, entities: {}, party_list: ["Dexy"] },
   server: { status: { schedule: [] } },
   get: () => "", set() {},
   join: (m) => { calls.join.push(m); return Promise.resolve({ ok: true }); },
   move: (x, y) => calls.move.push([x, y]), attack: (e) => calls.attack.push(e.id), can_attack: () => true,
+  is_on_cooldown: () => false, use_skill: (n, t) => calls.skill.push([n, t.map((e) => e.id)]),
   smart_move: () => { calls.sm.push(1); return Promise.resolve({}); },
 };
 ctx.globalThis = ctx; vm.createContext(ctx);
@@ -30,6 +31,15 @@ const mk = (mtype, dist, hp) => ({ mtype, dist, hp: hp === undefined ? 100 : hp 
 ok(GOO.pick_target([mk("goo", 10), mk("bgoo", 300), mk("rgoo", 900)]).mtype === "rgoo", "Rainbow Goo first, even far away");
 ok(GOO.pick_target([mk("goo", 10), mk("bgoo", 300), mk("bgoo", 100)]).dist === 100, "then the nearest Brawl Goo");
 ok(GOO.pick_target([mk("goo", 50, 0)]) === null, "dead monsters are skipped");
+// Goo Brawl multishots (Sean 2026-11-25): the Ranger uses 3shot/5shot there, the picked target first
+const mm = (id, dist) => ({ mtype: "goo", dist, hp: 100, e: { id } });
+const five = [mm("a", 10), mm("b", 20), mm("c", 30), mm("d", 40), mm("e", 50)];
+ok(GOO.multishot_plan(five, five[2], 90, 500, 1000).skill === "5shot" && GOO.multishot_plan(five, five[2], 90, 500, 1000).targets[0].id === "c", "5 in range: 5shot, the picked target first");
+ok(GOO.multishot_plan(five.slice(0, 3), five[0], 90, 500, 1000).skill === "3shot", "3 in range: 3shot");
+ok(GOO.multishot_plan(five.slice(0, 2), five[0], 90, 500, 1000) === null, "2 in range: plain attack");
+ok(GOO.multishot_plan(five, five[0], 90, 300, 1000) === null, "below 40% MP: plain attack");
+ok(GOO.multishot_plan(five, five[0], 70, 500, 1000).skill === "3shot", "level 70: no 5shot, 3shot instead");
+ok(GOO.multishot_plan(five, five[0], 50, 500, 1000) === null, "below level 60: plain attack");
 // the module itself
 const said = [];
 GOO.start({ say: (m) => said.push(m), alive: () => true, cls: "ranger" });
@@ -51,6 +61,10 @@ ok(calls.move.length === 1 && calls.move[0][0] > 150 && calls.attack.length === 
 ctx.character.x = 250;
 fight_tick();
 ok(calls.attack[calls.attack.length - 1] === "b", "attacks the Rainbow Goo once in range");
+ctx.character.x = 0; ctx.parent.entities = {};
+for (let i = 0; i < 5; i++) ctx.parent.entities["g" + i] = { id: "g" + i, type: "monster", mtype: "goo", x: 10 * (i + 1), y: 0, hp: 100 };
+calls.skill.length = 0; fight_tick();
+ok(calls.skill.length === 1 && calls.skill[0][0] === "5shot" && calls.skill[0][1].length === 5, "fight_tick: the Ranger fires 5shot at five goos in range");
 // leaving: no monsters for 60 s inside -> walk to the transporter, then transport("main", 9)
 ctx.parent.socket = { emit() {} };
 const moves = [], rides = [];

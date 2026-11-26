@@ -7,7 +7,8 @@
 // - join: every 20 s (max 40 tries per event) a character with hp >= 50% outside the event map calls join("goobrawl").
 // - inside the event map the class scripts must not walk out: smart_move / town / transport are blocked there (the party scripts would "return to the farm" or "go to town").
 // - the fight: priority rgoo > bgoo > goo > anything; the Ranger and the Warrior walk to their target and attack it; the Priest keeps his own script's heals (he only attacks what is in range).
-// Pure helpers (parse_at, state_of, pick_target) are tested without the game (tests/goo_unit.js).
+// - the Ranger uses 3shot / 5shot here (Sean 2026-11-25), only on this map; see multishot_plan.
+// Pure helpers (parse_at, state_of, pick_target, multishot_plan) are tested without the game (tests/goo_unit.js).
 AL.goo = (function () {
   "use strict";
   const MAP = "goobrawl";
@@ -45,6 +46,18 @@ AL.goo = (function () {
       if (c.length) return c[0];
     }
     return alive.sort((a, b) => a.dist - b.dist)[0] || null;
+  }
+
+  // Sean 2026-11-25: inside the Goo Brawl the Ranger may use 3shot / 5shot (the goos hit for 5 and the Warrior holds rgoo's aggro). This is deliberately here and not in the Ranger's
+  // TRI_SHOT_MONSTERS: fight_tick only runs on the event map, so normal-world goos and every other monster keep the single-target rule.
+  const MULTI_MIN_MP_PCT = 0.4, MULTI_MIN_MP_3 = 200, MULTI_MIN_MP_5 = 320;
+  // inr = the monsters in attack range (objects with .e), t = the picked target (always shot first); returns { skill, targets } (entities) or null for a plain attack
+  function multishot_plan(inr, t, level, mp, max_mp) {
+    if (!t || !inr || !inr.length || !(max_mp > 0) || mp / max_mp < MULTI_MIN_MP_PCT) return null;
+    const list = [t].concat(inr.filter((m) => m !== t && m.e !== t.e));
+    if (level >= 75 && list.length >= 5 && mp >= MULTI_MIN_MP_5) return { skill: "5shot", targets: list.slice(0, 5).map((m) => m.e) };
+    if (level >= 60 && list.length >= 3 && mp >= MULTI_MIN_MP_3) return { skill: "3shot", targets: list.slice(0, 3).map((m) => m.e) };
+    return null;
   }
 
   function start(env) {
@@ -155,6 +168,17 @@ AL.goo = (function () {
         }
         if (t.dist <= range && can_attack(t.e)) {
           if (cls === "priest") return; // the priest's own script heals; his attacks are not the point
+          if (cls === "ranger") {
+            const plan = multishot_plan(mons.filter((m) => m.dist <= range && can_attack(m.e)), t, character.level, character.mp, character.max_mp);
+            if (plan) {
+              let cd = false;
+              try { cd = is_on_cooldown(plan.skill); } catch (e) {}
+              if (!cd) {
+                use_skill(plan.skill, plan.targets);
+                return;
+              }
+            }
+          }
           attack(t.e);
         }
       } catch (e) {}
@@ -163,5 +187,5 @@ AL.goo = (function () {
     setInterval(() => { try { fight_tick(); } catch (e) {} }, 250);
     setInterval(() => { try { leave_tick(); } catch (e) {} }, 1500);
   }
-  return { start, state_of, pick_target, parse_at, MAP };
+  return { start, state_of, pick_target, multishot_plan, parse_at, MAP };
 })();
