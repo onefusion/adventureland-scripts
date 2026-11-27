@@ -40,7 +40,9 @@
     "CRAFT_TARGETS": "2026-11-23: venomband total 30",
     "CRAFT_MAX_PER_RUN": "2026-11-23: 5",
     "JUNK_ANY_LEVEL": "2026-11-23: + fireblade, gcape, mittens, xmashat, xmasshoes",
-    "LOTTERY_DAILY_CAP": "2026-11-23: 4.5M (2 item tickets)"
+    "LOTTERY_DAILY_CAP": "2026-11-23: 4.5M (2 item tickets)",
+    "FREQ_PCT_PER_POINT": "2026-11-27: 1.25 -> 0.81 (measured: one frequency point = 100 / (100 x 1.241 attacks/s) percent of the lead Ranger's damage)",
+    "APIERCING_ARMOR_REF": "2026-11-27: new, armor piercing is scored as the damage it adds against a monster of this armor (crossbow +120 apiercing)"
   },
   "AutoRanger": {
     "BAG_SHARE": "stage 2: Ranger hands spare items to the Priest",
@@ -61,7 +63,15 @@
     "FARM_ROTATE_MS": "2026-11-21: new, the base farm rotates every 15 min even when no hunt ended",
     "JUNK_ANY_LEVEL": "2026-11-23: + fireblade, gcape, mittens, xmashat, xmasshoes",
     "GOAL_TALLY": "2026-11-23",
-    "TALLY_URL": "2026-11-23"
+    "TALLY_URL": "2026-11-23",
+    "FEAR_AWARE": "2026-11-27: new, count monsters on the Ranger against his courage (FEAR lines, multishot gate, relief target)",
+    "FEAR_BLOCK_MULTISHOT_AT": "2026-11-27: new, no multishot while this many monsters already target him",
+    "FEAR_RELIEF_TARGET": "2026-11-27: new, over his courage: shoot the weakest monster on him first",
+    "BREAKER_ENABLED": "2026-11-27: new, death circuit-breaker (safe mode)",
+    "BREAKER_MAX_INCIDENTS": "2026-11-27: new, death incidents that trip the breaker",
+    "BREAKER_WINDOW_MS": "2026-11-27: new, breaker window",
+    "BREAKER_CLUSTER_MS": "2026-11-27: new, deaths closer than this are one incident",
+    "BREAKER_HOLD_MS": "2026-11-27: new, safe mode length"
   },
   "AutoPriest": {
     "BAG_SHARE_FROM": "stage 2: who may hand her spare items",

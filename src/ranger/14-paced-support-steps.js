@@ -119,6 +119,7 @@
     say("Monster hunt " + h.c + "x " + ((G.monsters[h.id] || {}).name || h.id) + " is active but not being worked on: " + why, "#CF575F");
   };
   step_add({ name: "hunt", kind: "gate_wait", due: () => {
+    if (safe_mode()) { STEP.ctx.hg = false; hunt_why("safe mode after repeated deaths (set(\"safe_mode\", \"off\") ends it)"); return false; } // Sean 2026-11-27: death circuit-breaker
     const f = is_follower(), b = !!R.boss, o = !f && !b && party_bees_only();
     STEP.ctx.hg = !f && !b && !o;
     // v5: bees-only, but everyone has reached PARTY_HUNTS_UNTIL_LEVEL: hunts (easy ones) go on, goals stay off
@@ -165,7 +166,7 @@
       if (!CFG.FARM_ROTATE_MS || !CFG.FARM_ROTATION.length || !is_leader() || !CFG.FARM_MONSTER) return;
       if (!R.farm_since) return (R.farm_since = now());
       if (now() - R.farm_since < CFG.FARM_ROTATE_MS) return;
-      if (R.mh || R.goal || R.boss || R.retreat || R.force || grinch_fight()) return;
+      if (R.mh || R.goal || R.boss || R.retreat || R.force || grinch_fight() || safe_mode()) return;
       R.rot_timed = true;
       try { rotate_farm(true); } finally { R.rot_timed = false; }
     } catch (e) {}

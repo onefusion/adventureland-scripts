@@ -672,6 +672,72 @@ T("RD2 a death during the Grinch fight does not start a retreat", async (w) => {
   await w.clock.run(10);
   return [[!logged(w, "SexyDexy", /RETREAT:/), "no retreat while the Grinch is up"]];
 });
+T("SF1 death circuit-breaker: three death incidents in the hour start safe mode (post-mortem lines, hunts and goals paused) and it ends by itself", async (w) => {
+  if (!IS_R5 || !/BREAKER_ENABLED/.test(RANGER_SRC)) return skip_r4;
+  global.USE_NEW_RJ = true;
+  try {
+    for (const [k, n] of [["poisio", "Poisio"], ["armadillo", "Armadillo"], ["croc", "Croc"]]) w.G.monsters[k] = { name: n, attack: 10, frequency: 0.6, hp: 700 };
+    w.G.maps.main.monsters = [{ type: "poisio", count: 5, boundary: [-262, 1198, 20, 1522] }, { type: "armadillo", count: 5, boundary: [376, 1696, 676, 1996] }, { type: "croc", count: 5, boundary: [696, 1498, 906, 1922] }];
+    const HOVR = RANGER_OVR.filter((o) => !/HUNT_ENABLED/.test(String(o[0]))).concat([[/DEATH_RETREAT_HOLD_MS: 90000/, "DEATH_RETREAT_HOLD_MS: 20000"], [/BREAKER_HOLD_MS: 45 \* 60000/, "BREAKER_HOLD_MS: 120000"]]);
+    const L = make_char(w, ROSTER.ranger.name, { x: -100, y: 1360, attack: 440, frequency: 2 }, "AutoRanger v4.js", HOVR); L.script_char = true; add_item(L, "hpot1", 250); add_item(L, "mpot1", 250);
+    const W = warrior_char(w, { x: -90, y: 1360 }); L.sb.parent.entities.SexyWexy = W; W.sb.parent.entities.SexyDexy = L;
+    await w.clock.run(20);
+    W.sb.send_cm("SexyDexy", { type: "died" });
+    await w.clock.run(5);
+    const pm1 = logged(w, "SexyDexy", /DEAD: SexyWexy .*\[farm: /);
+    await w.clock.run(150);
+    W.sb.send_cm("SexyDexy", { type: "died" });
+    await w.clock.run(5);
+    const early = logged(w, "SexyDexy", /CIRCUIT BREAKER/);
+    await w.clock.run(150);
+    W.sb.send_cm("SexyDexy", { type: "died" });
+    await w.clock.run(5);
+    const tripped = logged(w, "SexyDexy", /CIRCUIT BREAKER: 3 death incidents \(3 deaths: .*\) in the last 60 min - SAFE MODE for 2 min: no hunts, no farm goals/);
+    const stored = String(w.store["SexyDexy:safe_until"] || "") !== "" && Number(w.store["SexyDexy:safe_until"]) > 0;
+    await w.clock.run(200);
+    const over = logged(w, "SexyDexy", /SAFE MODE over - hunts and goals resume/);
+    return [[pm1, "post-mortem line for the first death"], [!early, "two incidents do not trip it"], [tripped, "the third incident trips it, with the deaths named"], [stored, "safe mode is kept in storage (survives a reload)"], [over, "safe mode ends by itself"]];
+  } finally { global.USE_NEW_RJ = false; }
+});
+T("SF2 a wipe (deaths seconds apart) is one incident and the hand switch set(safe_mode) starts and ends safe mode", async (w) => {
+  if (!IS_R5 || !/BREAKER_ENABLED/.test(RANGER_SRC)) return skip_r4;
+  global.USE_NEW_RJ = true;
+  try {
+    for (const [k, n] of [["poisio", "Poisio"], ["armadillo", "Armadillo"]]) w.G.monsters[k] = { name: n, attack: 10, frequency: 0.6, hp: 700 };
+    w.G.maps.main.monsters = [{ type: "poisio", count: 5, boundary: [-262, 1198, 20, 1522] }, { type: "armadillo", count: 5, boundary: [376, 1696, 676, 1996] }];
+    const HOVR = RANGER_OVR.filter((o) => !/HUNT_ENABLED/.test(String(o[0])));
+    const L = make_char(w, ROSTER.ranger.name, { x: -100, y: 1360, attack: 440, frequency: 2 }, "AutoRanger v4.js", HOVR); L.script_char = true; add_item(L, "hpot1", 250); add_item(L, "mpot1", 250);
+    const W = warrior_char(w, { x: -90, y: 1360 }); L.sb.parent.entities.SexyWexy = W; W.sb.parent.entities.SexyDexy = L;
+    await w.clock.run(20);
+    for (let i = 0; i < 4; i++) { W.sb.send_cm("SexyDexy", { type: "died" }); await w.clock.run(3); } // the same death noticed again and again = one record
+    const one = !logged(w, "SexyDexy", /CIRCUIT BREAKER/) && (w.logs.filter((l) => l.who === "SexyDexy" && /DEAD: SexyWexy/.test(l.msg || l.text || "")).length <= 1);
+    w.store["SexyDexy:safe_mode"] = "30";
+    await w.clock.run(12);
+    const hand = logged(w, "SexyDexy", /CIRCUIT BREAKER: started by hand - SAFE MODE for 30 min/);
+    const cleared = !w.store["SexyDexy:safe_mode"];
+    w.store["SexyDexy:safe_mode"] = "off";
+    await w.clock.run(12);
+    const ended = logged(w, "SexyDexy", /SAFE MODE ended by hand/);
+    return [[one, "repeated notices of one death make one record and no trip"], [hand, "set(safe_mode, 30) starts it by hand"], [cleared, "the command is consumed"], [ended, "set(safe_mode, off) ends it"]];
+  } finally { global.USE_NEW_RJ = false; }
+});
+T("FE1 fear: four monsters on the Ranger (courage 2) are logged once, no multishot pulls, and the end line names the worst count", async (w) => {
+  if (!IS_R5 || !/FEAR_AWARE/.test(RANGER_SRC)) return skip_r4;
+  global.USE_NEW_RJ = true;
+  try {
+    w.G.monsters.poisio = { name: "Poisio", attack: 10, frequency: 0.6, hp: 700, damage_type: "physical" };
+    w.G.maps.main.monsters = [{ type: "poisio", count: 5, boundary: [-262, 1198, 20, 1522] }];
+    const L = make_char(w, ROSTER.ranger.name, { x: -100, y: 1360, attack: 440, frequency: 2 }, "AutoRanger v4.js", RANGER_OVR); L.script_char = true; add_item(L, "hpot1", 250); add_item(L, "mpot1", 250);
+    for (let i = 1; i <= 4; i++) L.sb.parent.entities["p" + i] = { id: "p" + i, type: "monster", mtype: "poisio", visible: true, dead: false, x: -80 + i * 5, y: 1360, hp: 700, max_hp: 700, target: "SexyDexy" };
+    await w.clock.run(6);
+    const started = logged(w, "SexyDexy", /FEAR: 4 monsters on SexyDexy \(poisio x4\), courage 2, 2 over: damage ~x0.4/);
+    for (let i = 1; i <= 4; i++) delete L.sb.parent.entities["p" + i];
+    await w.clock.run(8);
+    const ended = logged(w, "SexyDexy", /FEAR over after .* worst: 4 monsters \(poisio x4\), damage ~x0.4/);
+    const once = w.logs.filter((l) => l.who === "SexyDexy" && /FEAR: 4 monsters/.test(l.msg || l.text || "")).length <= 1;
+    return [[started, "FEAR line when the 4th monster is on him"], [once, "printed once, not every tick"], [ended, "end line with the worst count"]];
+  } finally { global.USE_NEW_RJ = false; }
+});
 const try_setup = async (w, extra) => {
   global.USE_NEW_RJ = true;
   for (const [k, n] of [["poisio", "Poisio"], ["croc", "Croc"]]) w.G.monsters[k] = { name: n, attack: 10, frequency: 0.6, hp: 700, xp: 100 };

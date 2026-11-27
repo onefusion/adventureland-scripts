@@ -124,7 +124,7 @@
     say("Farm rotation: " + (R.rot_timed ? "time is up (" + Math.round(CFG.FARM_ROTATE_MS / 60000) + " min), " : "after the hunt, ") + "farming " + ((G.monsters[t] || {}).name || t) + " at " + spot.map + " " + spot.x + "," + spot.y + (R.rot_timed ? " for " + Math.round(CFG.FARM_ROTATE_MS / 60000) + " min" : " until the next hunt is done"), "#51D2E1");
   }
   // ===== v5 (Sean 2026-11-20): death on the base farm -> everybody retreats to town together; that monster is skipped for a while =====
-  function death_note(name) {
+  function death_note_core(name) { // (wrapped by death_note in 08b: post-mortem + circuit breaker)
     if (!CFG.DEATH_RETREAT || !is_leader()) return;
     if (R.boss || grinch_fight() || R.force) return; // the Grinch fight may cost lives; a forced farm has its own rule (force_death)
     if (now() < (R.retreat_next || 0)) return; // one retreat for the whole wipe
@@ -465,6 +465,17 @@
       R.lock = null;
       return pri[0];
     }
+    // Sean 2026-11-27: more monsters on me than my courage (damage x0.6 or less): shoot the weakest one that is on me first, the pressure drops soonest
+    if (CFG.FEAR_AWARE && CFG.FEAR_RELIEF_TARGET) {
+      const fp = fear_now();
+      if (fp && fp.over) {
+        const rt = SAFETY.relief_target(visible_monsters().filter((e) => e.target === character.name && is_in_range(e)));
+        if (rt) {
+          R.lock = rt.id;
+          return rt;
+        }
+      }
+    }
     const df = defend_targets();
     if (df.length) {
       R.lock = df[0].id;
@@ -512,7 +523,8 @@
       );
     }
     const single0 = CFG.TRI_SHOT_MONSTERS.indexOf(target.mtype) === -1 || CFG.SINGLE_TARGET_TYPES.indexOf(target.mtype) !== -1 || !!boss_cfg(target.mtype) || !!(R.force && R.force.trial && target.mtype === R.force.type); // boss events and the Try monster trial: one target, so 3shot/5shot only waste MP
-    const single = tank_mode ? tank_others.length < 2 : single0;
+    const fear_block = CFG.FEAR_AWARE && SAFETY.block_multishot(fear_now(), CFG.FEAR_BLOCK_MULTISHOT_AT); // Sean 2026-11-27: monsters on me at / over my courage: a multishot would pull 3-5 more
+    const single = fear_block || (tank_mode ? tank_others.length < 2 : single0);
     if (tank_mode && !single) in_range = [target].concat(tank_others);
     let res;
 

@@ -31,6 +31,7 @@ try {
   // @include ../ranger/06-survival-inventory.js
   // @include ../ranger/07-need-ladder.js
   // @include ../ranger/08-combat-retreat-luck.js
+  // @include ../ranger/08b-safety-fear-breaker.js
   // @include ../ranger/09-monster-hunts.js
   // @include ../ranger/10-farm-goals.js
   // @include ../ranger/11-boss-events.js

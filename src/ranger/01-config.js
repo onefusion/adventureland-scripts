@@ -105,6 +105,14 @@
     RESPAWN_DELAY_MS: 3000,
 
     // Skills
+    FEAR_AWARE: true, // Sean 2026-11-27: count the monsters that target this Ranger against his courage (2): FEAR lines in the log, no 3shot/5shot while FEAR_BLOCK_MULTISHOT_AT or more are on him, the weakest one on him is shot first while he is over his courage
+    FEAR_BLOCK_MULTISHOT_AT: 2, // no multishot while this many monsters (or more) already target him: one more pull would put him over his courage and cut his damage to x0.6 or less
+    FEAR_RELIEF_TARGET: true, // while over his courage: shoot the lowest-HP monster that is on him (the Warrior's focus target and boss / priority targets still come first)
+    BREAKER_ENABLED: true, // Sean 2026-11-27: death circuit-breaker (leader): BREAKER_MAX_INCIDENTS death incidents inside BREAKER_WINDOW_MS start SAFE MODE
+    BREAKER_MAX_INCIDENTS: 3, // a wipe (deaths less than BREAKER_CLUSTER_MS apart) is ONE incident; boss-event and forced-farm deaths are logged but do not count
+    BREAKER_WINDOW_MS: 60 * 60000,
+    BREAKER_CLUSTER_MS: 2 * 60000,
+    BREAKER_HOLD_MS: 45 * 60000, // safe mode: no hunts, no farm goals, the base farm is the rotation monster with the fewest deaths; boss events (Grinch) unchanged. By hand: set("safe_mode", "45") / set("safe_mode", "off")
     MULTISHOT_MIN_MP_PCT: 0.4, // only use 3shot/5shot above this MP fraction
     TRI_SHOT_MONSTERS: ["bee"], // v5: 3shot/5shot are ONLY used on these monster types (several get hit at once and aggro the Ranger). Every other monster is shot one at a time. Add a type here to allow it.
     SINGLE_TARGET_TYPES: ["scorpion", "minimush", "bbpompom", "pppompom", "snake", "osnake", "cave_snake"], // never 3shot/5shot these: one at a time (scorpions: only one aggros; Pom Poms: the hunt is too hard when several are pulled)
