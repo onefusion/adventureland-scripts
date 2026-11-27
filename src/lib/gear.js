@@ -157,6 +157,12 @@ AL.gear = (function () {
       const w = g && g.mainhand;
       const wd = w && this.G.items[w.name];
       const wa = wd ? this.prop_at(wd, w.level, "attack") : 100;
+      return this.CFG.GEAR_WEIGHTS.attack * wa * this.dex_mult();
+    }
+    // (1 + worn dex / 20): what the game multiplies a weapon's attack by (attack = weapon attack x main stat / 20)
+    dex_mult() {
+      const lg = this.env.lead_gear;
+      const g = lg && lg.slots;
       let dex = 0;
       if (g)
         for (const k in g) {
@@ -164,7 +170,32 @@ AL.gear = (function () {
           const d = it && this.G.items[it.name];
           if (d) dex += this.prop_at(d, it.level, "dex");
         }
-      return this.CFG.GEAR_WEIGHTS.attack * wa * (1 + dex / 20);
+      return 1 + dex / 20;
+    }
+    // Sean 2026-11-27: the class's weapon-type bonuses (G.classes.ranger.mainhand[wtype]: the crossbow gives +120 apiercing and -36 frequency
+    // on top of the item's own stats) were never scored. Falls back to the stock values when the class data is not loaded.
+    wtype_bonus(def) {
+      const cls = this.G.classes && this.G.classes.ranger && this.G.classes.ranger.mainhand;
+      const table = cls || { crossbow: { apiercing: 120, frequency: -36 } };
+      return (def && def.type === "weapon" && table[def.wtype]) || {};
+    }
+    // Armor piercing is worth what it adds to damage against a reference armor (CFG.APIERCING_ARMOR_REF, default 150: the farm monsters).
+    // damage_multiplier(armor) points taken from the 2026-11-25 analysis (stock formula): 0 -> 1, 200 -> .80, 300 -> .705, 500 -> .533, 800 -> .353, floor .05.
+    dmg_mult(armor) {
+      const pts = [[0, 1], [200, 0.8], [300, 0.705], [500, 0.533], [800, 0.353], [1500, 0.05]];
+      if (armor <= 0) return 1;
+      for (let i = 1; i < pts.length; i++) {
+        if (armor <= pts[i][0]) {
+          const a = pts[i - 1], b = pts[i];
+          return a[1] + ((b[1] - a[1]) * (armor - a[0])) / (b[0] - a[0]);
+        }
+      }
+      return 0.05;
+    }
+    apiercing_pct(ap) {
+      if (!(ap > 0)) return 0;
+      const ref = Number(this.CFG.APIERCING_ARMOR_REF) > 0 ? Number(this.CFG.APIERCING_ARMOR_REF) : 150;
+      return (this.dmg_mult(Math.max(0, ref - ap)) / this.dmg_mult(ref) - 1) * 100;
     }
     set_weight(p, main_w) {
       const CFG = this.CFG;
@@ -185,14 +216,22 @@ AL.gear = (function () {
       }
       const dw = this.dex_weight();
       let score = 0;
+      const wb = this.wtype_bonus(def);
       for (const p in CFG.GEAR_WEIGHTS) {
+        if (p === "apiercing") continue; // valued as a damage percentage below
         let v = this.prop_at(def, level, p);
         if (p === scroll_stat) v += stat;
-        score += v * (p === "dex" ? dw : CFG.GEAR_WEIGHTS[p]);
+        // Sean 2026-11-27: a weapon's attack is multiplied by his dex (see dex_mult), so a point of weapon attack is worth far more than a point of flat attack;
+        // without this a crossbow's higher base attack could never outweigh its -36 frequency
+        const wmult = p === "attack" && def.type === "weapon" ? this.dex_mult() : 1;
+        score += v * (p === "dex" ? dw : CFG.GEAR_WEIGHTS[p]) * wmult;
       }
-      // attack speed: every point is a percentage of all his damage
-      const fq = this.prop_at(def, level, "frequency");
+      // attack speed: every point is a percentage of all his damage (the weapon type's own bonus counts too: crossbow -36)
+      const fq = this.prop_at(def, level, "frequency") + (wb.frequency || 0);
       if (fq) score += (fq * CFG.FREQ_PCT_PER_POINT * this.damage_ref()) / 100;
+      // armor piercing: the damage it adds against CFG.APIERCING_ARMOR_REF (crossbow +120 from its weapon type)
+      const ap = this.prop_at(def, level, "apiercing") + (wb.apiercing || 0);
+      if (ap) score += (this.apiercing_pct(ap) * this.damage_ref()) / 100;
       // ability: attr0 is its proc chance; weights come from Sean's ranking
       const aw = def.ability && CFG.ABILITY_IGNORE_ITEMS.indexOf(name) === -1 && CFG.ABILITY_WEIGHTS[def.ability];
       if (aw) score += (aw * this.prop_at(def, level, "attr0") * this.damage_ref()) / 100;

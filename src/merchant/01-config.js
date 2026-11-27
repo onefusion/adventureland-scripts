@@ -412,7 +412,8 @@
     // Sean's order of importance (2026-11-15): weapon = attack, dex bonus, attack speed, ability, range;
     // armor and accessories = the same five, then armor, resistance, then the other stats.
     // Attack, dex and attack speed (the item stat "frequency") are all converted to damage; see gear_score().
-    FREQ_PCT_PER_POINT: 1.25, // v5 (Sean 2026-11-18 17:22): was 1; attack speed counts a bit more. // UNVERIFIED: how many percent faster he attacks per point of "frequency" (check character.frequency before/after equipping a glove)
+    FREQ_PCT_PER_POINT: 0.81, // 2026-11-27: measured (STATS dump 11-25): one frequency point = 0.01 attacks/s = 1 / (100 x 1.241) = 0.81% of the lead Ranger's damage (was 1.25, an overestimate). Re-measure if his attacks/s changes a lot: 100 / (100 x character.frequency)
+    APIERCING_ARMOR_REF: 150, // 2026-11-27: armor piercing is scored as the damage it adds against a monster of this armor (the farm monsters); the crossbow's +120 apiercing / -36 frequency now count
     // Ability value = weight x attr0 (the proc chance, in %) x 1% of his damage. Ranked with Sean 2026-11-15 (burn first: it deals damage).
     // Abilities that need a cast (frenzy, power, charm, ...) are worth nothing: the Rangers never cast them.
     ABILITY_IGNORE_ITEMS: ["test_orb"], // Sean 2026-11-19: the Orb of Testing's 50% poison proc is not worth the Orb of Beginnings' stats: its ability counts for nothing

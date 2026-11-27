@@ -10,6 +10,7 @@
 //  2. regenerate with --from-lib and review the diff of the table: only the new levels' rows may be new, old rows must not change
 //  3. the upgrade formula above +7 is unverified (decision G2): check the new levels against the in-game item screen before trusting the new rows
 //  4. raise the matching limits in the Merchant at the same time (upgrade cap, Fire Bow cap, scroll tier rules), since the scorer only scores levels the planners can reach
+//  2026-11-27: regenerated with --from-lib after a DELIBERATE Ranger scoring change (weapon attack x (1 + worn dex / 20), the weapon type's own apiercing/frequency such as the crossbow's +120 / -36, armor piercing scored as damage vs CFG.APIERCING_ARMOR_REF). Every changed value was checked: either the 2026-11-23 class rule or a Ranger item with frequency/apiercing/weapon type.
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
