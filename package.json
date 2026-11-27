@@ -5,7 +5,7 @@
   "scripts": {
     "build": "node build/build.js",
     "check": "node build/build.js && node tests/build_check.js",
-    "test": "node build/build.js && node tests/build_check.js && node tests/config_equiv.js && node tests/golden_gear.js && node tests/gear_score.js && node tests/crossbow_unit.js && node tests/safety_unit.js && node tests/planners_unit.js && bash tests/run_suite.sh v6",
+    "test": "node build/build.js && node tests/build_check.js && node tests/config_equiv.js && node tests/golden_gear.js && node tests/gear_score.js && node tests/crossbow_unit.js && node tests/safety_unit.js && node tests/shots_unit.js && node tests/planners_unit.js && bash tests/run_suite.sh v6",
     "test:v5": "bash tests/run_suite.sh v5",
     "golden": "node tests/golden_gear.js",
     "one": "bash tests/one.sh"

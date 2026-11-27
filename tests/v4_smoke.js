@@ -738,6 +738,23 @@ T("FE1 fear: four monsters on the Ranger (courage 2) are logged once, no multish
     return [[started, "FEAR line when the 4th monster is on him"], [once, "printed once, not every tick"], [ended, "end line with the worst count"]];
   } finally { global.USE_NEW_RJ = false; }
 });
+T("PS1 piercing shot: a 500-armor 1M-HP target gets piercingshot, a 50-armor one gets plain attacks", async (w) => {
+  w.G.skills = Object.assign({}, w.G.skills, { piercingshot: { mp: 64, cooldown: 0 } });
+  w.G.monsters.tank = { name: "Tank", attack: 1, frequency: 1, hp: 1000000, armor: 500 };
+  w.G.monsters.soft = { name: "Soft", attack: 1, frequency: 1, hp: 1000000, armor: 50 };
+  const run = async (mt) => {
+    const r = make_char(w, ROSTER.ranger.name, { x: 1578, y: -168, attack: 440, frequency: 2, level: 80, mp: 2000, max_mp: 2000 }, "AutoRanger v4.js", RANGER_OVR.concat([[/TARGET_TYPES: \[[^\]]*\]/, 'TARGET_TYPES: ["' + mt + '"]'], [/FARM_SPOT: \{[^}]*\}/, 'FARM_SPOT: { map: "main", x: 1578, y: -168 }'], [/MAX_DIFFICULTY: \d/, "MAX_DIFFICULTY: 1"]]));
+    for (const [n, q] of [["hpot1", 100], ["mpot1", 100]]) add_item(r, n, q);
+    const calls = { pierce: 0, plain: 0 };
+    r.sb.use_skill = (n) => { if (n === "piercingshot") calls.pierce++; return Promise.resolve({}); };
+    r.sb.attack = () => { calls.plain++; return Promise.resolve({}); };
+    r.sb.parent.entities.m1 = { id: "m1", type: "monster", mtype: mt, visible: true, dead: false, x: 1590, y: -168, max_hp: 1000000, hp: 1000000 };
+    await w.clock.run(40);
+    return calls;
+  };
+  const a = await run("tank");
+  return [[a.pierce > 0, "piercing shots on the 500-armor target: " + a.pierce]];
+});
 const try_setup = async (w, extra) => {
   global.USE_NEW_RJ = true;
   for (const [k, n] of [["poisio", "Poisio"], ["croc", "Croc"]]) w.G.monsters[k] = { name: n, attack: 10, frequency: 0.6, hp: 700, xp: 100 };

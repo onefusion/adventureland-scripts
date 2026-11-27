@@ -105,6 +105,11 @@
     RESPAWN_DELAY_MS: 3000,
 
     // Skills
+    PIERCING_ENABLED: true, // Sean 2026-11-27: Piercing Shot (level 72, 64 MP, x0.75 damage, +500 armor piercing) against high-armor targets, see AL.shots
+    PIERCING_MIN_GAIN: 0.25, // use it only when it deals at least this much more damage per shot than a normal shot (0.25 = +25%, about armor 400 for a Ranger with 32 piercing)
+    PIERCING_MIN_MP_PCT: 0.5, // and only while MP is above this share of the maximum
+    PIERCING_MIN_TARGET_HP: 100000, // and only on targets with at least this much max HP
+    PIERCING_OWN_FACTOR: 2, // stock counts the shooter's own armor piercing twice; set 1 if a live check says otherwise
     FEAR_AWARE: true, // Sean 2026-11-27: count the monsters that target this Ranger against his courage (2): FEAR lines in the log, no 3shot/5shot while FEAR_BLOCK_MULTISHOT_AT or more are on him, the weakest one on him is shot first while he is over his courage
     FEAR_BLOCK_MULTISHOT_AT: 2, // no multishot while this many monsters (or more) already target him: one more pull would put him over his courage and cut his damage to x0.6 or less
     FEAR_RELIEF_TARGET: true, // while over his courage: shoot the lowest-HP monster that is on him (the Warrior's focus target and boss / priority targets still come first)

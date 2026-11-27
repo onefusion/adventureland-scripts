@@ -71,7 +71,12 @@
     "BREAKER_MAX_INCIDENTS": "2026-11-27: new, death incidents that trip the breaker",
     "BREAKER_WINDOW_MS": "2026-11-27: new, breaker window",
     "BREAKER_CLUSTER_MS": "2026-11-27: new, deaths closer than this are one incident",
-    "BREAKER_HOLD_MS": "2026-11-27: new, safe mode length"
+    "BREAKER_HOLD_MS": "2026-11-27: new, safe mode length",
+    "PIERCING_ENABLED": "2026-11-27: new",
+    "PIERCING_MIN_GAIN": "2026-11-27: new",
+    "PIERCING_MIN_MP_PCT": "2026-11-27: new",
+    "PIERCING_MIN_TARGET_HP": "2026-11-27: new",
+    "PIERCING_OWN_FACTOR": "2026-11-27: new"
   },
   "AutoPriest": {
     "BAG_SHARE_FROM": "stage 2: who may hand her spare items",

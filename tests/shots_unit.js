@@ -1,0 +1,25 @@
+// AL.shots unit check: node tests/shots_unit.js (after node build/build.js)
+const fs = require("fs"), vm = require("vm");
+const ctx = { console, setTimeout, clearInterval, Promise, Date, JSON, Math, Object, Array, Number, String, setInterval() {}, character: { name: "Dexy" }, parent: { entities: {} }, game_log() {} };
+ctx.globalThis = ctx; vm.createContext(ctx);
+const mod = { exports: {} };
+vm.runInContext("(function(exports,module){" + fs.readFileSync("dist/AL Libs v6.js", "utf8") + "\n})", ctx)(mod.exports, mod);
+const S = mod.exports.shots;
+let fails = 0; const ok = (c, m) => { console.log((c ? "ok   " : "FAIL ") + m); if (!c) fails++; };
+const near = (a, b, e) => Math.abs(a - b) <= e;
+ok(S.dmg_mult(0) === 1 && near(S.dmg_mult(100), 0.9, 1e-9) && near(S.dmg_mult(200), 0.8, 1e-9), "dmg_mult 0/100/200");
+ok(near(S.dmg_mult(800), 1 - (0.1 + 0.1 + 0.095 + 0.09 + 0.082 + 0.07 + 0.06 + 0.05), 1e-9), "dmg_mult 800");
+ok(S.dmg_mult(5000) === 0.05, "floor 0.05");
+ok(near(S.dmg_mult(-1000), 1.32, 1e-9), "cap 1.32");
+ok(S.dmg_mult(-50) > 1 && S.dmg_mult(-50) < 1.1, "negative armor adds damage");
+const g = (a, ap) => S.piercing_ratio(a, { own_ap: ap, factor: 2 }).ratio - 1;
+ok(g(150, 32) < 0, "armor 150: piercing loses (" + g(150, 32).toFixed(3) + ")");
+ok(g(400, 32) > 0.2 && g(400, 32) < 0.3, "armor 400: about +24% (" + g(400, 32).toFixed(3) + ")");
+ok(g(800, 32) > g(400, 32), "monotonic up to 800");
+const base = { armor: 500, hp: 500000, mp: 1000, max_mp: 1200, level: 75, own_ap: 32 };
+ok(S.should_pierce(base, {}).use, "armor 500 big HP: use");
+ok(!S.should_pierce(Object.assign({}, base, { armor: 100 }), {}).use, "low armor: no");
+ok(!S.should_pierce(Object.assign({}, base, { hp: 5000 }), {}).use, "small HP: no");
+ok(!S.should_pierce(Object.assign({}, base, { mp: 100 }), {}).use, "low MP: no");
+ok(!S.should_pierce(Object.assign({}, base, { level: 70 }), {}).use, "level 70: no");
+console.log(fails ? fails + " FAILED" : "all ok"); process.exit(fails ? 1 : 0);

@@ -567,10 +567,30 @@
     ) {
       res = await call(() => use_skill("3shot", in_range.slice(0, 3)));
       if (!res.failed) R.last_3shot = now();
+    } else if (pierce_now(target)) {
+      res = await call(() => use_skill("piercingshot", target));
+      if (res && res.failed) res = await call(() => attack(target));
     } else {
       res = await call(() => attack(target));
     }
     if (!res.failed) reduce_cooldown("attack", (character.ping || 0) * 0.95); // doc idiom: compensate for ping
+  }
+
+  const pierce_logged = {};
+  // Sean 2026-11-27: Piercing Shot on high-armor, big-HP targets (AL.shots.should_pierce); one log line per monster type
+  function pierce_now(t) {
+    if (!CFG.PIERCING_ENABLED || !t || is_on_cooldown("piercingshot")) return false;
+    const m = G.monsters[t.mtype];
+    if (!m || !G.skills.piercingshot) return false;
+    const d = AL.shots.should_pierce(
+      { armor: m.armor, hp: t.max_hp || m.hp, mp: character.mp, max_mp: character.max_mp, level: character.level, own_ap: character.apiercing },
+      { MIN_GAIN: CFG.PIERCING_MIN_GAIN, MIN_MP_PCT: CFG.PIERCING_MIN_MP_PCT, MIN_TARGET_HP: CFG.PIERCING_MIN_TARGET_HP, OWN_FACTOR: CFG.PIERCING_OWN_FACTOR }
+    );
+    if (d.use && !pierce_logged[t.mtype]) {
+      pierce_logged[t.mtype] = 1;
+      say("PIERCING SHOT on " + t.mtype + ": armor " + m.armor + ", about +" + Math.round(d.gain * 100) + "% damage per shot");
+    }
+    return d.use;
   }
 
   function tether() {
