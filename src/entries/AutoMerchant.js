@@ -75,7 +75,7 @@ try {
       abort();
       if (character.stand) await call(() => close_stand());
     };
-    // GitHub auto-update: the Merchant polls version.json himself. He reloads when idle (no job, not in a round, 60 s of quiet); a job or round that keeps him busy for
+    // GitHub auto-update: the Merchant polls version.json himself. He reloads when idle (no job, not in a round, 20 s of quiet); a job or round that keeps him busy for
     // roster.update.merchant_force_ms (3 min) after the new build is seen is stopped so the update does not wait for hours (Sean 2026-11-21). Not during a boss event (Grinch / Snowman live).
     if (AL.update && AL.config.roster.update && AL.config.roster.update.enabled !== false) {
       let quiet_since = 0;
@@ -98,11 +98,11 @@ try {
           }
           busy_since = 0;
           if (!quiet_since) quiet_since = Date.now();
-          return Date.now() - quiet_since < 60000 ? "waiting for 60 s of quiet" : "";
+          return Date.now() - quiet_since < 20000 ? "waiting for 20 s of quiet" : ""; // Sean 2026-11-27: 60 s never came, his job checks are more often than that, so his build lagged the party's
         },
         reload: () => AL.reengage({ say, slot: CFG.SELF_CODE_SLOT, restart: AutoMerchantV5, stop: restart_stop }),
       });
-      const upd_timer = setInterval(() => (alive() ? UPD.tick() : clearInterval(upd_timer)), 15000);
+      const upd_timer = setInterval(() => (alive() ? UPD.tick() : clearInterval(upd_timer)), 5000); // 5 s: the 20 s quiet window is sampled often enough
     }
     AL.reengage_button({
       say,
